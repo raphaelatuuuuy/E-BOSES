@@ -32,6 +32,7 @@ import {
   useSystemStatus,
 } from "@/features/dashboard/components/system-banner"
 import { MaintenancePage } from "@/features/dashboard/pages/maintenance"
+import { GlobalSosCoordinator } from "@/features/dashboard/components/global-sos-coordinator"
 
 const AccountInactivePage = lazy(
   () => import("@/features/auth/account-inactive")
@@ -911,6 +912,7 @@ export default function App() {
     <AuthSessionProvider>
       <SystemStatusProvider>
         <SystemTicker />
+        <GlobalSosCoordinator />
         <MaintenanceGate>
           <Suspense fallback={<PageLoader />}>
             <RouteScrollTop />

@@ -1,15 +1,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { toast } from "sonner"
-import {
-  ArrowLeftIcon,
-  CheckIcon,
-  PhoneIcon,
-  XIcon,
-} from "lucide-react"
+import { ArrowLeftIcon, CheckIcon, PhoneIcon, XIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { apiRequest } from "@/lib/api"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
   createEmergency,
@@ -48,12 +42,8 @@ import {
 } from "@/features/dashboard/components/sos/triage-step"
 import { SosConfirmStep } from "@/features/dashboard/components/sos/confirm-step"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
+import { SOS_SMS_NUMBER } from "@/features/dashboard/components/sos/offline-sos-config"
 
-// Build-time fallback only. The live number comes from the barangay's dispatch
-// policy (see MapDispatchPolicy.emergency_sms_number) so it can be changed
-// without rebuilding and redeploying the app.
-const emergencySmsNumberFallback =
-  (import.meta.env.VITE_EMERGENCY_SMS_NUMBER as string | undefined)?.trim() ?? ""
 const OFFLINE_SUBMIT_ERROR =
   "You’re offline. Reconnect to send online, or use the SMS backup below."
 
@@ -162,7 +152,7 @@ function SosShell({
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/50 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
+        className="motion-safe:animate-in motion-safe:fade-in absolute inset-0 bg-black/50 motion-safe:duration-200"
       />
 
       <div
@@ -173,19 +163,19 @@ function SosShell({
         aria-describedby={subtitle ? subtitleId : undefined}
         className={cn(
           "relative z-10 flex w-full flex-col overflow-hidden border border-white/10 bg-brand-navy text-white shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
-          "max-h-[min(92dvh,760px)] rounded-t-[28px] sm:max-w-[440px] sm:rounded-[28px]",
+          "h-[100dvh] max-h-[100dvh] rounded-none sm:h-auto sm:max-h-[min(92dvh,760px)] sm:max-w-[440px] sm:rounded-[28px]",
           "md:max-h-[min(92dvh,820px)] md:min-h-[420px]",
-          "md:w-[min(480px,92vw)] md:min-w-[420px] md:max-w-[min(720px,94vw)]",
+          "md:w-[min(480px,92vw)] md:max-w-[min(720px,94vw)] md:min-w-[420px]",
           // CSS `resize` only works on a box that is not overflow:visible, so
           // the drag-to-resize grip forces overflow:auto on the panel itself.
           // That paints a second scrollbar down the dialog even though the body
           // below has its own scroller. Hide the panel's — the body keeps the
           // scrolling, the grip keeps working.
-          "md:resize md:overflow-auto dialog-resize-grip scrollbar-hide",
+          "dialog-resize-grip scrollbar-hide md:resize",
           "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
         )}
       >
-        <div className="flex shrink-0 items-start gap-2 px-5 pb-4 pt-5 max-sm:pt-[max(1.25rem,env(safe-area-inset-top))]">
+        <div className="flex shrink-0 items-start gap-2 px-5 pt-5 pb-4 max-sm:pt-[max(1.25rem,env(safe-area-inset-top))]">
           {showBack ? (
             <button
               type="button"
@@ -198,12 +188,12 @@ function SosShell({
           ) : null}
 
           <div className="min-w-0 flex-1 pt-0.5">
-            <p className="text-[11px] font-bold uppercase tracking-wide text-brand-orange">
+            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
               Emergency SOS
             </p>
             <h2
               id={titleId}
-              className="mt-0.5 truncate text-[22px] font-bold leading-[1.2] tracking-tight text-white"
+              className="mt-0.5 truncate text-[22px] leading-[1.2] font-bold tracking-tight text-white"
             >
               {title}
             </h2>
@@ -231,13 +221,13 @@ function SosShell({
 
         <div
           ref={bodyRef}
-          className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6"
+          className="scrollbar-hide min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-5 pb-8 [-webkit-overflow-scrolling:touch]"
         >
           {children}
         </div>
 
         {footer ? (
-          <div className="shrink-0 px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2">
+          <div className="shrink-0 border-t border-white/10 bg-brand-navy px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
             {footer}
           </div>
         ) : null}
@@ -248,7 +238,7 @@ function SosShell({
 }
 
 /**
-  * SOS wizard: the step state machine (category → triage → location with
+ * SOS wizard: the step state machine (category → triage → location with
  * review → countdown) + shell UI. FAB and open/close orchestration between
  * wizard/tracking modes lives one level up in sos-button.tsx; this component
  * owns everything about the wizard itself and resets its own state whenever
@@ -265,22 +255,9 @@ export function SosWizard({
 }) {
   const { user } = useAuthSession()
   const [step, setStep] = useState<WizardStep>("category")
-  // Fetched once when the wizard opens. Failure is silent on purpose: the
-  // SMS fallback is a nicety, and an unreachable API must never block the
-  // resident from sending the online SOS.
-  const [emergencySmsNumber, setEmergencySmsNumber] = useState("")
-  const [emergencyCategories, setEmergencyCategories] = useState<EmergencyCategory[]>([])
-  useEffect(() => {
-    let cancelled = false
-    void apiRequest<{ emergency_sms_number?: string }>("/locations/map-context/")
-      .then((context) => {
-        if (!cancelled) setEmergencySmsNumber((context.emergency_sms_number || "").trim())
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const [emergencyCategories, setEmergencyCategories] = useState<
+    EmergencyCategory[]
+  >([])
   useEffect(() => {
     if (!open) return
     let cancelled = false
@@ -295,7 +272,6 @@ export function SosWizard({
   }, [open])
   const [emergency, setEmergency] = useState<EmergencyType | "">("")
   const [note, setNote] = useState("")
-  const [photo, setPhoto] = useState<File | null>(null)
   const [location, setLocation] = useState<SosLocationValue | null>(null)
   const [triage, setTriage] = useState<SosTriageAnswers>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
@@ -326,7 +302,8 @@ export function SosWizard({
     formData.append("latitude", payload.latitude.toFixed(7))
     formData.append("longitude", payload.longitude.toFixed(7))
     formData.append("location_source", payload.locationSource)
-    if (payload.locationAccuracy != null) formData.append("location_accuracy", String(payload.locationAccuracy))
+    if (payload.locationAccuracy != null)
+      formData.append("location_accuracy", String(payload.locationAccuracy))
     formData.append("address", payload.address.slice(0, 255))
     if (Object.keys(payload.triage).length) {
       formData.append("triage", JSON.stringify(toServerTriage(payload.triage)))
@@ -350,7 +327,7 @@ export function SosWizard({
             locationSource: item.locationSource,
             locationAccuracy: item.locationAccuracy,
             triage: item.triage ?? {},
-          }),
+          })
         )
         await deleteQueuedSosEmergency(item.id)
         toast.success("Queued emergency sent")
@@ -458,7 +435,11 @@ export function SosWizard({
     }
     if (step === "triage") {
       const needDetail = hasDetailQuestion(emergency || "")
-      if (!triage.peopleAffected || !triage.injuries || (needDetail && !triage.detail)) {
+      if (
+        !triage.peopleAffected ||
+        !triage.injuries ||
+        (needDetail && !triage.detail)
+      ) {
         setFieldErrors({ triage: "Answer all the questions to continue." })
         return
       }
@@ -475,11 +456,11 @@ export function SosWizard({
       if (
         isOnline &&
         selectedLocation.locationCheck &&
-        (!selectedLocation.locationCheck.accepted || !selectedLocation.locationCheck.acceptance_zone?.within)
+        (!selectedLocation.locationCheck.accepted ||
+          !selectedLocation.locationCheck.acceptance_zone?.within)
       ) {
         setFieldErrors({
-          location:
-            friendlyLocationMessage(selectedLocation.locationCheck),
+          location: friendlyLocationMessage(selectedLocation.locationCheck),
         })
         return
       }
@@ -528,16 +509,13 @@ export function SosWizard({
       })
 
       const alert = await createEmergency(formData)
-      if (photo || note.trim()) {
-        await sendEmergencyChat(
-          alert.id,
-          note.trim() || "Photo from the moment the alert was sent.",
-          photo,
-        ).catch(() => {
-          toast.warning("The alert was sent, but your note could not be posted to the chat.")
+      if (note.trim()) {
+        await sendEmergencyChat(alert.id, note.trim(), null).catch(() => {
+          toast.warning(
+            "The alert was sent, but your note could not be posted to the chat."
+          )
         })
       }
-      setPhoto(null)
       resetWizard()
       setStatusAnnouncement(
         "Emergency alert sent. Responder routing has started."
@@ -567,7 +545,9 @@ export function SosWizard({
       toast.error(message)
       try {
         await enqueueCurrentEmergency()
-        setStatusAnnouncement("Emergency queued. E-Boses will retry when connection returns.")
+        setStatusAnnouncement(
+          "Emergency queued. E-Boses will retry when connection returns."
+        )
         toast.info("Emergency queued for retry")
       } catch {
         toast.warning("Could not save the SOS queue on this browser.")
@@ -578,7 +558,7 @@ export function SosWizard({
     }
   }
 
-  async function enqueueCurrentEmergency(extra: { smsFallbackOpenedAt?: string } = {}) {
+  async function enqueueCurrentEmergency() {
     if (!location || !emergency) return
     await enqueueSosEmergency({
       id: clientRequestIdRef.current,
@@ -594,7 +574,6 @@ export function SosWizard({
       triage,
       createdAt: new Date().toISOString(),
       retryCount: 0,
-      ...extra,
     })
   }
 
@@ -614,22 +593,23 @@ export function SosWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, dispatchCountdown])
 
-  const emergencyOptions = emergencyCategories.length ? emergencyOptionsFromCategories(emergencyCategories) : emergencies
+  const emergencyOptions = emergencyCategories.length
+    ? emergencyOptionsFromCategories(emergencyCategories)
+    : emergencies
   const typeMeta = emergencyOptions.find((e) => e.value === emergency)
   // Built even without a map fix: an emergency with only a described area is
   // still a valid SMS, and the backend saves and routes it.
   const smsBody = buildEmergencySmsMessage({
     emergencyType: typeMeta?.label ?? (emergency || "Other Emergency"),
-    readableArea: location?.addressPrimary || location?.address || "",
+    readableArea: location?.addressResolved
+      ? location.address || location.addressPrimary
+      : "",
     latitude: location?.lat ?? null,
     longitude: location?.lng ?? null,
     triage,
     note,
   })
-  const emergencySmsHref = buildEmergencySmsHref(
-    emergencySmsNumber || emergencySmsNumberFallback,
-    smsBody,
-  )
+  const emergencySmsHref = buildEmergencySmsHref(SOS_SMS_NUMBER, smsBody)
   const countdownAnnouncement =
     step === "countdown"
       ? submitting
@@ -638,17 +618,20 @@ export function SosWizard({
       : ""
 
   function announceSmsFallback() {
-    void enqueueCurrentEmergency({ smsFallbackOpenedAt: new Date().toISOString() }).catch(() => {})
     setStatusAnnouncement(
       "Opening your SMS app with a draft. E-Boses cannot confirm delivery; review the message and activate Send."
     )
   }
 
   const locationLabel = location?.addressPrimary || location?.address
+  const useSmsDelivery = !isOnline
   const locationCanContinue = Boolean(
     location &&
-      isSosLocationReady(location) &&
-      (!isOnline || !location.locationCheck || (location.locationCheck.accepted && location.locationCheck.acceptance_zone?.within)),
+    isSosLocationReady(location) &&
+    (!isOnline ||
+      !location.locationCheck ||
+      (location.locationCheck.accepted &&
+        location.locationCheck.acceptance_zone?.within))
   )
 
   const wizardFooter =
@@ -663,14 +646,14 @@ export function SosWizard({
             Back
           </button>
         ) : null}
-        {step === "review" && !isOnline && emergencySmsHref ? (
+        {step === "review" && useSmsDelivery && emergencySmsHref ? (
           <a
             href={emergencySmsHref}
             onClick={announceSmsFallback}
             className="flex h-[52px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
           >
             <PhoneIcon className="size-4" aria-hidden="true" />
-            SMS backup
+            Send Alert
           </a>
         ) : (
           <button
@@ -685,9 +668,7 @@ export function SosWizard({
               "disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40 disabled:active:scale-100"
             )}
           >
-            {step === "review"
-              ? "Send SOS in 5 seconds"
-              : "Next"}
+            {step === "review" ? "Send SOS in 5 seconds" : "Next"}
           </button>
         )}
       </div>
@@ -743,7 +724,7 @@ export function SosWizard({
         resetKey={step}
       >
         {step !== "countdown" ? (
-          <div className="mb-5 mt-1">
+          <div className="mt-1 mb-5">
             <div className="mb-3 flex items-center justify-between gap-1">
               {WIZARD_LABELS.map((label, i) => {
                 const n = i + 1
@@ -812,8 +793,8 @@ export function SosWizard({
 
         {step === "location" ? (
           <div className="flex flex-col gap-4">
-            <SosLocationStep value={location} onChange={setLocation} className="h-[min(52vh,420px)]" />
-            <SosDetailsStep note={note} onNoteChange={setNote} photo={photo} onPhotoChange={setPhoto} online={isOnline} />
+            <SosLocationStep value={location} onChange={setLocation} />
+            <SosDetailsStep note={note} onNoteChange={setNote} />
             {fieldErrors.location ? (
               <p
                 className="text-[13px] font-medium text-sos-bright"
@@ -840,15 +821,13 @@ export function SosWizard({
         {step === "review" || step === "countdown" ? (
           <SosConfirmStep
             mode={step}
-            isOnline={isOnline}
             submitError={submitError}
-            emergencySmsHref={emergencySmsHref}
+            emergencySmsHref={useSmsDelivery ? emergencySmsHref : ""}
             onSmsFallbackClick={announceSmsFallback}
             typeLabel={typeMeta?.label}
             locationLabel={locationLabel}
             triageSummary={describeTriage(triage)}
             note={note}
-            photo={photo}
             submitting={submitting}
             dispatchCountdown={dispatchCountdown}
           />

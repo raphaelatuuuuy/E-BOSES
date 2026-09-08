@@ -97,12 +97,14 @@ def resolve_alert_location(alert_id: int) -> dict:
         return {"status": "missing"}
 
     if alert.reverse_geocoding_status == EmergencyAlert.ReverseGeocodingStatus.SUCCESS:
+        _finish_sms_location_pipeline(alert)
         return {"status": "already_resolved", "location": alert.resolved_location}
 
     if alert.latitude is None or alert.longitude is None:
         alert.reverse_geocoding_status = EmergencyAlert.ReverseGeocodingStatus.SKIPPED
         alert.location_confidence = classify_location_confidence(alert)
         alert.save(update_fields=["reverse_geocoding_status", "location_confidence", "updated_at"])
+        _finish_sms_location_pipeline(alert)
         return {"status": REVERSE_STATUS_SKIPPED, "location": ""}
 
     result = reverse_geocode(alert.latitude, alert.longitude)
@@ -133,7 +135,28 @@ def resolve_alert_location(alert_id: int) -> dict:
     )
 
     _broadcast_location_update(alert)
+    _finish_sms_location_pipeline(alert)
     return {"status": result["status"], "location": alert.resolved_location}
+
+
+def _finish_sms_location_pipeline(alert) -> None:
+    """Publish an accepted SMS alert, then notify its active mapped unit."""
+    if alert.reporter_verification == EmergencyAlert.ReporterVerification.ACCOUNT:
+        return
+    if alert.status == EmergencyAlert.Status.INVALID:
+        return
+    try:
+        from apps.emergencies.sms_intake import _broadcast_created
+
+        _broadcast_created(alert)
+    except Exception:
+        logger.debug("Could not broadcast SMS alert %s after location resolution.", alert.pk, exc_info=True)
+    try:
+        from apps.sms.notify import notify_active_unit
+
+        notify_active_unit(alert)
+    except Exception:
+        logger.warning("Could not queue resolved-location unit SMS for alert %s.", alert.pk, exc_info=True)
 
 
 def _broadcast_location_update(alert) -> None:

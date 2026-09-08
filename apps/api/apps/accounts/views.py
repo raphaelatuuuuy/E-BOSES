@@ -367,8 +367,9 @@ class PhoneOTPRequestView(APIView):
         serializer = PhoneOTPRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         phone_number = serializer.validated_data["phone_number"]
+        first_name = (request.data.get("first_name") or request.data.get("firstName") or "").strip() if isinstance(request.data, dict) else ""
         try:
-            create_phone_otp_challenge(phone_number)
+            create_phone_otp_challenge(phone_number, recipient_name=first_name)
         except OTPRateLimited as exc:
             return Response(
                 {"detail": str(exc), "retry_after": exc.retry_after},
@@ -429,8 +430,10 @@ class EmailOTPRequestView(APIView):
         serializer = EmailOTPRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"]
+        # Accept optional first_name for personalized greeting (e.g. from sign-up form)
+        first_name = (request.data.get("first_name") or request.data.get("firstName") or "").strip() if isinstance(request.data, dict) else ""
         try:
-            _challenge, code = create_email_otp_challenge(email)
+            _challenge, code = create_email_otp_challenge(email, recipient_name=first_name)
         except OTPDeliveryError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception:
@@ -1351,7 +1354,9 @@ class AccountPhoneChangeRequestView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            _challenge, code = create_phone_otp_challenge(phone_number)
+            profile = getattr(request.user, "resident_profile", None)
+            recipient_name = (getattr(profile, "first_name", "") or getattr(request.user, "first_name", "") or "").strip()
+            _challenge, code = create_phone_otp_challenge(phone_number, recipient_name=recipient_name)
         except OTPDeliveryError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception:
@@ -1425,7 +1430,9 @@ class AccountEmailChangeRequestView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            _challenge, code = create_email_otp_challenge(email)
+            profile = getattr(request.user, "resident_profile", None)
+            recipient_name = (getattr(profile, "first_name", "") or getattr(request.user, "first_name", "") or "").strip()
+            _challenge, code = create_email_otp_challenge(email, recipient_name=recipient_name)
         except OTPDeliveryError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception:

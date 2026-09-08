@@ -745,7 +745,8 @@ SMS_EMERGENCY_WEBHOOK_TOKEN = env("SMS_EMERGENCY_WEBHOOK_TOKEN", default="")
 # SMS Forwarder builds vary in the JSON field names they expect, so the request
 # body is built from OUTBOUND_SMS_PAYLOAD_TEMPLATE. If sending fails with a 4xx,
 # correct the template in .env rather than editing apps/sms/gateway.py.
-SMS_GATEWAY_NUMBER = env("SMS_GATEWAY_NUMBER", default="")
+SOS_SMS_NUMBER = "09640746068"
+SMS_GATEWAY_NUMBER = env("SMS_GATEWAY_NUMBER", default=SOS_SMS_NUMBER)
 
 # .env and .env.example document the SMS Gate handset with SMS_GATE_* names,
 # which is what an operator copies out of the app. The driver below reads the
@@ -798,7 +799,7 @@ OUTBOUND_SMS_EXTRA_HEADERS = env("OUTBOUND_SMS_EXTRA_HEADERS", default="")
 OUTBOUND_SMS_PAYLOAD_TEMPLATE = env("OUTBOUND_SMS_PAYLOAD_TEMPLATE", default="")
 OUTBOUND_SMS_SIM_SLOT = env.int(
     "OUTBOUND_SMS_SIM_SLOT",
-    default=int(SMS_GATE_SIM_NUMBER) if SMS_GATE_SIM_NUMBER.isdigit() else 1,
+    default=int(SMS_GATE_SIM_NUMBER) if SMS_GATE_SIM_NUMBER.isdigit() else 2,
 )
 OUTBOUND_SMS_TIMEOUT_SECONDS = env.float(
     "OUTBOUND_SMS_TIMEOUT_SECONDS", default=SMS_GATE_TIMEOUT_SECONDS

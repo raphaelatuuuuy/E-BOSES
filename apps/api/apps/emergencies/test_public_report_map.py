@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile, User
 from apps.concerns.models import Concern
-from apps.emergencies.models import Community
+from apps.emergencies.models import Community, EmergencyAlert, EmergencyCategory
 
 
 class PublicReportMapAndGuestConcernTests(APITestCase):
@@ -58,6 +58,42 @@ class PublicReportMapAndGuestConcernTests(APITestCase):
         self.assertEqual([row["id"] for row in response.data["concerns"]], [accepted.pk])
         self.assertNotIn("public-map-resident@example.com", response.content.decode())
         self.assertIn("Community resident", response.content.decode())
+
+    def test_public_emergency_uses_reported_street_while_reverse_geocoding_is_pending(self):
+        reporter = User.objects.create_user(
+            email="offline-sos-map@example.com",
+            password="Str0ng!Passw0rd",
+            phone_number="09640746068",
+            status=User.Status.VERIFIED,
+        )
+        EmergencyCategory.objects.update_or_create(
+            community=self.community,
+            code=EmergencyAlert.Type.FIRE,
+            defaults={
+                "label": "Fire",
+                "is_active": True,
+                "visible_to_residents": True,
+            },
+        )
+        alert = EmergencyAlert.objects.create(
+            reporter=reporter,
+            community=self.community,
+            type=EmergencyAlert.Type.FIRE,
+            status=EmergencyAlert.Status.ROUTING,
+            latitude=self.latitude,
+            longitude=self.longitude,
+            barangay=self.community.name,
+            reported_area="Champaca Street",
+            address="",
+            resolved_location="",
+            reverse_geocoding_status=EmergencyAlert.ReverseGeocodingStatus.PENDING,
+        )
+
+        response = self.client.get(reverse("public-report-map"))
+
+        self.assertEqual(response.status_code, 200)
+        emergency = next(row for row in response.data["emergencies"] if row["id"] == alert.pk)
+        self.assertEqual(emergency["address"], f"Champaca Street, {self.community.name}")
 
     @patch("apps.concerns.views.transaction.on_commit", side_effect=lambda callback: callback())
     @patch("apps.concerns.views.enqueue_concern_ai")

@@ -18,7 +18,6 @@ export interface QueuedSosPayload {
   triage?: SosTriageAnswers
   createdAt: string
   retryCount: number
-  smsFallbackOpenedAt?: string
 }
 
 export function buildEmergencySmsHref(

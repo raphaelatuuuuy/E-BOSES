@@ -1,10 +1,18 @@
-self.__EBOSES_CACHE = "eboses-shell-v10"
+self.__EBOSES_CACHE = "eboses-shell-v13"
+self.__EBOSES_MAP_CACHE = "eboses-map-v1"
 self.__EBOSES_SHELL = ["/", "/dashboard", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]
+self.__EBOSES_SOS_CONFIG = "/api/public/offline-sos-config/"
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(self.__EBOSES_CACHE)
     await cache.addAll(self.__EBOSES_SHELL)
+    try {
+      const config = await fetch(self.__EBOSES_SOS_CONFIG, { cache: "no-store" })
+      if (config.ok) await cache.put(self.__EBOSES_SOS_CONFIG, config)
+    } catch {
+      // The build-shipped baseline remains available if the API is unavailable.
+    }
     await self.skipWaiting()
   })())
 })
@@ -12,7 +20,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys()
-    await Promise.all(names.filter((name) => name.startsWith("eboses-") && name !== self.__EBOSES_CACHE).map((name) => caches.delete(name)))
+    await Promise.all(names.filter((name) => name.startsWith("eboses-") && name !== self.__EBOSES_CACHE && name !== self.__EBOSES_MAP_CACHE).map((name) => caches.delete(name)))
     await self.clients.claim()
   })())
 })
@@ -21,7 +29,52 @@ self.addEventListener("fetch", (event) => {
   const request = event.request
   if (request.method !== "GET") return
   const url = new URL(request.url)
+  const isTile = /^([a-d]\.)?basemaps\.cartocdn\.com$/.test(url.hostname) && url.protocol === "https:"
+  const isAddress = url.origin === self.location.origin && url.pathname === "/api/locations/geocode/reverse/"
+  if (isTile || isAddress) {
+    event.respondWith((async () => {
+      const cache = await caches.open(self.__EBOSES_MAP_CACHE)
+      const cached = await cache.match(request)
+      const savedAt = Number(cached?.headers.get("x-eboses-cached-at") || 0)
+      if (cached && Date.now() - savedAt < 30 * 24 * 60 * 60 * 1000) return cached
+      if (cached) await cache.delete(request)
+      try {
+        const response = await fetch(request)
+        const usable = response.ok && (isTile || (await response.clone().json()).ok)
+        if (usable) {
+          const headers = new Headers(response.headers)
+          headers.set("x-eboses-cached-at", String(Date.now()))
+          await cache.put(request, new Response(await response.clone().blob(), {
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+          }))
+          const keys = await cache.keys()
+          await Promise.all(keys.slice(0, Math.max(0, keys.length - 300)).map((key) => cache.delete(key)))
+        }
+        return response
+      } catch {
+        return Response.error()
+      }
+    })())
+    return
+  }
   if (url.origin !== self.location.origin) return
+  if (url.pathname === self.__EBOSES_SOS_CONFIG) {
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(request, { cache: "no-store" })
+        if (response.ok) {
+          const cache = await caches.open(self.__EBOSES_CACHE)
+          await cache.put(self.__EBOSES_SOS_CONFIG, response.clone())
+        }
+        return response
+      } catch {
+        return (await caches.match(self.__EBOSES_SOS_CONFIG)) || Response.error()
+      }
+    })())
+    return
+  }
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws/")) return
 
   if (request.mode === "navigate") {

@@ -20,6 +20,8 @@ from django.utils import timezone
 
 from apps.accounts.services import create_audit_log
 from apps.sms.normalize import SenderMatch, normalize_ph_mobile
+from apps.geo_services import classify_location
+from apps.sms.parsing import COORDINATE_INVALID
 
 from .location_services import classify_location_confidence, schedule_location_resolution
 from .location_resolution import resolve_incident_location
@@ -35,11 +37,22 @@ VERIFICATION_BY_MATCH = {
 
 
 class SmsIntakeResult:
-    def __init__(self, *, alert=None, duplicate=False, reason="", responder=None):
+    def __init__(
+        self,
+        *,
+        alert=None,
+        duplicate=False,
+        reason="",
+        responder=None,
+        active_unit_member_count=0,
+        unit_name="",
+    ):
         self.alert = alert
         self.duplicate = duplicate
         self.reason = reason
         self.responder = responder
+        self.active_unit_member_count = active_unit_member_count
+        self.unit_name = unit_name
 
     @property
     def created(self) -> bool:
@@ -128,16 +141,23 @@ def active_alert_for(reporter, contact_number: str = ""):
     return queryset.order_by("-created_at", "-id").first()
 
 
-def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inbound=None) -> SmsIntakeResult:
+def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inbound=None, allow_new_intake_check=False) -> SmsIntakeResult:
     """Save, route, then enrich. See the module docstring for why that order."""
-    from .views import auto_route_alert, create_status_event, create_witness_notifications
+    from .views import (
+        active_unit_responders,
+        auto_route_alert,
+        create_status_event,
+        create_witness_notifications,
+        department_label,
+        preferred_departments_for,
+    )
     from apps.notifications.services import notify_emergency_status
 
     normalized_sender = normalize_ph_mobile(sender_number)
     reporter = find_intake_reporter(sender_number, match)
 
     existing = active_alert_for(reporter, normalized_sender)
-    if existing:
+    if existing and not allow_new_intake_check:
         return SmsIntakeResult(alert=existing, duplicate=True, reason="active_alert_exists")
 
     resolution = resolve_incident_location(
@@ -148,6 +168,20 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     )
     category_code = resolve_category_code(parsed.category_code, resolution.community)
     evidence = resolution.payload()
+
+    invalid_reason = ""
+    location_classification = None
+    if parsed.coordinate_status == COORDINATE_INVALID:
+        invalid_reason = "The LOC footer did not contain valid coordinates."
+    elif parsed.latitude is not None and parsed.longitude is not None:
+        location_classification = classify_location(parsed.latitude, parsed.longitude)
+        acceptance = location_classification.get("acceptance_zone") or {}
+        if (
+            not location_classification.get("accepted")
+            or location_classification.get("zone") != "barangay"
+            or acceptance.get("within") is False
+        ):
+            invalid_reason = "Reported location is outside the configured service area."
 
     alert = EmergencyAlert(
         reporter=reporter,
@@ -176,20 +210,58 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
         category_needs_confirmation=parsed.category_needs_confirmation,
         unresolved_fields=list(parsed.unresolved_fields or []),
         barangay=resolution.community.name if resolution.community else "Community pending confirmation",
+        status=EmergencyAlert.Status.INVALID if invalid_reason else EmergencyAlert.Status.SUBMITTED,
     )
-    alert.location_confidence = classify_location_confidence(alert)
+    alert.location_confidence = (
+        EmergencyAlert.LocationConfidence.OUTSIDE_AREA
+        if invalid_reason and parsed.coordinate_status != COORDINATE_INVALID
+        else classify_location_confidence(alert)
+    )
     alert.save()
 
-    create_status_event(alert, EmergencyAlert.Status.SUBMITTED, None, event_key="received_sms")
+    create_status_event(
+        alert,
+        alert.status,
+        None,
+        note=invalid_reason,
+        event_key="rejected_sms_location" if invalid_reason else "received_sms",
+    )
+
+    if invalid_reason:
+        create_audit_log(
+            "emergency.sms_invalid_location",
+            actor=None,
+            target_user=reporter,
+            metadata={
+                "alert_id": alert.pk,
+                "coordinate_status": parsed.coordinate_status,
+                "classification": location_classification or {},
+                "inbound_sms_id": getattr(inbound, "pk", None),
+            },
+            request_meta={},
+        )
+        return SmsIntakeResult(alert=alert, reason="invalid_location")
 
     # Step 2: route before anything slow. `auto_route_alert` takes a request
     # only to build audit metadata, and tolerates None.
     responder = None
+    active_unit_members = []
+    unit_name = ""
     if resolution.community:
+        departments = preferred_departments_for(alert.type, resolution.community)
+        unit_name = ", ".join(sorted({department_label(item) for item in departments}))
+        active_unit_members = active_unit_responders(alert)
         try:
             responder = auto_route_alert(alert, None)
         except Exception:
             logger.exception("Auto-routing failed for SMS alert %s; alert remains active.", alert.pk)
+        if not active_unit_members:
+            try:
+                from .views import notify_officials_no_responder
+
+                notify_officials_no_responder(alert)
+            except Exception:
+                logger.warning("No-responder escalation failed for SMS alert %s.", alert.pk, exc_info=True)
     else:
         # Keep location-ambiguous SMS alerts in the automatic routing queue.
         # Location recovery can attach a community later; the periodic dispatch
@@ -200,12 +272,6 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
         create_status_event(alert, alert.status, None, note=reason, event_key="responder_searching")
 
     # Step 3 onwards: everything that may fail or block, none of it load-bearing.
-    if alert.location_confidence == EmergencyAlert.LocationConfidence.OUTSIDE_AREA:
-        EmergencyEscalation.objects.get_or_create(
-            alert=alert,
-            reason="Reported location is outside the configured service area.",
-        )
-
     try:
         notify_emergency_status(
             alert,
@@ -220,8 +286,10 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     except Exception:
         logger.warning("Witness notification failed for SMS alert %s.", alert.pk, exc_info=True)
 
-    if resolution.has_destination:
-        schedule_location_resolution(alert)
+    # Even a coordinate-less SMS runs the resolver task. It records a skipped
+    # attempt and only then sends the primary responder's dispatch SMS using
+    # the resident-reported area or the safe map fallback.
+    schedule_location_resolution(alert)
 
     create_audit_log(
         "emergency.sms_created",
@@ -247,7 +315,6 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
         request_meta={},
     )
 
-    _broadcast_created(alert)
     _enqueue_ai_assist(alert)
     # Keep SMS-created emergencies on the same responder-facing description
     # path as SOS submissions. The model combines the note and parsed answers;
@@ -258,7 +325,12 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
         enqueue_emergency_description(alert.pk)
     except Exception:
         logger.debug("Emergency description not scheduled for SMS alert %s.", alert.pk, exc_info=True)
-    return SmsIntakeResult(alert=alert, responder=responder)
+    return SmsIntakeResult(
+        alert=alert,
+        responder=responder,
+        active_unit_member_count=len(active_unit_members),
+        unit_name=unit_name,
+    )
 
 
 def _enqueue_ai_assist(alert) -> None:

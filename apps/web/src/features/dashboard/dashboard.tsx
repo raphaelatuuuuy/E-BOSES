@@ -5,7 +5,6 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { Sidebar } from "@/features/dashboard/components/sidebar"
 import { SidebarProvider } from "@/features/dashboard/components/sidebar-context"
-import { SOSButton } from "@/features/dashboard/components/sos-button"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
@@ -203,8 +202,6 @@ function DashboardContent() {
       </div>
 
       {isMobile && !hideMobileNav ? <MobileNav /> : null}
-
-      {isResident ? <SOSButton suppressed={chrome.fullBleedMap} /> : null}
 
       {statusDialog}
       <SettingsPopGate />

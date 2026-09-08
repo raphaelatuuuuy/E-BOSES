@@ -1,4 +1,5 @@
 import hashlib
+import html
 import importlib
 import logging
 import mimetypes
@@ -82,12 +83,12 @@ class OTPDeliveryError(Exception):
 
 
 class BaseOTPProvider:
-    def deliver(self, destination, code, purpose):
+    def deliver(self, destination, code, purpose, recipient_name=""):
         raise NotImplementedError
 
 
 class DevelopmentOTPProvider(BaseOTPProvider):
-    def deliver(self, destination, code, purpose):
+    def deliver(self, destination, code, purpose, recipient_name=""):
         # Allow in local development even when DEBUG is temporarily false.
         if not (settings.DEBUG or getattr(settings, "IS_LOCAL_DEVELOPMENT", False)):
             raise ImproperlyConfigured("Development OTP provider is only allowed in local development.")
@@ -97,7 +98,7 @@ class DevelopmentOTPProvider(BaseOTPProvider):
 
 
 class DjangoEmailOTPProvider(BaseOTPProvider):
-    def deliver(self, destination, code, purpose):
+    def deliver(self, destination, code, purpose, recipient_name=""):
         # Without SMTP wiring the console backend would "send" the code to
         # stdout and the resident would wait forever. Fail loudly instead.
         if getattr(settings, "EMAIL_BACKEND_IS_CONSOLE", True) and not (
@@ -106,9 +107,16 @@ class DjangoEmailOTPProvider(BaseOTPProvider):
             raise ImproperlyConfigured(
                 "django_email OTP needs SMTP configured (EMAIL_BACKEND=smtp plus EMAIL_HOST_*)."
             )
+        greeting = f"Good day, {recipient_name.strip()}!" if recipient_name and recipient_name.strip() else "Good day!"
+        label = purpose.replace("_", " ")
         sent = send_mail(
             subject="Your E-Boses verification code",
-            message=f"Your {purpose.replace('_', ' ')} verification code is {code}. It expires in 10 minutes.",
+            message=(
+                f"{greeting}\n\n"
+                f"Your {label} verification code is {code}.\n\n"
+                f"This code expires in 10 minutes.\n\n"
+                "If you did not request this code, you can safely ignore this message."
+            ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[destination],
             fail_silently=False,
@@ -118,7 +126,7 @@ class DjangoEmailOTPProvider(BaseOTPProvider):
 
 
 class ResendOTPProvider(BaseOTPProvider):
-    def deliver(self, destination, code, purpose):
+    def deliver(self, destination, code, purpose, recipient_name=""):
         api_key = getattr(settings, "RESEND_API_KEY", "")
         if not api_key:
             raise ImproperlyConfigured("RESEND_API_KEY is not configured.")
@@ -127,17 +135,30 @@ class ResendOTPProvider(BaseOTPProvider):
         sender_name = getattr(settings, "RESEND_FROM_NAME", "") or "E-Boses"
         sender_email = getattr(settings, "RESEND_FROM_EMAIL", "") or settings.DEFAULT_FROM_EMAIL
         expiry_text = getattr(settings, "OTP_EMAIL_EXPIRY_TEXT", "") or "This code expires shortly."
+        if not recipient_name:
+            try:
+                User = get_user_model()
+                user = User.objects.filter(email__iexact=destination).first()
+                if user is not None:
+                    profile = getattr(user, "resident_profile", None)
+                    candidate = (getattr(profile, "first_name", "") or getattr(user, "first_name", "") or "").strip()
+                    if candidate:
+                        recipient_name = candidate
+            except Exception:
+                recipient_name = ""
 
+        greeting_text = f"Good day, {recipient_name.strip()}!" if recipient_name and recipient_name.strip() else "Good day!"
         payload = {
             "from": f"{sender_name} <{sender_email}>",
             "to": [destination],
             "subject": "Your E-Boses verification code",
             "text": (
+                f"{greeting_text}\n\n"
                 f"Your {label} verification code is {code}.\n\n"
                 f"{expiry_text}\n\n"
                 "If you did not request this code, you can ignore this message."
             ),
-            "html": _otp_email_html(code, label, expiry_text),
+            "html": _otp_email_html(code, label, expiry_text, recipient_name=recipient_name),
         }
         reply_to = getattr(settings, "RESEND_REPLY_TO", "")
         if reply_to:
@@ -162,23 +183,26 @@ class ResendOTPProvider(BaseOTPProvider):
             raise OTPDeliveryError("Unable to deliver email OTP.")
 
 
-def _otp_email_html(code, label, expiry_text):
-    logo_url = getattr(settings, "OTP_EMAIL_LOGO_URL", "")
-    logo = (
-        f'<img src="{logo_url}" alt="E-Boses" height="40" style="display:block;margin-bottom:24px" />'
-        if logo_url
-        else ""
-    )
+def _otp_email_html(code, label, expiry_text, recipient_name=""):
+    safe_label = html.escape(label)
+    safe_code = html.escape(str(code))
+    safe_expiry = html.escape(expiry_text)
+    name = recipient_name.strip() if recipient_name and recipient_name.strip() else ""
+    if name:
+        safe_name = html.escape(name)
+        greeting_html = f'Good day, <span style="color:#ff5003">{safe_name}!</span>'
+    else:
+        greeting_html = "Good day!"
     return (
         '<div style="font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1c1c1c;'
-        'max-width:480px;margin:0 auto;padding:32px 24px">'
-        f"{logo}"
-        '<p style="font-size:16px;line-height:1.6;margin:0 0 16px">'
-        f"Your {label} verification code is:</p>"
-        '<p style="font-size:34px;font-weight:700;letter-spacing:8px;margin:0 0 16px">'
-        f"{code}</p>"
-        f'<p style="font-size:14px;color:#6b6b6b;line-height:1.6;margin:0 0 24px">{expiry_text}</p>'
-        '<p style="font-size:13px;color:#8a8a8a;line-height:1.6;margin:0">'
+        'max-width:480px;margin:0 auto;padding:32px 24px;text-align:center">'
+        f'<p style="font-size:26px;font-weight:600;color:#020c4e;line-height:1.25;margin:0 0 24px;text-align:center">{greeting_html}</p>'
+        '<p style="font-size:16px;line-height:1.6;margin:0 0 16px;text-align:center">'
+        f"Your {safe_label} verification code is:</p>"
+        '<p style="margin:0 0 16px;text-align:center">'
+        f'<span style="display:inline-block;border:2px solid #020c4e;padding:12px 20px;color:#ff5003;font-size:34px;font-weight:700;letter-spacing:8px;line-height:1">{safe_code}</span></p>'
+        f'<p style="font-size:14px;color:#6b6b6b;line-height:1.6;margin:0 0 24px;text-align:center">{safe_expiry}</p>'
+        '<p style="font-size:13px;color:#8a8a8a;line-height:1.6;margin:0;text-align:center">'
         "If you did not request this code, you can safely ignore this message.</p>"
         "</div>"
     )
@@ -193,8 +217,8 @@ class GatewaySMSOTPProvider(BaseOTPProvider):
     reset. There is now a single outbound path: OUTBOUND_SMS_*.
     """
 
-    def deliver(self, destination, code, purpose):
-        deliver_registration_otp(destination, code)
+    def deliver(self, destination, code, purpose, recipient_name=""):
+        deliver_registration_otp(destination, code, recipient_name=recipient_name)
 
 
 # Kept so an existing SMS_OTP_PROVIDER=http_sms setting does not crash on boot.
@@ -202,7 +226,7 @@ HTTPSMSOTPProvider = GatewaySMSOTPProvider
 
 
 class DisabledOTPProvider(BaseOTPProvider):
-    def deliver(self, destination, code, purpose):
+    def deliver(self, destination, code, purpose, recipient_name=""):
         raise ImproperlyConfigured("No OTP provider is configured for this channel.")
 
 
@@ -231,8 +255,8 @@ def get_otp_provider(channel):
         raise ImproperlyConfigured(f"Unknown OTP provider: {provider_name}") from exc
 
 
-def deliver_otp(channel, destination, code, purpose):
-    get_otp_provider(channel).deliver(destination, code, purpose)
+def deliver_otp(channel, destination, code, purpose, recipient_name=""):
+    get_otp_provider(channel).deliver(destination, code, purpose, recipient_name=recipient_name)
 
 
 @dataclass(frozen=True)
@@ -780,7 +804,15 @@ def create_otp_challenge(user, channel, purpose, destination):
         code_hash=make_password(code),
         expires_at=timezone.now() + timedelta(minutes=10),
     )
-    deliver_otp(channel, destination, code, purpose)
+    recipient_name = ""
+    try:
+        profile = getattr(user, "resident_profile", None)
+        candidate = (getattr(profile, "first_name", "") or getattr(user, "first_name", "") or "").strip()
+        if candidate:
+            recipient_name = candidate
+    except Exception:
+        recipient_name = ""
+    deliver_otp(channel, destination, code, purpose, recipient_name=recipient_name)
     return challenge, code
 
 
@@ -833,13 +865,24 @@ def check_otp_rate_limit(destination):
         )
 
 
-def create_phone_otp_challenge(phone_number, *, enforce_rate_limit=True):
+def create_phone_otp_challenge(phone_number, *, enforce_rate_limit=True, recipient_name=""):
     """Issue a registration OTP for a phone number.
 
     The code is generated and verified here; the gateway only delivers the
     finished message. It is never logged, never returned in an API response,
     and never written to the outbound SMS record.
     """
+    if not recipient_name:
+        try:
+            User = get_user_model()
+            user = User.objects.filter(phone_number=phone_number).first()
+            if user is not None:
+                profile = getattr(user, "resident_profile", None)
+                candidate = (getattr(profile, "first_name", "") or getattr(user, "first_name", "") or "").strip()
+                if candidate:
+                    recipient_name = candidate
+        except Exception:
+            recipient_name = ""
     if enforce_rate_limit:
         check_otp_rate_limit(phone_number)
 
@@ -859,7 +902,7 @@ def create_phone_otp_challenge(phone_number, *, enforce_rate_limit=True):
         expires_at=timezone.now() + timedelta(minutes=OTP_EXPIRY_MINUTES),
     )
     try:
-        deliver_registration_otp(phone_number, code)
+        deliver_registration_otp(phone_number, code, recipient_name=recipient_name)
     except Exception as exc:
         challenge.delete()
         logger.warning("Phone OTP delivery failed: %s", type(exc).__name__)
@@ -869,19 +912,30 @@ def create_phone_otp_challenge(phone_number, *, enforce_rate_limit=True):
     return challenge, code
 
 
-def deliver_registration_otp(phone_number, code):
+def deliver_registration_otp(phone_number, code, recipient_name=""):
     """Compose the message here and hand the finished text to the gateway."""
     from apps.sms.gateway import SmsConfigurationError, deliver, queue_sms
     from apps.sms.models import SmsPurpose
     from apps.sms.templates import otp_message
 
+    if not recipient_name:
+        try:
+            User = get_user_model()
+            user = User.objects.filter(phone_number=phone_number).first()
+            if user is not None:
+                profile = getattr(user, "resident_profile", None)
+                candidate = (getattr(profile, "first_name", "") or getattr(user, "first_name", "") or "").strip()
+                if candidate:
+                    recipient_name = candidate
+        except Exception:
+            recipient_name = ""
     if settings.DEBUG or getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
         # Same as DevelopmentOTPProvider for email: console only, never the
         # log file, so the gateway does not have to be configured to test
         # registration locally.
         print(f"Development OTP for {phone_number} (registration): {code}", flush=True)
 
-    body = otp_message(code)
+    body = otp_message(code, recipient_name=recipient_name)
     message = queue_sms(
         phone_number,
         body,
@@ -915,7 +969,7 @@ def normalize_registration_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
-def create_email_otp_challenge(email):
+def create_email_otp_challenge(email, recipient_name=""):
     """Send a 6-digit code before the account exists (right after email/password)."""
     email = normalize_registration_email(email)
     code = f"{secrets.randbelow(1_000_000):06d}"
@@ -925,8 +979,19 @@ def create_email_otp_challenge(email):
         code_hash=make_password(code),
         expires_at=timezone.now() + timedelta(minutes=10),
     )
+    if not recipient_name:
+        try:
+            User = get_user_model()
+            user = User.objects.filter(email__iexact=email).first()
+            if user is not None:
+                profile = getattr(user, "resident_profile", None)
+                candidate = (getattr(profile, "first_name", "") or getattr(user, "first_name", "") or "").strip()
+                if candidate:
+                    recipient_name = candidate
+        except Exception:
+            recipient_name = ""
     try:
-        deliver_otp(OTPChallenge.Channel.EMAIL, email, code, OTPChallenge.Purpose.REGISTRATION)
+        deliver_otp(OTPChallenge.Channel.EMAIL, email, code, OTPChallenge.Purpose.REGISTRATION, recipient_name=recipient_name)
     except ImproperlyConfigured as exc:
         if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) or settings.DEBUG:
             logger.warning("Email OTP delivery skipped: %s", type(exc).__name__)

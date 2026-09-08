@@ -1,52 +1,27 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { Loader2Icon, LocateFixedIcon } from "lucide-react"
-import type leaflet from "leaflet"
-import { cn } from "@workspace/ui/lib/utils"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { HomeIcon, LocateFixedIcon } from "lucide-react"
+import L, {
+  type Map as LeafletMap,
+  type Marker,
+  type LatLngBounds,
+  type LeafletMouseEvent,
+} from "leaflet"
+import "leaflet/dist/leaflet.css"
+import "@/features/dashboard/components/map/location-pin.css"
 import { apiRequest } from "@/lib/api"
+import type { GeoJsonPolygon } from "@/features/dashboard/api"
+import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
 import {
-  insideCoverage,
-  OUT_OF_SCOPE_MESSAGE,
-  type CoverageInput,
-} from "@/features/dashboard/components/map/coverage-layer"
-import { loadCoverageContext } from "@/features/dashboard/lib/use-coverage"
-import {
-  dotPinHtml,
-  MAP_COLORS,
-} from "@/features/dashboard/components/map/markers"
+  MapControlStack,
+  MapStackButton,
+  MapStackDivider,
+} from "@/features/dashboard/components/map-control-stack"
+
+import { cn } from "@workspace/ui/lib/utils"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
-
-const DEFAULT_CENTER: [number, number] = [14.5995, 120.9842]
-
-async function describePin(lat: number, lng: number) {
-  if (!navigator.onLine) {
-    return {
-      address: "Pinned location on map",
-      addressPrimary: "Pinned location",
-    }
-  }
-  try {
-    const data = await reverseGeocode(lat, lng)
-    if (!data) {
-      return {
-        address: "Pinned location on map",
-        addressPrimary: "Pinned location",
-      }
-    }
-    const parts = formatNominatimParts(data)
-    return {
-      address: parts.full || parts.primary,
-      addressPrimary: parts.primary,
-    }
-  } catch {
-    return {
-      address: "Pinned location on map",
-      addressPrimary: "Pinned location",
-    }
-  }
-}
 
 export type SosLocationValue = {
   lat: number
@@ -55,6 +30,9 @@ export type SosLocationValue = {
   source: "gps" | "manual"
   address: string
   addressPrimary: string
+  addressResolved?: boolean
+  streetDistanceMeters?: number | null
+  streetConfidence?: "high" | "medium" | null
   locationCheck?: SosLocationCheck | null
 }
 
@@ -73,17 +51,8 @@ export type SosLocationCheck = {
 export function friendlyLocationMessage(
   check: SosLocationCheck | null | undefined
 ) {
-  if (!check) return "Checking your location…"
-  if (check.accepted && check.acceptance_zone?.within) {
-    return ""
-  }
-  if (check.zone === "outside_acceptance_zone") {
-    return "This area is outside our scope. You may call 911."
-  }
-  if (check.zone === "outside_barangay" || check.zone === "outside_city") {
-    return "This area is outside our scope. You may call 911."
-  }
-  return "We could not check this area yet. Try again."
+  if (!check || (check.accepted && check.acceptance_zone?.within)) return ""
+  return "This location may be outside the service area. Check your pin."
 }
 
 export function SosLocationStep({
@@ -96,395 +65,299 @@ export function SosLocationStep({
   className?: string
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<leaflet.Map | null>(null)
-  const ignoreMove = useRef(false)
-  const manualInteraction = useRef(false)
-  const [gpsBusy, setGpsBusy] = useState(false)
-  const [gpsNotice, setGpsNotice] = useState("")
-  const isOnlineRef = useRef(true)
-  const validationRequestRef = useRef(0)
+  const mapRef = useRef<LeafletMap | null>(null)
+  const markerRef = useRef<Marker | null>(null)
+  const leafletRef = useRef<typeof L | null>(null)
+  const valueRef = useRef(value)
   const onChangeRef = useRef(onChange)
-  const resizeRef = useRef<ResizeObserver | null>(null)
-  const coverageRef = useRef<CoverageInput>({})
-  const [outOfScope, setOutOfScope] = useState(false)
-
-  async function validatePin(lat: number, lng: number) {
-    const requestId = ++validationRequestRef.current
-    try {
-      const result = await apiRequest<SosLocationCheck>(
-        "/locations/validate/",
-        {
-          method: "POST",
-          body: JSON.stringify({ latitude: lat, longitude: lng }),
-        }
-      )
-      return requestId === validationRequestRef.current ? result : null
-    } catch {
-      return requestId === validationRequestRef.current ? null : null
-    }
-  }
-
-  async function locateCurrentUser() {
-    if (!navigator.geolocation) {
-      setGpsNotice(
-        "Location services are unavailable. Drag the map to place the emergency pin."
-      )
-      return
-    }
-    setGpsBusy(true)
-    setGpsNotice("")
-    navigator.geolocation.getCurrentPosition(
-      async ({ coords }) => {
-        const lat = coords.latitude
-        const lng = coords.longitude
-        const [locationCheck, described] = await Promise.all([
-          isOnlineRef.current ? validatePin(lat, lng) : null,
-          describePin(lat, lng),
-        ])
-        setGpsBusy(false)
-        setGpsNotice("")
-        onChangeRef.current({
-          lat,
-          lng,
-          accuracy: coords.accuracy,
-          source: "gps",
-          address: described.address,
-          addressPrimary: described.addressPrimary,
-          locationCheck,
-        })
-        const map = mapRef.current
-        if (map) {
-          ignoreMove.current = true
-          map.setView([lat, lng], Math.max(map.getZoom(), 17), {
-            animate: true,
-          })
-          window.setTimeout(() => {
-            ignoreMove.current = false
-          }, 500)
-        }
-      },
-      () => {
-        setGpsBusy(false)
-        setGpsNotice(
-          "We could not get your GPS location. Drag the map to place the emergency pin."
-        )
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 }
-    )
-  }
+  const requestRef = useRef(0)
+  const watchRef = useRef<number | null>(null)
+  const timerRef = useRef<number | null>(null)
+  const boundaryRef = useRef<LatLngBounds | null>(null)
+  const [addressExpanded, setAddressExpanded] = useState(false)
+  const [gpsBusy, setGpsBusy] = useState(false)
+  const [addressBusy, setAddressBusy] = useState(false)
+  const [notice, setNotice] = useState("")
+  const [mapError, setMapError] = useState("")
 
   useEffect(() => {
     onChangeRef.current = onChange
   }, [onChange])
-
   useEffect(() => {
-    const handleOnline = () => {
-      isOnlineRef.current = true
-    }
-    const handleOffline = () => {
-      isOnlineRef.current = false
-    }
-    if (typeof navigator !== "undefined") isOnlineRef.current = navigator.onLine
-    window.addEventListener("online", handleOnline)
-    window.addEventListener("offline", handleOffline)
-    return () => {
-      window.removeEventListener("online", handleOnline)
-      window.removeEventListener("offline", handleOffline)
-    }
+    valueRef.current = value
+  }, [value])
+
+  const stopGps = useCallback(() => {
+    if (watchRef.current != null)
+      navigator.geolocation?.clearWatch(watchRef.current)
+    if (timerRef.current != null) window.clearTimeout(timerRef.current)
+    watchRef.current = null
+    timerRef.current = null
+    setGpsBusy(false)
   }, [])
 
-  // Auto GPS once on mount
-  useEffect(() => {
-    let cancelled = false
-    let releaseMoveTimer: number | undefined
-    const startTimer = window.setTimeout(() => {
-      if (cancelled) return
-      if (!navigator.geolocation) {
-        setGpsNotice(
-          "Location services are unavailable. Drag the map to place the emergency pin."
+  const selectLocation = useCallback(
+    (
+      lat: number,
+      lng: number,
+      source: "gps" | "manual",
+      accuracy: number | null
+    ) => {
+      const request = ++requestRef.current
+      const next: SosLocationValue = {
+        lat,
+        lng,
+        source,
+        accuracy,
+        address: "Pinned location on the map",
+        addressPrimary: "Pinned location",
+        addressResolved: false,
+        locationCheck: null,
+      }
+      valueRef.current = next
+      onChangeRef.current(next)
+      setAddressBusy(true)
+      void reverseGeocode(lat, lng).then((data) => {
+        if (request !== requestRef.current) return
+        setAddressBusy(false)
+        if (
+          !data ||
+          (!data.display_name &&
+            !Object.values(data.address ?? {}).some(Boolean))
         )
-        return
-      }
-      setGpsBusy(true)
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          if (cancelled) return
-          const lat = pos.coords.latitude
-          const lng = pos.coords.longitude
-          const [locationCheck, described] = await Promise.all([
-            isOnlineRef.current ? validatePin(lat, lng) : null,
-            describePin(lat, lng),
-          ])
-          if (cancelled) return
-          setGpsBusy(false)
-          setGpsNotice("")
-          onChangeRef.current({
-            lat,
-            lng,
-            accuracy: pos.coords.accuracy,
-            source: "gps",
-            address: described.address,
-            addressPrimary: described.addressPrimary,
-            locationCheck,
-          })
-          const map = mapRef.current
-          if (map) {
-            ignoreMove.current = true
-            map.setView([lat, lng], 17)
-            releaseMoveTimer = window.setTimeout(() => {
-              ignoreMove.current = false
-            }, 400)
-          }
-        },
-        () => {
-          if (cancelled) return
-          setGpsBusy(false)
-          setGpsNotice(
-            "We could not get your GPS location. Drag the map to place the emergency pin."
-          )
-        },
-        { enableHighAccuracy: true, timeout: 12_000 }
-      )
-    }, 0)
+          return
+        const address = formatNominatimParts(data)
+        const resolved = {
+          ...next,
+          address: address.full,
+          addressPrimary: address.primary,
+          addressResolved: true,
+        }
+        valueRef.current = resolved
+        onChangeRef.current(resolved)
+      })
+    },
+    []
+  )
 
-    return () => {
-      cancelled = true
-      window.clearTimeout(startTimer)
-      if (releaseMoveTimer) window.clearTimeout(releaseMoveTimer)
+  const locate = useCallback(() => {
+    stopGps()
+    if (!navigator.geolocation) {
+      setNotice("Location is unavailable. Select your location on the map.")
+      return
     }
-  }, [])
+    setGpsBusy(true)
+    setNotice("")
+    let bestAccuracy = Infinity
+    watchRef.current = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        if (coords.accuracy >= bestAccuracy) return
+        bestAccuracy = coords.accuracy
+        if (coords.accuracy > 120) return
+        selectLocation(
+          coords.latitude,
+          coords.longitude,
+          "gps",
+          coords.accuracy
+        )
+        mapRef.current?.setView([coords.latitude, coords.longitude], 17)
+        if (coords.accuracy <= 50) stopGps()
+      },
+      (error) => {
+        stopGps()
+        setNotice(
+          error.code === error.PERMISSION_DENIED
+            ? "Allow location access in your browser, or select a place on the map."
+            : "Could not find your location. Try again or select a place on the map."
+        )
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20_000 }
+    )
+    timerRef.current = window.setTimeout(() => {
+      stopGps()
+      if (bestAccuracy > 120)
+        setNotice(
+          "Could not find a precise location. Try again or select a place on the map."
+        )
+    }, 20_000)
+  }, [selectLocation, stopGps])
+
+  const syncMarker = useCallback(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    const pin = valueRef.current
+    if (!L || !map || !pin) return
+    if (markerRef.current) {
+      markerRef.current.setLatLng([pin.lat, pin.lng])
+      return
+    }
+    const marker = L.marker([pin.lat, pin.lng], {
+      draggable: true,
+      title: "Emergency location. Drag to adjust.",
+      alt: "Emergency location",
+      icon: L.divIcon({
+        className: "",
+        html: '<span class="eboses-pin-pulse relative block size-3 rounded-full bg-neutral-900" style="box-shadow:0 1px 4px rgba(0,0,0,0.35)"></span>',
+        iconSize: [12, 12],
+        iconAnchor: [6, 6],
+      }),
+    }).addTo(map)
+    marker.on("dragstart", stopGps)
+    marker.on("dragend", () => {
+      const point = marker.getLatLng()
+      setNotice("")
+      selectLocation(point.lat, point.lng, "manual", null)
+    })
+    markerRef.current = marker
+  }, [selectLocation, stopGps])
 
   useEffect(() => {
     let cancelled = false
-    let map: leaflet.Map | null = null
-    let geocodeTimer: number | undefined
-    let styleEl: HTMLStyleElement | null = null
-    let settleTimers: number[] = []
-
-    async function init() {
-      const L = await import("leaflet")
-      await import("leaflet/dist/leaflet.css")
-      if (cancelled || !containerRef.current) return
-      const el = containerRef.current as HTMLDivElement & {
-        _leaflet_id?: number
-      }
-      if (el._leaflet_id) {
-        try {
-          mapRef.current?.remove()
-        } catch {
-          /* */
-        }
-        el._leaflet_id = undefined
-      }
-
-      // Same fix as the AreaPicker/pin maps: the tile-size override has to
-      // exist in <head> before Leaflet lays out its tile pane, or the 256px
-      // tiles collapse under Tailwind Preflight's `img { max-width: 100% }`
-      // and the map paints blank.
-      styleEl = document.createElement("style")
-      styleEl.textContent = `
-        .sos-loc-map.leaflet-container {
-          width: 100%;
-          height: 100%;
-          background: #e8eef5;
-          font-family: inherit;
-        }
-        .sos-loc-map .leaflet-tile-pane { isolation: isolate; }
-        .sos-loc-map img.leaflet-tile,
-        .sos-loc-map .leaflet-tile {
-          max-width: none !important;
-          max-height: none !important;
-          width: 256px !important;
-          height: 256px !important;
-          mix-blend-mode: normal !important;
-        }
-      `
-      document.head.appendChild(styleEl)
-
-      const center: [number, number] = value
-        ? [value.lat, value.lng]
-        : DEFAULT_CENTER
-
-      map = L.map(containerRef.current, {
-        center,
-        zoom: 16,
+    let observer: ResizeObserver | undefined
+    const contextRequest = apiRequest<{
+      boundary: { geometry: GeoJsonPolygon | null }
+    }>("/locations/map-context/").catch(() => null)
+    if (!containerRef.current) return
+    {
+      leafletRef.current = L
+      const pin = valueRef.current
+      const map = L.map(containerRef.current, {
         zoomControl: false,
         attributionControl: false,
-        dragging: true,
-        scrollWheelZoom: true,
-        touchZoom: true,
-        doubleClickZoom: true,
-        boxZoom: true,
-        keyboard: true,
-      })
-      addBaseTiles(L, map, "light", { maxZoom: 19 })
-
-      try {
-        const context = await loadCoverageContext()
-        if (!cancelled) {
-          coverageRef.current = {
-            boundary: context.boundary?.geometry ?? null,
-            policy: context.dispatch_policy,
-          }
-          const c = map.getCenter()
-          setOutOfScope(!insideCoverage(c.lat, c.lng, coverageRef.current))
-        }
-      } catch {
-        // The backend still validates the pin when the SOS is submitted.
-      }
-
-      map.on("move", () => {
-        if (!map) return
-        const c = map.getCenter()
-        setOutOfScope(!insideCoverage(c.lat, c.lng, coverageRef.current))
-      })
-
-      map.on("dragstart", () => {
-        manualInteraction.current = true
-        setGpsNotice("")
-      })
-
-      map.on("moveend", () => {
-        if (ignoreMove.current || !manualInteraction.current || !map) return
-        const c = map.getCenter()
-        if (geocodeTimer) window.clearTimeout(geocodeTimer)
-        geocodeTimer = window.setTimeout(() => {
-          void (async () => {
-            const [locationCheck, described] = await Promise.all([
-              isOnlineRef.current ? validatePin(c.lat, c.lng) : null,
-              describePin(c.lat, c.lng),
-            ])
-            onChangeRef.current({
-              lat: c.lat,
-              lng: c.lng,
-              accuracy: null,
-              source: "manual",
-              address: described.address,
-              addressPrimary: described.addressPrimary,
-              locationCheck,
-            })
-          })()
-        }, 350)
-      })
-
+      }).setView(pin ? [pin.lat, pin.lng] : [14.5995, 120.9842], pin ? 17 : 11)
       mapRef.current = map
-      // This step mounts while the dialog is still animating in (zoom/fade),
-      // so Leaflet can measure a transformed box and paint blank tiles. The
-      // ResizeObserver catches layout changes; the delayed calls re-run after
-      // the entry animation has fully settled.
-      const observer = new ResizeObserver(() => {
-        const box = containerRef.current?.getBoundingClientRect()
-        if (!box?.width || !box.height) return
-        mapRef.current?.invalidateSize({ animate: false })
+      void contextRequest.then((context) => {
+        if (cancelled || !context?.boundary.geometry) return
+        const boundary = context.boundary.geometry
+        const bounds = L.geoJSON(boundary as never).getBounds()
+        if (!bounds.isValid()) return
+        boundaryRef.current = bounds
+        drawCoverage(L, L.layerGroup().addTo(map), {
+          boundary,
+          showZone: false,
+        })
+        if (!valueRef.current)
+          map.fitBounds(bounds, { padding: [18, 18], maxZoom: 16 })
       })
-      if (containerRef.current) observer.observe(containerRef.current)
-      resizeRef.current = observer
-      requestAnimationFrame(() => map?.invalidateSize({ animate: false }))
-      settleTimers = [300, 700].map((delay) =>
-        window.setTimeout(() => map?.invalidateSize({ animate: false }), delay)
+      const tiles = addBaseTiles(L, map, "light", { crossOrigin: true })
+      tiles.on("tileerror", () =>
+        setMapError("Map unavailable. Connect to load this area.")
       )
+      tiles.on("tileload", () => setMapError(""))
+      map.on("click", (event: LeafletMouseEvent) => {
+        stopGps()
+        setNotice("")
+        selectLocation(event.latlng.lat, event.latlng.lng, "manual", null)
+      })
+      const reconnect = () => tiles.redraw()
+      map.on("unload", () => window.removeEventListener("online", reconnect))
+      window.addEventListener("online", reconnect)
+      observer = new ResizeObserver(() => map.invalidateSize())
+      observer.observe(containerRef.current)
+      syncMarker()
     }
-
-    void init()
     return () => {
       cancelled = true
-      resizeRef.current?.disconnect()
-      resizeRef.current = null
-      settleTimers.forEach((t) => window.clearTimeout(t))
-      if (geocodeTimer) window.clearTimeout(geocodeTimer)
-      styleEl?.remove()
-      try {
-        map?.off()
-        map?.remove()
-      } catch {
-        /* */
-      }
+      observer?.disconnect()
+      mapRef.current?.remove()
       mapRef.current = null
+      markerRef.current = null
+      leafletRef.current = null
+      boundaryRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- init once; GPS updates view separately
-  }, [])
+  }, [selectLocation, stopGps, syncMarker])
+
+  useEffect(() => {
+    syncMarker()
+  }, [value, syncMarker])
+
+  useEffect(() => {
+    if (!valueRef.current) locate()
+    return () => {
+      stopGps()
+      requestRef.current += 1
+    }
+  }, [locate, stopGps])
+
+  function recenter() {
+    stopGps()
+    const bounds = boundaryRef.current
+    if (!bounds || !mapRef.current) {
+      setNotice("Barangay boundary is unavailable. Reconnect and try again.")
+      return
+    }
+    setNotice("")
+    mapRef.current.fitBounds(bounds, {
+      paddingTopLeft: [18, 18],
+      paddingBottomRight: [64, 100],
+      maxZoom: 16,
+    })
+  }
 
   return (
-    <div className={cn("flex min-h-0 flex-col gap-3", className)}>
-      <div className="relative h-full min-h-[260px] overflow-hidden rounded-2xl border border-white/10 bg-tint">
-        <div
-          ref={containerRef}
-          className={cn(
-            "sos-loc-map absolute inset-0 z-0 h-full w-full",
-            outOfScope && "is-blocked"
-          )}
-          aria-label="Emergency location map. Drag the map to move the centered pin."
-        />
-        <button
-          type="button"
-          onClick={() => void locateCurrentUser()}
-          disabled={gpsBusy}
-          aria-label="Use my current location"
-          title="Use my current location"
-          className="absolute top-2 right-2 z-[600] flex size-[38px] items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 shadow-sm transition-colors hover:bg-neutral-50 disabled:opacity-60"
-        >
-          {gpsBusy ? (
-            <Loader2Icon className="size-4 animate-spin" />
-          ) : (
-            <LocateFixedIcon className="size-4" />
-          )}
-        </button>
-        {outOfScope ? (
-          <div
-            className="absolute top-1/2 left-1/2 z-[600] w-[min(320px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[28px] bg-white px-6 py-4 text-center shadow-[0_18px_50px_rgba(15,23,42,0.25)]"
-            role="status"
-            aria-live="polite"
+    <div
+      className={cn(
+        "relative isolate h-[clamp(300px,46dvh,400px)] shrink-0 overflow-hidden rounded-2xl bg-neutral-100 text-neutral-900",
+        className
+      )}
+    >
+      <div
+        ref={containerRef}
+        className="relative z-0 h-full w-full"
+        aria-label="Emergency location map"
+      />
+      <div className="pointer-events-none absolute top-3 right-3 z-20">
+        <MapControlStack className="pointer-events-auto shrink-0 border-0 bg-white">
+          <MapStackButton
+            className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+            label="Recenter to the barangay"
+            onClick={recenter}
           >
-            <p className="text-[15px] font-bold text-neutral-900">
-              {OUT_OF_SCOPE_MESSAGE}
-            </p>
-            <p className="mt-0.5 text-[13px] text-neutral-500">
-              Move the map back to a covered area.
-            </p>
-          </div>
-        ) : null}
-        {!outOfScope ? (
-          <div
-            className="pointer-events-none absolute top-1/2 left-1/2 z-[500] h-0 w-0"
-            aria-hidden
+            <HomeIcon className="size-5" strokeWidth={1.8} aria-hidden />
+          </MapStackButton>
+          <MapStackDivider className="bg-neutral-200" />
+          <MapStackButton
+            className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
+            label="Use my current location"
+            onClick={locate}
+            loading={gpsBusy}
           >
-            <span
-              className="absolute block"
-              style={{ marginLeft: -7, marginTop: -7 }}
-              dangerouslySetInnerHTML={{
-                __html: dotPinHtml({
-                  color: MAP_COLORS.you,
-                  size: 14,
-                  live: true,
-                }),
-              }}
-            />
-          </div>
-        ) : null}
-        <style>
-          {`
-          .sos-loc-map.is-blocked.leaflet-container,
-          .sos-loc-map.is-blocked .leaflet-grab { cursor: not-allowed !important; }
-          .sos-loc-map.is-blocked::after {
-            content: "";
-            position: absolute;
-            inset: 0;
-            z-index: 450;
-            pointer-events: none;
-            background: rgba(220, 38, 38, 0.08);
-          }
-        `}{" "}
-        </style>
+            <LocateFixedIcon className="size-5" strokeWidth={1.8} aria-hidden />
+          </MapStackButton>
+        </MapControlStack>
       </div>
-      {gpsNotice ? (
+      {mapError || notice ? (
         <p
-          className="text-[13px] leading-5 font-medium text-white/75"
           role="status"
-          aria-live="polite"
+          className="absolute top-3 right-16 left-3 z-20 rounded-lg bg-white/95 px-3 py-2 text-xs shadow-sm"
         >
-          {gpsNotice}
+          {notice || mapError}
         </p>
       ) : null}
+      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex flex-col items-center gap-2 px-4">
+        <button
+          type="button"
+          onClick={() => setAddressExpanded((expanded) => !expanded)}
+          aria-expanded={addressExpanded}
+          className="pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
+        >
+          <span className="text-[16px] leading-none font-semibold text-neutral-900">
+            Nearby location
+          </span>
+          <span
+            aria-live="polite"
+            className={cn(
+              "mt-1.5 text-[14px] leading-snug font-medium text-neutral-500",
+              !addressExpanded && "line-clamp-2"
+            )}
+          >
+            {addressBusy
+              ? "Finding address…"
+              : (addressExpanded ? value?.address : value?.addressPrimary) ||
+                "Select your location"}
+          </span>
+        </button>
+      </div>
     </div>
   )
 }

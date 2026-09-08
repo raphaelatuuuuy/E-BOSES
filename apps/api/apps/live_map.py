@@ -613,7 +613,13 @@ def emergency_payload(alert):
         "ai_summary": display_description,
         "ai_assist_status": str(ai_assist.get("status") or ""),
         "status": alert.status,
-        "address": alert.resolved_location or alert.address or "",
+        "address": (
+            alert.resolved_location
+            or alert.address
+            or alert.reported_area
+            or alert.barangay
+            or ""
+        ),
         "barangay": alert.barangay,
         "latitude": decimal_string(alert.latitude),
         "longitude": decimal_string(alert.longitude),
@@ -1020,7 +1026,7 @@ def live_map_snapshot(request=None):
         else models.Q(reporter=user) | models.Q(category_ref__department_id__in=department_ids)
     ).count()
     # Active alerts plus recently settled ones (resolved, closed, cancelled,
-    # false alarm, invalid) — the same "last 7 days" window the resident map
+    # false alarm) — invalid/out-of-area audits never become map pins.
     # uses, so an official can still see how a just-closed incident wrapped up
     # instead of it vanishing from the map the instant it's marked done.
     recently_settled_cutoff = timezone.now() - timedelta(days=7)
@@ -1031,7 +1037,7 @@ def live_map_snapshot(request=None):
         emergency_scope.filter(
             models.Q(status__in=EMERGENCY_ACTIVE)
             | models.Q(
-                status__in={"resolved", "closed", "cancelled", "false_alarm", "invalid"},
+                status__in={"resolved", "closed", "cancelled", "false_alarm"},
                 updated_at__gte=recently_settled_cutoff,
             )
         )
@@ -1264,7 +1270,13 @@ def resident_emergency_payload(alert, request=None):
         "barangay": alert.barangay,
         "latitude": decimal_string(alert.latitude),
         "longitude": decimal_string(alert.longitude),
-        "address": alert.resolved_location or alert.address or "",
+        "address": (
+            alert.resolved_location
+            or alert.address
+            or alert.reported_area
+            or alert.barangay
+            or ""
+        ),
         "preview_url": None,
         "created_at": alert.created_at,
         "updated_at": alert.updated_at,

@@ -118,6 +118,23 @@ def _place(alert) -> str:
     return "location still being confirmed"
 
 
+def _responder_place(alert) -> str:
+    """Dispatch location: server result, reported street, then map pin."""
+    for candidate in (
+        getattr(alert, "resolved_location", ""),
+        getattr(alert, "reported_area", ""),
+        getattr(alert, "address", ""),
+    ):
+        value = (candidate or "").strip()
+        if value and "pinned location" not in value.casefold():
+            return value
+    latitude = getattr(alert, "latitude", None)
+    longitude = getattr(alert, "longitude", None)
+    if latitude is not None and longitude is not None:
+        return f"Pinned location - open Alert Map ({float(latitude):.6f}, {float(longitude):.6f})"
+    return "Pinned location - open Alert Map"
+
+
 def _category(alert) -> str:
     from .parsing import category_label
 
@@ -129,44 +146,31 @@ def _category(alert) -> str:
 # ---------------------------------------------------------------------------
 
 def emergency_ack(alert, *, surname: str = "", unit_name: str = "", assigned: bool = True) -> str:
-    """First reply after an emergency SMS is accepted and routed."""
+    """One simple resident reply: received and whether responders were notified."""
     lines = [
-        f"{_greeting(surname)} This is {BRAND} Emergency.",
+        f"{BRAND} EMERGENCY",
         "",
-        f"We received your {_category(alert).upper()} emergency near {_place(alert)}.",
+        f"Your {_category(alert).upper()} emergency was received.",
         f"Reference: {reference(alert)}",
         "",
     ]
     if assigned and unit_name:
-        lines.append(f"{unit_name} has been alerted and a responder is on the way.")
+        lines.append(f"Active {unit_name} responders were notified.")
+        lines.append("Keep your phone available for contact.")
     elif assigned:
-        lines.append("A responder has been alerted and is on the way.")
+        lines.append("Active responders were notified.")
+        lines.append("Keep your phone available for contact.")
     else:
-        lines.append("Your report was sent to the barangay officer on duty for immediate assignment.")
-    lines += [
-        "",
-        "Reply STATUS for updates.",
-        "Reply CANCEL if this was a mistake.",
-    ]
+        lines.extend([
+            "No active E-Boses responder is currently available.",
+            "Please call 911 (National Emergency) or 161 / 8-161 (Marikina City Rescue).",
+            "Barangay officials were notified.",
+        ])
     return "\n".join(lines)
 
 
-def emergency_ack_unregistered(alert) -> str:
-    return "\n".join([
-        f"Good day! This is {BRAND} Emergency.",
-        "",
-        f"We received your {_category(alert).upper()} emergency near {_place(alert)}.",
-        f"Reference: {reference(alert)}",
-        "",
-        "Help is being arranged now.",
-        "",
-        "Note: this number is not yet registered with E-Boses,",
-        "so we could not confirm who is reporting.",
-        "Please register at the barangay hall so responders",
-        "can reach you faster next time.",
-        "",
-        "Reply STATUS for updates.",
-    ])
+def emergency_ack_unregistered(alert, *, unit_name: str = "", assigned: bool = True) -> str:
+    return emergency_ack(alert, unit_name=unit_name, assigned=assigned)
 
 
 def guide_resident() -> str:
@@ -320,13 +324,12 @@ DEFAULT_HOTLINES = [
 
 def outside_service_area(alert) -> str:
     return "\n".join([
-        f"{BRAND}: We received your emergency ({reference(alert)}) but the",
-        "location appears to be outside all active E-Boses community boundaries.",
+        f"{BRAND} EMERGENCY",
         "",
-        "It has been passed to the coordination desk for referral.",
-        "For the fastest help please also call 161 or 911.",
+        f"Your emergency was received ({reference(alert)}), but its GPS pin is outside the active E-Boses service area.",
         "",
-        "Reply STATUS for updates.",
+        "No E-Boses response unit was notified.",
+        "Please call 911 (National Emergency) or your local emergency hotline.",
     ])
 
 
@@ -334,24 +337,46 @@ def outside_service_area(alert) -> str:
 # Responder
 # ---------------------------------------------------------------------------
 
-def responder_dispatch(alert, *, priority: str = "HIGH", summary: str = "", contact: str = "") -> str:
+def responder_dispatch(
+    alert,
+    *,
+    priority: str = "HIGH",
+    summary: str = "",
+    reporter_name: str = "",
+    contact: str = "",
+) -> str:
     lines = [
-        f"{BRAND} DISPATCH - {priority.upper()}",
+        f"{BRAND} UNIT ALERT - {priority.upper()}",
         f"{_category(alert).upper()} emergency",
-        _place(alert),
+        f"Location: {_responder_place(alert)}",
         f"{reference(alert)} - received {clock(getattr(alert, 'created_at', None))}",
     ]
     if summary:
-        lines += ["", summary]
+        lines += ["", f"Details: {summary}"]
+    if reporter_name:
+        lines.append(f"Reported by: {reporter_name}")
     if contact:
-        lines += ["", f"Reporter: {mask_ph_mobile_sms(contact)}"]
+        normalized = re.sub(r"\D", "", contact)
+        if normalized.startswith("63") and len(normalized) == 12:
+            normalized = f"0{normalized[2:]}"
+        lines.append(f"Contact: {normalized or contact}")
     lines += [
         "",
-        f"Reply ACCEPT {reference(alert)} to confirm.",
-        f"Reply DECLINE {reference(alert)} <reason> if you cannot go.",
-        f"Reply BACKUP {reference(alert)} <reason> if you need support.",
+        "Open the E-Boses Alert Map and coordinate with your unit.",
     ]
     return "\n".join(lines)
+
+
+def emergency_only_help() -> str:
+    return "\n".join([
+        f"{BRAND} EMERGENCY",
+        "",
+        "To request help, send:",
+        "HELP <TYPE> <LOCATION>",
+        "",
+        "Example: HELP FIRE Champaca Street",
+        "Manage an existing alert in the E-Boses app.",
+    ])
 
 
 def guide_responder() -> str:
@@ -663,10 +688,11 @@ def resident_resolved_notice(alert) -> str:
 # Registration OTP (kept deliberately separate from every emergency flow)
 # ---------------------------------------------------------------------------
 
-def otp_message(code: str) -> str:
+def otp_message(code: str, recipient_name: str = "") -> str:
     """The only template that ever contains a code. Never stored, never logged."""
+    greeting = f"Good day, {recipient_name.strip()}! " if recipient_name and recipient_name.strip() else "Good day! "
     return (
-        f"E-Boses registration code: {code}. "
+        f"{greeting}E-Boses registration code: {code}. "
         "This code expires in 5 minutes. Do not share it with anyone."
     )
 

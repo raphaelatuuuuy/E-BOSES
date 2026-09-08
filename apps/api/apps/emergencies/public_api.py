@@ -23,7 +23,7 @@ from apps.accounts.models import ResidentProfile, User
 from apps.concerns.models import Concern, ConcernMedia
 from apps.media_urls import concern_media_preview_url
 from apps.emergencies.description import description_for_display
-from apps.emergencies.models import Community, EmergencyAlert, EmergencyCategory, MapGeometry
+from apps.emergencies.models import Community, EmergencyAlert, EmergencyCategory, MapDispatchPolicy, MapGeometry
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,8 @@ CACHE_KEY = "public:communities:v1"
 CACHE_SECONDS = 300
 COMMUNITY_REQUEST_RECIPIENT = "eboses@gmail.com"
 NETWORK_FALLBACK_CENTER = {"latitude": 14.5995, "longitude": 120.9842, "zoom": 12}
+SOS_SMS_NUMBER = "09640746068"
+OFFLINE_SOS_CONFIG_VERSION = 2
 
 CLOSED_EMERGENCY_STATUSES = (
     EmergencyAlert.Status.RESOLVED,
@@ -206,7 +208,10 @@ def build_public_report_map_payload():
                 "type": alert.type,
                 "type_label": alert.get_type_display(),
                 "display_description": display_description,
-                "address": public_street_address(alert.resolved_location or alert.address, alert.barangay),
+                "address": public_street_address(
+                    alert.resolved_location or alert.address or alert.reported_area,
+                    alert.barangay,
+                ),
                 "latitude": round(float(alert.latitude), 4),
                 "longitude": round(float(alert.longitude), 4),
                 "status": alert.status,
@@ -260,6 +265,125 @@ class PublicReportMapView(APIView):
 
     def get(self, request):
         return Response(build_public_report_map_payload())
+
+
+def _offline_path(geometry, bounds):
+    coordinates = (geometry or {}).get("coordinates") or []
+    if (geometry or {}).get("type") == "MultiPolygon":
+        ring = coordinates[0][0] if coordinates and coordinates[0] else []
+    else:
+        ring = coordinates[0] if coordinates else []
+    if not ring:
+        return ""
+    width, height = 1040, 929
+    lng_span = bounds["max_longitude"] - bounds["min_longitude"] or 1
+    lat_span = bounds["max_latitude"] - bounds["min_latitude"] or 1
+    commands = []
+    for index, point in enumerate(ring):
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        x = (float(point[0]) - bounds["min_longitude"]) / lng_span * width
+        y = (bounds["max_latitude"] - float(point[1])) / lat_span * height
+        commands.append(f"{'M' if not commands else 'L'}{x:.1f} {y:.1f}")
+    return "".join(commands) + ("Z" if commands else "")
+
+
+def build_offline_sos_config():
+    """Privacy-safe, cacheable geography used by the signed-out SOS screen."""
+    from apps.live_map import static_map_payload
+
+    community = (
+        Community.objects.filter(
+            status=Community.Status.ACTIVE,
+            boundary__isnull=False,
+            boundary__is_active=True,
+        )
+        .select_related("boundary")
+        .order_by("name", "pk")
+        .first()
+    )
+    if not community:
+        return {"version": OFFLINE_SOS_CONFIG_VERSION, "smsNumber": SOS_SMS_NUMBER, "community": None}
+    points = list(_public_map_coordinates(community.boundary.geometry))
+    bounds = {
+        "min_latitude": float(community.bbox_min_latitude) if community.bbox_min_latitude is not None else min(point[0] for point in points),
+        "max_latitude": float(community.bbox_max_latitude) if community.bbox_max_latitude is not None else max(point[0] for point in points),
+        "min_longitude": float(community.bbox_min_longitude) if community.bbox_min_longitude is not None else min(point[1] for point in points),
+        "max_longitude": float(community.bbox_max_longitude) if community.bbox_max_longitude is not None else max(point[1] for point in points),
+    }
+    policy = MapDispatchPolicy.current(community)
+    map_payload = static_map_payload(community)
+    streets = []
+    for street in (map_payload.get("streets") or {}).get("streets", [])[:80]:
+        street_paths = []
+        for geometry in street.get("geometries") or []:
+            geometry_type = geometry.get("type")
+            raw = geometry.get("coordinates") or []
+            if geometry_type == "LineString":
+                raw_paths = [raw]
+            elif geometry_type == "MultiLineString":
+                raw_paths = raw
+            else:
+                continue
+            for path in raw_paths:
+                step = max(1, len(path) // 24)
+                sampled = [
+                    [float(point[1]), float(point[0])]
+                    for point in path[::step]
+                    if isinstance(point, (list, tuple)) and len(point) >= 2
+                ]
+                if path and sampled and sampled[-1] != [float(path[-1][1]), float(path[-1][0])]:
+                    sampled.append([float(path[-1][1]), float(path[-1][0])])
+                if sampled:
+                    street_paths.append(sampled)
+        if street_paths:
+            streets.append({
+                "name": street["name"],
+                "points": street_paths[0],
+                "paths": street_paths,
+            })
+    categories = list(
+        EmergencyCategory.objects.filter(
+            community=community, is_active=True, visible_to_residents=True
+        ).order_by("sort_order", "label").values("code", "label", "subtext")
+    )
+    return {
+        "version": OFFLINE_SOS_CONFIG_VERSION,
+        "smsNumber": SOS_SMS_NUMBER,
+        "community": {
+            "name": community.name,
+            "bounds": {
+                "minLatitude": bounds["min_latitude"],
+                "maxLatitude": bounds["max_latitude"],
+                "minLongitude": bounds["min_longitude"],
+                "maxLongitude": bounds["max_longitude"],
+            },
+            "boundaryPath": _offline_path(community.boundary.geometry, bounds),
+            "boundaryGeometry": community.boundary.geometry,
+            "acceptance": {
+                "centerLatitude": float(policy.acceptance_center_latitude),
+                "centerLongitude": float(policy.acceptance_center_longitude),
+                "radiusMeters": int(policy.acceptance_radius_meters),
+                "geometry": policy.acceptance_geometry,
+                "outOfZoneAction": policy.out_of_zone_action,
+            },
+            "streets": streets,
+            "categories": categories,
+            "boundaryRevision": community.boundary_revision,
+        },
+    }
+
+
+class PublicOfflineSosConfigView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        payload = cache.get("public:offline-sos-config:v2")
+        if payload is None:
+            payload = build_offline_sos_config()
+            cache.set("public:offline-sos-config:v2", payload, 300)
+        return Response(payload)
 
 # PSA geography, not a business rule: these seventeen local government units
 # are the National Capital Region. Anything else resolves to "" until the

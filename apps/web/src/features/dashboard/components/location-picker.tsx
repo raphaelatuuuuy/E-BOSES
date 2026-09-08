@@ -15,6 +15,7 @@ import {
   SearchIcon,
 } from "lucide-react"
 import type leaflet from "leaflet"
+import "@/features/dashboard/components/map/location-pin.css"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
@@ -1074,28 +1075,6 @@ export default function LocationPickerModal({
       -ms-overflow-style: none;
     }
     .eboses-noscrollbar::-webkit-scrollbar { width: 0; height: 0; }
-    .eboses-pin-pulse::before,
-    .eboses-pin-pulse::after {
-      content: "";
-      position: absolute;
-      inset: 50%;
-      width: 12px;
-      height: 12px;
-      margin: -6px 0 0 -6px;
-      border-radius: 9999px;
-      background: rgba(0, 0, 0, 0.35);
-      animation: eboses-pin-scan 1.8s ease-out infinite;
-      pointer-events: none;
-    }
-    .eboses-pin-pulse::after {
-      animation-delay: 0.9s;
-      background: rgba(0, 0, 0, 0.22);
-    }
-    @keyframes eboses-pin-scan {
-      0% { transform: scale(1); opacity: 0.7; }
-      70% { transform: scale(2.8); opacity: 0; }
-      100% { transform: scale(2.8); opacity: 0; }
-    }
     .eboses-map-blocked.leaflet-container,
     .eboses-map-blocked .leaflet-grab,
     .eboses-map-blocked .leaflet-interactive {

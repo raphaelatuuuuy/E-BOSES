@@ -31,6 +31,7 @@ export const AlertsFeed = memo(function AlertsFeed({
   weatherMode = false,
   weatherToggle,
   weather,
+  showRealIconWhenClosed,
 }: {
   areaName: string
   total: number
@@ -39,6 +40,7 @@ export const AlertsFeed = memo(function AlertsFeed({
   weatherMode?: boolean
   weatherToggle?: ReactNode
   weather?: MapWeatherState
+  showRealIconWhenClosed?: boolean
 }) {
   const asOf = new Date().toLocaleTimeString([], {
     hour: "numeric",
@@ -97,6 +99,7 @@ export const AlertsFeed = memo(function AlertsFeed({
                     row.selection ? onSelect(row.selection) : row.onAction?.()
                   }
                   onAction={row.onAction}
+                  showRealIconWhenClosed={showRealIconWhenClosed}
                 />
               </li>
             ))}

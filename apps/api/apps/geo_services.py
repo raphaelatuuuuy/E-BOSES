@@ -1536,14 +1536,27 @@ def reverse_geocode(latitude, longitude) -> dict[str, Any]:
 
     from django.conf import settings
 
-    if not getattr(settings, "REVERSE_GEOCODE_ENABLED", True):
-        return {"status": REVERSE_STATUS_SKIPPED, "location": "", "raw": {}}
-
     try:
         lat = float(latitude)
         lng = float(longitude)
     except (TypeError, ValueError):
         return {"status": REVERSE_STATUS_SKIPPED, "location": "", "raw": {}}
+
+    def local_fallback(status=REVERSE_STATUS_FAILED):
+        known = nearest_known_street(lat, lng)
+        street = (known.get("street") or "").strip()
+        if not street:
+            return {"status": status, "location": "", "raw": {}}
+        house = (known.get("house_number") or "").strip()
+        location = " ".join(part for part in (house, street) if part)
+        return {
+            "status": REVERSE_STATUS_SUCCESS,
+            "location": location[:255],
+            "raw": {"road": street, "source": "local_street_geometry"},
+        }
+
+    if not getattr(settings, "REVERSE_GEOCODE_ENABLED", True):
+        return local_fallback(REVERSE_STATUS_SKIPPED)
 
     cache_key = _reverse_cache_key(lat, lng)
     cached = cache.get(cache_key)
@@ -1574,7 +1587,7 @@ def reverse_geocode(latitude, longitude) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("Reverse geocode failed for a pin: %s", type(exc).__name__)
         # Cache the failure briefly so a dead mirror does not stall every alert.
-        result = {"status": REVERSE_STATUS_FAILED, "location": "", "raw": {}}
+        result = local_fallback()
         cache.set(cache_key, result, 120)
         return result
 
@@ -1585,6 +1598,8 @@ def reverse_geocode(latitude, longitude) -> dict[str, Any]:
         "location": location[:255],
         "raw": {key: address.get(key) for key in ("road", "suburb", "village", "city", "amenity") if address.get(key)},
     }
+    if not location:
+        result = local_fallback()
     cache.set(cache_key, result, REVERSE_GEOCODE_CACHE_TTL if location else 300)
     return result
 

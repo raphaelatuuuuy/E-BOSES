@@ -1,4 +1,3 @@
-import { useEffect, useMemo } from "react"
 import { PhoneIcon } from "lucide-react"
 
 /**
@@ -7,7 +6,6 @@ import { PhoneIcon } from "lucide-react"
  */
 export function SosConfirmStep({
   mode,
-  isOnline,
   submitError,
   emergencySmsHref,
   onSmsFallbackClick,
@@ -15,12 +13,10 @@ export function SosConfirmStep({
   locationLabel,
   triageSummary,
   note,
-  photo,
   submitting,
   dispatchCountdown,
 }: {
   mode: "review" | "countdown"
-  isOnline: boolean
   submitError: string
   emergencySmsHref: string
   onSmsFallbackClick: () => void
@@ -28,17 +24,9 @@ export function SosConfirmStep({
   locationLabel?: string
   triageSummary?: string
   note: string
-  photo: File | null
   submitting: boolean
   dispatchCountdown: number
 }) {
-  const preview = useMemo(() => (photo ? URL.createObjectURL(photo) : ""), [photo])
-
-  useEffect(() => {
-    if (!preview) return
-    return () => URL.revokeObjectURL(preview)
-  }, [preview])
-
   if (mode === "countdown") {
     return (
       <div className="flex min-h-[320px] flex-col items-center justify-center px-4 text-center">
@@ -76,31 +64,6 @@ export function SosConfirmStep({
 
   return (
     <div className="space-y-3">
-      {!isOnline ? (
-        <div
-          className="rounded-[18px] border border-white/20 bg-white/10 p-4"
-          role="status"
-          aria-live="polite"
-        >
-          <p className="text-[14px] font-semibold text-white">You’re offline</p>
-          <p className="mt-1 text-[13px] leading-5 text-white/70">
-            Your entries remain on this screen. Reconnect to use online
-            responder routing
-            {emergencySmsHref ? ", or open the SMS backup below." : "."}
-          </p>
-          {!emergencySmsHref ? (
-            <p className="mt-2 text-[12px] leading-5 text-white/65">
-              SMS backup is not configured on this device. If anyone is in
-              immediate danger, call your local emergency number.
-            </p>
-          ) : (
-            <p className="mt-2 text-[12px] leading-5 text-white/65">
-              Opening SMS creates a draft only. Review it and press Send
-              in your phone’s messaging app.
-            </p>
-          )}
-        </div>
-      ) : null}
       {submitError ? (
         <div
           className="rounded-[18px] border border-sos/50 bg-sos/15 p-4"
@@ -113,8 +76,7 @@ export function SosConfirmStep({
             {submitError}
           </p>
           <p className="mt-2 text-[12px] leading-5 text-white/65">
-            Check your connection and try again. Your details are still
-            here.
+            Check your connection and try again. Your details are still here.
           </p>
           {emergencySmsHref ? (
             <a
@@ -123,14 +85,8 @@ export function SosConfirmStep({
               className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-full bg-brand-orange px-3.5 text-[13px] font-bold text-white hover:bg-brand-orange-strong"
             >
               <PhoneIcon className="size-4" />
-              Open SMS backup
+              Send Alert
             </a>
-          ) : null}
-          {emergencySmsHref ? (
-            <p className="mt-2 text-[11px] leading-4 text-white/55">
-              This opens your phone’s SMS app. Review the message and
-              press send.
-            </p>
           ) : null}
         </div>
       ) : null}
@@ -164,22 +120,12 @@ export function SosConfirmStep({
               {note.trim()}
             </p>
           ) : null}
-          {preview ? (
-            <div className="mt-3 flex gap-2">
-              <img
-                src={preview}
-                alt="Attached photo"
-                className="h-20 w-20 rounded-lg border border-white/15 object-cover"
-              />
-            </div>
-          ) : null}
         </div>
       </div>
 
       <div className="rounded-[18px] border border-neutral-400/40 bg-neutral-500/15 px-4 py-3 text-[13px] leading-5 text-white/90">
-        False or misleading alerts are logged. Repeated abuse can suspend
-        your account. Accidental alerts can be cancelled afterward with a
-        reason.
+        False or misleading alerts are logged. Repeated abuse can suspend your
+        account. Accidental alerts can be cancelled afterward with a reason.
       </div>
     </div>
   )

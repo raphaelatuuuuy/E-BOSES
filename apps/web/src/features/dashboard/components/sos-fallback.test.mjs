@@ -9,28 +9,29 @@ import {
   buildPinnedCoordinateAddress,
   isSosLocationReady,
 } from "./sos-fallback.ts"
+import { estimateOfflineStreet } from "./sos/offline-sos-config.ts"
 
 const GOLDEN_PATH = fileURLToPath(
   new URL(
     "../../../../../api/apps/sms/fixtures/sms_golden_messages.json",
-    import.meta.url,
-  ),
+    import.meta.url
+  )
 )
 
 test("buildEmergencySmsHref creates an explicit native SMS draft for a configured number", () => {
   assert.equal(
     buildEmergencySmsHref(
-      "+63 (917) 123-4567",
+      "09640746068",
       "I need immediate help. This is a Fire emergency."
     ),
-    "sms:+639171234567?body=I%20need%20immediate%20help.%20This%20is%20a%20Fire%20emergency."
+    "sms:09640746068?body=I%20need%20immediate%20help.%20This%20is%20a%20Fire%20emergency."
   )
 })
 
 test("buildEmergencySmsHref rejects unsafe or incomplete SMS configuration", () => {
-  assert.equal(buildEmergencySmsHref("0917;open-app", "Emergency"), "")
+  assert.equal(buildEmergencySmsHref("09640746068;open-app", "Emergency"), "")
   assert.equal(buildEmergencySmsHref("123", "Emergency"), "")
-  assert.equal(buildEmergencySmsHref("09171234567", "   "), "")
+  assert.equal(buildEmergencySmsHref("09640746068", "   "), "")
 })
 
 test("the SMS body carries no prefix, user id, database id or timestamp", () => {
@@ -40,8 +41,19 @@ test("the SMS body carries no prefix, user id, database id or timestamp", () => 
     latitude: 14.6091,
     longitude: 121.0855,
   })
-  for (const banned of ["EBOSES-SOS", "E-BOSES SOS", "User ID", "Request ID", "Timestamp", "Latitude:", "Longitude:"]) {
-    assert.ok(!message.includes(banned), `message still contains "${banned}": ${message}`)
+  for (const banned of [
+    "EBOSES-SOS",
+    "E-BOSES SOS",
+    "User ID",
+    "Request ID",
+    "Timestamp",
+    "Latitude:",
+    "Longitude:",
+  ]) {
+    assert.ok(
+      !message.includes(banned),
+      `message still contains "${banned}": ${message}`
+    )
   }
   assert.ok(message.startsWith("I need immediate help."))
   assert.ok(message.includes("This is a Medical emergency near Lilac Street"))
@@ -64,7 +76,7 @@ test("a message with no readable area still names the category", () => {
   })
   assert.equal(
     message,
-    "I need immediate help. This is a Fire emergency. Please send assistance.\nLOC:14.650123,121.112345",
+    "I need immediate help. This is a Fire emergency. Please send assistance.\nLOC:14.650123,121.112345"
   )
 })
 
@@ -90,7 +102,7 @@ test("golden fixtures render exactly what the backend parser expects", () => {
     assert.equal(
       buildEmergencySmsMessage(testCase.input),
       testCase.message,
-      `golden case "${testCase.name}" drifted from apps/sms/fixtures/sms_golden_messages.json`,
+      `golden case "${testCase.name}" drifted from apps/sms/fixtures/sms_golden_messages.json`
     )
   }
 })
@@ -115,4 +127,47 @@ test("isSosLocationReady accepts any finite pin and rejects missing or non-finit
   assert.equal(isSosLocationReady({ lat: 14.6507, lng: 121.1133 }), true)
   assert.equal(isSosLocationReady({ lat: Number.NaN, lng: 121.1133 }), false)
   assert.equal(isSosLocationReady(null), false)
+})
+
+test("offline street matching measures the road segment and rejects weak GPS", () => {
+  const config = {
+    version: 2,
+    smsNumber: "09640746068",
+    community: {
+      name: "Marikina Heights",
+      bounds: {
+        minLatitude: 14.64,
+        maxLatitude: 14.66,
+        minLongitude: 121.1,
+        maxLongitude: 121.13,
+      },
+      boundaryPath: "",
+      acceptance: {
+        centerLatitude: 14.65,
+        centerLongitude: 121.11,
+        radiusMeters: 800,
+      },
+      streets: [
+        {
+          name: "Actual Road",
+          points: [
+            [14.65, 121.1],
+            [14.65, 121.12],
+          ],
+        },
+        {
+          name: "Endpoint Road",
+          points: [
+            [14.649, 121.109],
+            [14.649, 121.11],
+          ],
+        },
+      ],
+    },
+  }
+
+  const estimate = estimateOfflineStreet(14.65005, 121.11, 15, config)
+  assert.equal(estimate?.name, "Actual Road")
+  assert.ok(estimate.distanceMeters < 10)
+  assert.equal(estimateOfflineStreet(14.65005, 121.11, 5000, config), null)
 })

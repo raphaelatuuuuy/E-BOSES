@@ -48,6 +48,18 @@ def _summary(alert) -> str:
     return " ".join(part for part in parts if part).strip()
 
 
+def _reporter_name(alert) -> str:
+    profile = getattr(getattr(alert, "reporter", None), "resident_profile", None)
+    if not profile:
+        return "Unregistered resident"
+    name = " ".join(
+        part.strip()
+        for part in (getattr(profile, "first_name", ""), getattr(profile, "last_name", ""))
+        if (part or "").strip()
+    )
+    return name or "Resident"
+
+
 def notify_responder_assigned(alert, responder) -> None:
     number = getattr(responder, "phone_number", "")
     if not number:
@@ -59,6 +71,7 @@ def notify_responder_assigned(alert, responder) -> None:
                 alert,
                 priority=priority_for(alert),
                 summary=_summary(alert),
+                reporter_name=_reporter_name(alert),
                 contact=alert.reporter_contact_number or getattr(alert.reporter, "phone_number", ""),
             ),
             purpose=SmsPurpose.DISPATCH,
@@ -68,6 +81,16 @@ def notify_responder_assigned(alert, responder) -> None:
         )
     except Exception:
         logger.warning("Dispatch SMS failed for alert %s.", alert.pk, exc_info=True)
+
+
+def notify_active_unit(alert) -> list:
+    """Text each active member of the mapped unit exactly once for this alert."""
+    from apps.emergencies.views import active_unit_responders
+
+    responders = active_unit_responders(alert)
+    for responder in responders:
+        notify_responder_assigned(alert, responder)
+    return responders
 
 
 def notify_officials_no_responder(alert, unit_name="") -> None:

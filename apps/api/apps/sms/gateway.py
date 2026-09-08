@@ -178,7 +178,7 @@ class HttpJsonSmsDriver(BaseSmsDriver):
         values = {
             "{to}": destination,
             "{body}": body,
-            "{sim_slot}": int(getattr(settings, "OUTBOUND_SMS_SIM_SLOT", 1) or 1),
+            "{sim_slot}": int(getattr(settings, "OUTBOUND_SMS_SIM_SLOT", 2) or 2),
             "{timestamp}": int(time.time() * 1000),
             "{from}": getattr(settings, "SMS_GATEWAY_NUMBER", "") or "",
         }
@@ -221,7 +221,7 @@ class HttpJsonSmsDriver(BaseSmsDriver):
             "{to}": destination,
             "{body}": body,
             "{msg}": body,
-            "{sim_slot}": str(getattr(settings, "OUTBOUND_SMS_SIM_SLOT", 1) or 1),
+            "{sim_slot}": str(getattr(settings, "OUTBOUND_SMS_SIM_SLOT", 2) or 2),
             "{from}": getattr(settings, "SMS_GATEWAY_NUMBER", "") or "",
         }
         for token, value in replacements.items():

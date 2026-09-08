@@ -22,8 +22,8 @@ from django.utils import timezone
 
 from . import templates
 from .gateway import queue_sms
-from .models import InboundSmsMessage, SmsPurpose
-from .normalize import SenderMatch, match_sender, normalize_ph_mobile, surname_for
+from .models import InboundSmsMessage, OutboundSmsMessage, SmsPurpose
+from .normalize import SenderMatch, hash_number, match_sender, normalize_ph_mobile, surname_for
 from .parsing import ParsedCommand, looks_like_otp, parse_command, parse_emergency_sms
 from apps.emergencies.temporal import NON_CURRENT
 
@@ -102,6 +102,25 @@ def handle_inbound(payload) -> InboundSmsMessage:
         if inbound.outcome != InboundSmsMessage.Outcome.PENDING:
             return inbound
         logger.warning("Recovering stale pending inbound SMS #%s.", inbound.pk)
+
+    gateway = normalize_ph_mobile(getattr(settings, "SMS_GATEWAY_NUMBER", ""))
+    if gateway and sender == gateway:
+        echo_cutoff = timezone.now() - timedelta(hours=1)
+        outbound = OutboundSmsMessage.objects.filter(
+            created_at__gte=echo_cutoff,
+            body=payload.body,
+        )
+        resident_intake_check = outbound.filter(
+            purpose=SmsPurpose.EMERGENCY,
+            idempotency_key__startswith="resident-intake-check:",
+            destination_hash=hash_number(sender),
+            status__in=[OutboundSmsMessage.Status.SENDING, OutboundSmsMessage.Status.SENT, OutboundSmsMessage.Status.DELIVERED],
+        ).exists()
+        if outbound.exists() and not resident_intake_check:
+            inbound.outcome = InboundSmsMessage.Outcome.REJECTED
+            inbound.detail = "Self-addressed outbound SMS echo discarded without a reply."
+            inbound.save(update_fields=["outcome", "detail"])
+            return inbound
 
     # An OTP from a bank, an e-wallet, or E-Boses itself must never be stored in
     # full, echoed, or forwarded. Drop it before anything else looks at it.
@@ -207,30 +226,9 @@ def _dispatch(inbound, payload, match: SenderMatch, role: str) -> Reply | None:
     if parsed.is_emergency and not command.recognised:
         return _create_emergency(inbound, parsed, payload, match)
 
-    if command.keyword == "GUIDE":
-        inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
-        inbound.detail = f"Guide sent for role {role}."
-        return _guide_for(role)
-
-    if role in {ROLE_RESPONDER, ROLE_OFFICIAL} and command.recognised:
-        from .commands import staff
-
-        return staff.handle(inbound, command, match, role)
-
-    if command.keyword in RESIDENT_COMMANDS:
-        from .commands import resident
-
-        return resident.handle(inbound, command, match)
-
-    if command.recognised:
-        # A real keyword, but not one this sender is allowed to use.
-        inbound.outcome = InboundSmsMessage.Outcome.UNRECOGNISED
-        inbound.detail = f"{command.keyword} is not available for role {role}."
-        return Reply(templates.not_authorised(command.keyword))
-
     inbound.outcome = InboundSmsMessage.Outcome.UNRECOGNISED
-    inbound.detail = "No command or emergency signal recognised."
-    return Reply(templates.unknown_command(payload.body))
+    inbound.detail = "No emergency signal recognised; SMS commands are managed in the app."
+    return Reply(templates.emergency_only_help())
 
 
 def _guide_for(role: str) -> Reply:
@@ -307,18 +305,27 @@ def _create_emergency(inbound, parsed, payload, match: SenderMatch) -> Reply:
     inbound.outcome = InboundSmsMessage.Outcome.EMERGENCY_CREATED
     inbound.detail = f"Created {templates.reference(alert)}."
 
-    if not match.is_registered:
+    from apps.emergencies.models import EmergencyAlert
+
+    if (
+        alert.status == EmergencyAlert.Status.INVALID
+        or alert.location_confidence == EmergencyAlert.LocationConfidence.OUTSIDE_AREA
+    ):
         return Reply(
-            templates.emergency_ack_unregistered(alert),
+            templates.outside_service_area(alert),
             purpose=SmsPurpose.EMERGENCY_ACK,
             alert=alert,
         )
 
-    from apps.emergencies.models import EmergencyAlert
-
-    if alert.location_confidence == EmergencyAlert.LocationConfidence.OUTSIDE_AREA:
+    unit_name = result.unit_name or _unit_name_for(result.responder)
+    responders_notified = result.active_unit_member_count > 0
+    if not match.is_registered:
         return Reply(
-            templates.outside_service_area(alert),
+            templates.emergency_ack_unregistered(
+                alert,
+                unit_name=unit_name,
+                assigned=responders_notified,
+            ),
             purpose=SmsPurpose.EMERGENCY_ACK,
             alert=alert,
         )
@@ -327,8 +334,8 @@ def _create_emergency(inbound, parsed, payload, match: SenderMatch) -> Reply:
         templates.emergency_ack(
             alert,
             surname=surname_for(match.user),
-            unit_name=_unit_name_for(result.responder),
-            assigned=bool(result.responder),
+            unit_name=unit_name,
+            assigned=responders_notified,
         ),
         purpose=SmsPurpose.EMERGENCY_ACK,
         alert=alert,

@@ -111,17 +111,17 @@ class ConfigCrudTests(APITestCase):
     def test_sms_number_is_editable_and_served_to_residents(self):
         saved = self.client.patch(
             "/api/emergencies/map-dispatch-policy/",
-            {"emergency_sms_number": "+639171234567"},
+            {"emergency_sms_number": "09640746068"},
             format="json",
         )
         self.assertEqual(saved.status_code, status.HTTP_200_OK, saved.data)
-        self.assertEqual(saved.data["emergency_sms_number"], "+639171234567")
+        self.assertEqual(saved.data["emergency_sms_number"], "09640746068")
 
         # The SOS screen reads it from here, so a resident sees the change
         # without the app being rebuilt.
         context = self.client.get("/api/locations/map-context/")
         self.assertEqual(context.status_code, status.HTTP_200_OK)
-        self.assertEqual(context.data["emergency_sms_number"], "+639171234567")
+        self.assertEqual(context.data["emergency_sms_number"], "09640746068")
 
 
 class RoleChangeTests(APITestCase):

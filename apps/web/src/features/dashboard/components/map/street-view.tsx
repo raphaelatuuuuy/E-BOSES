@@ -50,13 +50,6 @@ const EMBED_KEY = (
   import.meta.env.VITE_GOOGLE_MAPS_EMBED_KEY as string | undefined
 )?.trim()
 
-/**
- * When a Maps Embed API key is configured we use the official street-view
- * embed — the only variant whose panorama responds to touch drags on mobile.
- * Without a key we fall back to the legacy `output=svembed` URL, which is
- * desktop-oriented: on phones Google serves a page that ignores swipes, so
- * panning around requires the desktop site or opening Maps itself.
- */
 export function streetViewEmbedUrl(coord: StreetViewCoord, heading = 0) {
   const lat = coord.lat.toFixed(6)
   const lng = coord.lng.toFixed(6)
@@ -340,10 +333,22 @@ export function StreetViewModal({
           src={streetViewEmbedUrl(coord)}
           title="Street View"
           loading="eager"
+          referrerPolicy="no-referrer-when-downgrade"
           allowFullScreen
           className="absolute inset-0 size-full border-0"
         />
       </div>
+
+      {!EMBED_KEY && (
+        <a
+          href={`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${coord.lat},${coord.lng}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="absolute top-2 left-2 z-20 max-w-[calc(100%-5rem)] rounded-lg bg-white px-3 py-2 text-sm font-medium text-neutral-900 shadow-md"
+        >
+          Open in Google Maps to swipe around
+        </a>
+      )}
 
       <div className="absolute top-2 right-2 z-20">
         <MapControlStack tone="light">

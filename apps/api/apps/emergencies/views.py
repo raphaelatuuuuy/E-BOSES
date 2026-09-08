@@ -523,6 +523,51 @@ def _unit_candidates(alert, *, community=None, departments=None, exclude_ids=Non
     return list(qs)
 
 
+def active_unit_responders(alert):
+    """Every verified, on-duty member of the alert's mapped local unit.
+
+    This list is intentionally broader than assignment candidates: a member may
+    already be handling another incident and must not become the primary owner,
+    but the simplified SMS flow still keeps the whole active unit informed.
+    """
+    User = get_user_model()
+    preferred = preferred_departments_for(alert.type, alert.community)
+    if not preferred:
+        return []
+
+    preferred_ids = {department.pk for department in preferred}
+    legacy_units = {
+        code
+        for code, department_code in LEGACY_UNIT_TO_DEPARTMENT_CODE.items()
+        if department_code in {department.code for department in preferred}
+    }
+    membership = models.Q(
+        designations__is_active=True,
+        designations__department_id__in=preferred_ids,
+    )
+    if legacy_units:
+        membership |= models.Q(designations__isnull=True, responder_unit__in=legacy_units)
+
+    responders = (
+        User.objects.filter(
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+            is_active=True,
+            is_on_duty=True,
+        )
+        .filter(membership)
+        .select_related("resident_profile")
+        .distinct()
+        .order_by("pk")
+    )
+    barangay = normalize_barangay(alert.barangay)
+    return [
+        responder
+        for responder in responders
+        if normalize_barangay(getattr(responder.resident_profile, "barangay", "")) == barangay
+    ]
+
+
 def _rank_responders(alert, responders):
     fresh_after = timezone.now() - timedelta(minutes=RESPONDER_LOCATION_FRESH_MINUTES)
 
@@ -902,12 +947,15 @@ def apply_routing_effects(alert, responder, request, *, actor=None, audit_action
         metadata={"alert_id": alert.pk, "responder_id": responder.pk, "emergency_type": alert.type},
         request_meta=request_meta(request),
     )
-    try:
-        from apps.sms.notify import notify_responder_assigned
+    # SMS-originated alerts first attempt server reverse geocoding. That task
+    # sends the same idempotent dispatch message to this primary assignment.
+    if alert.reporter_verification == EmergencyAlert.ReporterVerification.ACCOUNT:
+        try:
+            from apps.sms.notify import notify_responder_assigned
 
-        notify_responder_assigned(alert, responder)
-    except Exception:
-        pass
+            notify_responder_assigned(alert, responder)
+        except Exception:
+            pass
 
 
 def auto_route_alert(alert, request, *, retry_escalated=False, preferred_responder=None):

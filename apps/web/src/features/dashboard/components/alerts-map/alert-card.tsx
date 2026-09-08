@@ -28,12 +28,14 @@ export function AlertCard({
   expanded,
   onOpen,
   onAction,
+  showRealIconWhenClosed,
 }: {
   model: AlertCardModel
   icon: ReactNode
   expanded: boolean
   onOpen: () => void
   onAction?: () => void
+  showRealIconWhenClosed?: boolean
 }) {
   const { closed } = model
 
@@ -62,7 +64,7 @@ export function AlertCard({
                     : "bg-brand-orange-soft text-accent"
             )}
           >
-            {closed ? (
+            {closed && !showRealIconWhenClosed ? (
               <CircleCheckIcon className="size-5" strokeWidth={1.9} />
             ) : (
               icon

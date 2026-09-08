@@ -15,12 +15,14 @@ import {
 } from "@/features/dashboard/components/sos/duty-hours-dialog"
 import { apiRequest } from "@/lib/api"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
+import { useAuthSession } from "@/features/auth/auth-session"
 
 function isActiveAlert(alert: EmergencyAlert | null) {
   return Boolean(alert && isEmergencyActive(alert.status))
 }
 
 export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
+  const { user } = useAuthSession()
   const [shellOpen, setShellOpen] = useState(false)
   const [shellMode, setShellMode] = useState<"wizard" | "tracking">("wizard")
   const [checkingActive, setCheckingActive] = useState(false)
@@ -32,6 +34,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   const veilTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
+    if (!user || !navigator.onLine) return
     let cancelled = false
     void apiRequest<{ duty_hours?: DutyHours; hotlines?: Hotline[] }>(
       "/locations/map-context/"
@@ -45,11 +48,12 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [user])
 
   const offDuty = dutyHours ? !dutyHours.within_duty_hours : false
 
   useEffect(() => {
+    if (!user || !navigator.onLine) return
     async function loadActive() {
       try {
         const active = await getActiveEmergency()
@@ -65,7 +69,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
       }
     }
     void loadActive()
-  }, [suppressed])
+  }, [suppressed, user])
 
   useEffect(() => {
     const active = isActiveAlert(trackingAlert)
@@ -93,6 +97,10 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
     if (isActiveAlert(trackingAlert)) {
       setShellMode("tracking")
       setShellOpen(true)
+      return
+    }
+    if (!user || !navigator.onLine) {
+      openWizard()
       return
     }
     setCheckingActive(true)
@@ -142,7 +150,18 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
       handleOpenEmergency
     )
     window.addEventListener("eboses:open-sos", handleOpenSos)
+    const query = new URLSearchParams(window.location.search)
+    const openFromShortcut = query.get("open") === "sos"
+    const shortcutTimer = openFromShortcut
+      ? window.setTimeout(() => {
+          void handleSosRef.current()
+          query.delete("open")
+          const next = `${window.location.pathname}${query.size ? `?${query.toString()}` : ""}${window.location.hash}`
+          window.history.replaceState(window.history.state, "", next)
+        }, 0)
+      : undefined
     return () => {
+      if (shortcutTimer !== undefined) window.clearTimeout(shortcutTimer)
       window.removeEventListener(
         "eboses:open-emergency-tracking",
         handleOpenEmergency

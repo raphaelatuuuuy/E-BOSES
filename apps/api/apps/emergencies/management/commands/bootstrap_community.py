@@ -271,7 +271,7 @@ class Command(BaseCommand):
             acceptance_center_latitude=community.center_latitude,
             acceptance_center_longitude=community.center_longitude,
             acceptance_geometry=boundary.geometry,
-            emergency_sms_number="",
+            emergency_sms_number="09640746068",
             hotlines=[],
             updated_by=None,
         )

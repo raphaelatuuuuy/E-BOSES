@@ -35,6 +35,7 @@ from apps.emergencies.public_api import (
     PublicCommunitiesView,
     PublicCommunityBoundaryView,
     PublicCommunityRequestView,
+    PublicOfflineSosConfigView,
     PublicReportMapView,
 )
 from apps.emergencies.views import (
@@ -117,6 +118,7 @@ urlpatterns = [
     path("api/locations/boundaries/<int:pk>/", BoundaryDetailView.as_view(), name="location-boundary-detail"),
     path("api/locations/active-communities/", ActiveCommunityBoundariesView.as_view(), name="location-active-communities"),
     path("api/public/communities/", PublicCommunitiesView.as_view(), name="public-communities"),
+    path("api/public/offline-sos-config/", PublicOfflineSosConfigView.as_view(), name="public-offline-sos-config"),
     path(
         "api/public/communities/<int:pk>/boundary/",
         PublicCommunityBoundaryView.as_view(),

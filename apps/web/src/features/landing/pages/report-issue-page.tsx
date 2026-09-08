@@ -9,7 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import {
   AlertTriangleIcon,
   ChevronLeftIcon,
@@ -45,6 +45,7 @@ import {
   useMapWeather,
   type MapWeatherState,
 } from "@/features/dashboard/components/map-weather"
+
 import type { Selection } from "@/features/dashboard/components/alerts-map/lib"
 import {
   SheetDialog,
@@ -68,8 +69,17 @@ type PublicPanelProps = {
   onResizeStart?: (event: ReactPointerEvent<HTMLDivElement>) => void
 }
 
-function alertKey(alert: PublicAlert) {
-  return `${alert.kind}:${alert.id}`
+function hoverMeta(address: string, communityName: string) {
+  const a = (address || "").trim()
+  const c = (communityName || "").trim()
+  if (!a) return c
+  if (!c) return a
+  if (a.toLowerCase() === c.toLowerCase()) return a
+  const aLower = a.toLowerCase()
+  const cLower = c.toLowerCase()
+  if (aLower.endsWith(", " + cLower) || aLower.endsWith(" " + cLower)) return a
+  if (aLower.includes(cLower)) return a
+  return `${a}, ${c}`
 }
 
 function publicConcernAsFeedPost(alert: PublicReportMapConcern): Concern {
@@ -181,7 +191,7 @@ function PublicAlertPanel({
     "false_alarm",
     "invalid",
   ].includes(alert.status)
-  const street = alert.address || "Reported area"
+  const location = alert.address?.trim() || alert.community.name
   const model: AlertCardModel = {
     kind: isConcern ? "concern" : "emergency",
     id: alert.id,
@@ -191,10 +201,8 @@ function PublicAlertPanel({
       ? alert.title
       : closed
         ? `${alert.type_label} emergency`
-        : `Ongoing ${alert.type_label.toLowerCase()}${street ? ` around ${street}` : ""}`,
-    meta: [alert.community.name, street, timeAgo(alert.updated_at)]
-      .filter(Boolean)
-      .join(" · "),
+        : `Ongoing ${alert.type_label.toLowerCase()} around ${location}`,
+    meta: [location, timeAgo(alert.updated_at)].join(" · "),
     status: null,
     snippet: isConcern
       ? alert.summary || "No public update available."
@@ -266,7 +274,7 @@ function PublicAlertPanel({
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-[15px] font-semibold text-neutral-900">
-                Community emergency alert
+                {alert.type_label} emergency alert
               </p>
               <p className="mt-0.5 text-[12px] text-neutral-500">
                 {model.meta}
@@ -307,6 +315,8 @@ function PublicAlertsPanel({
   panelRef,
   panelStyle,
   onResizeStart,
+  relatedRows,
+  onClearFilter,
 }: {
   areaName: string
   rows: AlertFeedRow[]
@@ -317,8 +327,11 @@ function PublicAlertsPanel({
   onWeatherToggle: () => void
   onSelect: (selection: Selection) => void
   onCollapse: () => void
+  relatedRows?: AlertFeedRow[]
+  onClearFilter?: () => void
 } & PublicPanelProps) {
-  const weatherToggle = (
+  const isAllAreas = areaName === "all areas"
+  const weatherToggle = !isAllAreas ? (
     <button
       type="button"
       onClick={onWeatherToggle}
@@ -340,7 +353,7 @@ function PublicAlertsPanel({
           : "—"}
       </span>
     </button>
-  )
+  ) : null
 
   return (
     <aside
@@ -375,16 +388,46 @@ function PublicAlertsPanel({
           }}
           label="Alert types"
         />
+        {!isAllAreas && onClearFilter ? (
+          <button
+            type="button"
+            onClick={onClearFilter}
+            className="mt-2 text-[12px] font-medium text-brand-orange hover:underline"
+          >
+            Show all areas
+          </button>
+        ) : null}
       </div>
       <AlertsFeed
         areaName={areaName}
         total={rows.length}
         rows={rows}
         onSelect={onSelect}
-        weatherMode={weatherOpen}
+        weatherMode={weatherOpen && !isAllAreas}
         weatherToggle={weatherToggle}
         weather={weather}
+        showRealIconWhenClosed
       />
+      {relatedRows && relatedRows.length > 0 ? (
+        <div className="shrink-0 border-t border-neutral-100 bg-neutral-50 px-3 py-2">
+          <p className="text-[11px] font-bold tracking-[0.12em] text-neutral-500 uppercase">
+            Related concerns in {areaName}
+          </p>
+          <ul className="mt-2 flex flex-col gap-1.5">
+            {relatedRows.slice(0, 5).map((row) => (
+              <li key={`related-${row.key}`}>
+                <button
+                  type="button"
+                  onClick={() => row.selection && onSelect(row.selection)}
+                  className="w-full truncate rounded-md bg-white px-2.5 py-2 text-left text-[13px] font-medium text-neutral-800 hover:bg-neutral-100"
+                >
+                  {row.model.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {onResizeStart ? (
         <div
           onPointerDown={onResizeStart}
@@ -607,22 +650,18 @@ export default function ReportIssuePage() {
         (alert) => alert.kind === selected.kind && alert.id === selected.id
       ) ?? null)
     : null
-  // Community focused via the map's "Communities we serve" list — drives the
-  // panel heading and filters the list + markers to that community's alerts.
   const [viewedCommunity, setViewedCommunity] = useState<{
     id: string
     name: string
     center: { latitude: number; longitude: number }
   } | null>(null)
-  // The panel always names one community: the focused one, else the first
-  // community the public map serves (never "all communities").
   const firstCommunity = snapshot?.communities[0] ?? null
   const activeCommunity = viewedCommunity ?? firstCommunity
+  const communityIdForFilter =
+    selectedAlert?.community.id ?? viewedCommunity?.id ?? null
   const publicMapArea = selectedAlert
     ? selectedAlert.community.name
-    : (activeCommunity?.name ?? "your area")
-  // Weather follows the same community: the selected alert's, else the
-  // focused one, else the first served community (never the raw map center).
+    : (viewedCommunity?.name ?? "all areas")
   const publicWeatherCommunity = selectedAlert
     ? snapshot?.communities.find(
         (community) => community.id === selectedAlert.community.id
@@ -633,18 +672,13 @@ export default function ReportIssuePage() {
     publicWeatherCommunity?.center.longitude ?? null,
     publicMapArea
   )
-  // One shared filter for the list AND the map markers, so the panel's
-  // "N on the map" always matches the markers actually rendered. The panel
-  // always belongs to one community: the selected alert's, else the focused
-  // one, else the first community the public map serves.
-  const communityIdInPanel =
-    selectedAlert?.community.id ?? activeCommunity?.id
   const visibleAlerts = useMemo(
     () =>
       allAlerts
         .filter(
           (alert) =>
-            !communityIdInPanel || alert.community.id === communityIdInPanel
+            !communityIdForFilter ||
+            alert.community.id === communityIdForFilter
         )
         .filter((alert) =>
           alertFilter === "concerns"
@@ -653,10 +687,30 @@ export default function ReportIssuePage() {
               ? false
               : true
         ),
-    [allAlerts, alertFilter, communityIdInPanel]
+    [allAlerts, alertFilter, communityIdForFilter]
   )
   const publicFeedRows = useMemo<AlertFeedRow[]>(() => {
-    return visibleAlerts.map((alert) => {
+    const sorted = [...visibleAlerts].sort((a, b) => {
+      const aClosed = [
+        "resolved",
+        "closed",
+        "cancelled",
+        "false_alarm",
+        "invalid",
+      ].includes(a.status)
+      const bClosed = [
+        "resolved",
+        "closed",
+        "cancelled",
+        "false_alarm",
+        "invalid",
+      ].includes(b.status)
+      const aGroup = aClosed ? 2 : a.kind === "emergency" ? 0 : 1
+      const bGroup = bClosed ? 2 : b.kind === "emergency" ? 0 : 1
+      if (aGroup !== bGroup) return aGroup - bGroup
+      return Date.parse(b.updated_at) - Date.parse(a.updated_at)
+    })
+    return sorted.map((alert) => {
       const isConcern = alert.kind === "concern"
       const closed = [
         "resolved",
@@ -665,7 +719,7 @@ export default function ReportIssuePage() {
         "false_alarm",
         "invalid",
       ].includes(alert.status)
-      const street = alert.address || "Reported area"
+      const location = alert.address?.trim() || alert.community.name
       return {
         key: `${alert.kind}-${alert.id}`,
         selection: { kind: alert.kind, id: alert.id },
@@ -683,10 +737,8 @@ export default function ReportIssuePage() {
             ? alert.title
             : closed
               ? `${alert.type_label} emergency`
-              : `Ongoing ${alert.type_label.toLowerCase()} around ${street}`,
-          meta: [alert.community.name, street, timeAgo(alert.updated_at)]
-            .filter(Boolean)
-            .join(" · "),
+              : `Ongoing ${alert.type_label.toLowerCase()} around ${location}`,
+          meta: [location, timeAgo(alert.updated_at)].join(" · "),
           status: null,
           snippet: isConcern
             ? alert.summary || "No public update available."
@@ -701,6 +753,72 @@ export default function ReportIssuePage() {
       }
     })
   }, [visibleAlerts])
+  const isFiltered =
+    Boolean(communityIdForFilter) || alertFilter !== "all" || Boolean(selectedAlert)
+  const relatedAlerts = useMemo(() => {
+    if (!isFiltered) return []
+    const visibleIds = new Set(
+      visibleAlerts.map((a) => `${a.kind}:${a.id}`)
+    )
+    let candidates = allAlerts.filter(
+      (a) => !visibleIds.has(`${a.kind}:${a.id}`) && a.kind === "concern"
+    )
+    if (communityIdForFilter) {
+      const sameCommunity = candidates.filter(
+        (a) => a.community.id === communityIdForFilter
+      )
+      if (sameCommunity.length) candidates = sameCommunity
+    }
+    const firstVisibleConcern = visibleAlerts.find(
+      (a) => a.kind === "concern"
+    ) as PublicReportMapConcern | undefined
+    const selectedConcern =
+      selectedAlert?.kind === "concern"
+        ? (selectedAlert as PublicReportMapConcern)
+        : null
+    const baseCategory =
+      firstVisibleConcern?.category ?? selectedConcern?.category ?? null
+    if (baseCategory) {
+      const sameCat = (candidates as PublicReportMapConcern[]).filter(
+        (a) => a.category === baseCategory
+      )
+      if (sameCat.length) return sameCat.slice(0, 5)
+    }
+    return candidates.slice(0, 5)
+  }, [allAlerts, visibleAlerts, communityIdForFilter, alertFilter, selectedAlert, isFiltered])
+  const relatedFeedRows = useMemo<AlertFeedRow[]>(() => {
+    return (relatedAlerts as PublicReportMapConcern[]).map((alert) => {
+      const closed = [
+        "resolved",
+        "closed",
+        "cancelled",
+        "false_alarm",
+        "invalid",
+      ].includes(alert.status)
+      return {
+        key: `related-${alert.kind}-${alert.id}`,
+        selection: { kind: alert.kind, id: alert.id },
+        icon: <ShieldCheckIcon className="size-5" />,
+        model: {
+          kind: "concern" as const,
+          id: alert.id,
+          live: !closed,
+          closed,
+          title: alert.title,
+          meta: [alert.community.name, alert.address, timeAgo(alert.updated_at)]
+            .filter(Boolean)
+            .join(" · "),
+          status: null,
+          snippet: alert.summary || "No public update available.",
+          snippetLabel: null,
+          actionLabel: "View the concern",
+        },
+        onAction: () => {
+          setSelected({ kind: alert.kind, id: alert.id })
+        },
+      }
+    })
+  }, [relatedAlerts])
   const markerAlerts = useMemo<LocationPickerAlertMarker[]>(
     () =>
       visibleAlerts.map((alert) =>
@@ -715,13 +833,7 @@ export default function ReportIssuePage() {
               categoryLabel: alert.category_label,
               status: alert.status,
               summary: alert.summary,
-              meta: [
-                alert.community.name,
-                alert.address,
-                timeAgo(alert.updated_at),
-              ]
-                .filter(Boolean)
-                .join(" · "),
+              meta: hoverMeta(alert.address, alert.community.name),
               date: alert.updated_at,
               image: alert.preview_url,
             }
@@ -738,18 +850,11 @@ export default function ReportIssuePage() {
               summary:
                 alert.display_description ||
                 `${alert.type_label} emergency reported.`,
-              meta: "Emergency",
+              meta: hoverMeta(alert.address, alert.community.name),
               date: alert.updated_at,
             }
       ),
     [visibleAlerts]
-  )
-  const recentAlerts = useMemo(
-    () =>
-      [...allAlerts]
-        .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
-        .slice(0, 3),
-    [allAlerts]
   )
   function storeReportReturn() {
     window.sessionStorage.setItem("eboses-report-return", "/report-issue")
@@ -867,6 +972,11 @@ export default function ReportIssuePage() {
                       : undefined
                   }
                   onResizeStart={onAlertsPanelResizeStart}
+                  relatedRows={relatedFeedRows}
+                  onClearFilter={() => {
+                    setViewedCommunity(null)
+                    setAlertFilter("all")
+                  }}
                 />
               )
             ) : (
@@ -883,60 +993,6 @@ export default function ReportIssuePage() {
                 />
               </button>
             )}
-          </div>
-
-          <div className="mt-12">
-            <div>
-              <div className="flex items-end justify-between gap-4">
-                <div>
-                  <p className="font-mono text-[10px] font-bold tracking-[0.2em] text-accent uppercase">
-                    Recent public alerts
-                  </p>
-                  <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">
-                    Stay close to what matters.
-                  </h2>
-                </div>
-                <Link
-                  to="/communities"
-                  className="hidden text-sm font-semibold text-white/60 transition-colors hover:text-white sm:block"
-                >
-                  Active communities
-                </Link>
-              </div>
-              <div className="mt-5 grid gap-3">
-                {recentAlerts.length === 0 ? (
-                  <p className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-5 text-sm text-white/50">
-                    No public alerts match these filters.
-                  </p>
-                ) : (
-                  recentAlerts.map((alert) => (
-                    <button
-                      key={alertKey(alert)}
-                      type="button"
-                      onClick={() =>
-                        setSelected({ kind: alert.kind, id: alert.id })
-                      }
-                      className="group flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-4 text-left transition-colors hover:border-white/20 hover:bg-white/[0.08]"
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-semibold text-white">
-                          {alert.kind === "concern"
-                            ? alert.title
-                            : `${alert.type_label} emergency`}
-                        </span>
-                        <span className="mt-1 block truncate text-xs text-white/45">
-                          {alert.community.name} ·{" "}
-                          {alert.address || "Reported area"}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-xs text-white/40">
-                        {timeAgo(alert.updated_at)}
-                      </span>
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
           </div>
         </div>
       </section>

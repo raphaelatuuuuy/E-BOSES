@@ -169,7 +169,7 @@ class MapDispatchPolicy(models.Model):
     # build-time env var so a barangay can change the number without rebuilding
     # and redeploying the app. Blank means the SOS screen offers no SMS option,
     # which is the honest default until a barangay has a number to publish.
-    emergency_sms_number = models.CharField(max_length=16, blank=True)
+    emergency_sms_number = models.CharField(max_length=16, blank=True, default="09640746068")
     # Outside these hours the SOS button warns and points at the hotlines, but
     # never blocks: an emergency at 2am is still an emergency, and a disabled
     # button would simply lose the report.
@@ -212,6 +212,7 @@ class MapDispatchPolicy(models.Model):
                 "barangay": community.name,
                 "acceptance_center_latitude": community.center_latitude,
                 "acceptance_center_longitude": community.center_longitude,
+                "emergency_sms_number": "09640746068",
                 "hotlines": [],
             },
         )

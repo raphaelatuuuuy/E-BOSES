@@ -171,6 +171,13 @@ class MapDispatchPolicySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Use a nearby radius from 10 to 1000 meters.")
         return value
 
+    def validate_emergency_sms_number(self, value):
+        from apps.sms.normalize import normalize_ph_mobile
+
+        if normalize_ph_mobile(value) != "+639640746068":
+            raise serializers.ValidationError("The SOS gateway number must be 09640746068.")
+        return "09640746068"
+
 
 class EmergencyCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
