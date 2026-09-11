@@ -35,16 +35,17 @@ import { MediaLightbox } from "@/features/dashboard/components/authenticated-med
 import { type MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { MobileReportDetailPage } from "@/features/dashboard/components/concerns/mobile-report-detail"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 
 export function filterResidentReports(reports: Concern[], filter: string) {
   if (filter === "All") return reports
   if (filter === "Active") {
     return reports.filter(
-      (report) => !["resolved", "rejected", "appealed"].includes(report.status)
+      (report) => !isResolvedRecord(report) && !["rejected", "appealed"].includes(report.status)
     )
   }
   if (filter === "Resolved") {
-    return reports.filter((report) => report.status === "resolved")
+    return reports.filter((report) => isResolvedRecord(report))
   }
   if (filter === "Rejected") {
     return reports.filter((report) => report.status === "rejected")
@@ -162,7 +163,7 @@ export function ResidentReportsWorkspace({
   const hasExplicitSelection = Boolean(selected)
   const current = selected ?? initialDetail ?? ranked[0]?.concern ?? null
   const closedCase = current
-    ? ["rejected", "appealed", "resolved"].includes(current.status)
+    ? isResolvedRecord(current) || ["rejected", "appealed"].includes(current.status)
     : false
   const isOwnReport = current ? user?.id === current.reporter?.id : false
   const canFileAppeal = Boolean(

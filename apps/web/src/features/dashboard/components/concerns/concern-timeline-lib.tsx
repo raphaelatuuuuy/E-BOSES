@@ -13,6 +13,7 @@ import {
   toMediaPreviewItem,
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 
 export type ConcernTimelineState = "done" | "current" | "pending" | "cancelled"
 export type ConcernTimelineAccent =
@@ -493,8 +494,7 @@ export function buildConcernTimelineEntries(
         icon,
         actor,
         actorUser,
-        content:
-          event.status === "resolved" ? (
+        content: isResolvedRecord({ status: event.status }) ? (
             resolvedNoteBlock({
               text: statement,
               // The resolver roster, shown as a leading avatar group the same

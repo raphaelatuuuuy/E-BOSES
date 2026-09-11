@@ -412,6 +412,7 @@ class ParsedEmergency:
     coordinate_status: str = COORDINATE_ABSENT
     triage: dict = field(default_factory=dict)
     note: str = ""
+    client_request_id: str | None = None
     urgency_signal: bool = False
     incident_timing: str = "unclear"
     incident_timing_reason: str = ""
@@ -438,11 +439,20 @@ def parse_emergency_sms(body: str | None, *, sender_is_known: bool = False) -> P
     urgency = any(_squash(phrase) in squashed for phrase in URGENCY_PHRASES)
 
     latitude, longitude, coordinate_status = parse_coordinates(text)
-    prose = strip_loc_footer(text)
+    import uuid
+    request_match = re.search(r"(?im)^REQ:([0-9a-f-]{36})\s*$", text)
+    client_request_id = None
+    if request_match:
+        try:
+            client_request_id = str(uuid.UUID(request_match.group(1)))
+        except ValueError:
+            pass
+    prose = re.sub(r"(?im)^REQ:[^\n]*", "", strip_loc_footer(text)).strip()
 
     code, alias = resolve_category(prose)
     incident_timing, incident_timing_reason = infer_incident_timing(prose)
     parsed = ParsedEmergency(
+        client_request_id=client_request_id,
         category_code=code,
         category_label=category_label(code) if code else "",
         category_matched_alias=alias,
@@ -552,6 +562,7 @@ COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "SAFE": ("safe", "ok", "okay", "ligtas", "safena"),
     "CANCEL": ("cancel", "stop", "false", "mali"),
     "ACCEPT": ("accept", "responding", "otw", "onmyway"),
+    "ENROUTE": ("enroute",),
     "DECLINE": ("decline", "unable", "cannot", "cant"),
     "ONSCENE": ("onscene", "arrived", "onsite"),
     "BACKUP": ("backup", "support", "reinforce"),

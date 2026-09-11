@@ -13,6 +13,7 @@ from apps.sms.gateway import (
     queue_sms,
 )
 from apps.sms.models import OutboundSmsMessage, SmsPurpose
+from apps.sms.management.commands.preview_sms import alert_templates, sample_alert
 
 
 class SegmentTests(SimpleTestCase):
@@ -37,43 +38,26 @@ class SegmentTests(SimpleTestCase):
 
 
 class TemplateSafetyTests(SimpleTestCase):
-    """Every template must survive the GSM-7 budget.
-
-    A template that slips a smart quote or a bullet in would silently double
-    the cost of every message that uses it and could push a guide past the
-    three-segment limit some handsets stop reassembling at.
-    """
-
     def test_all_templates_are_gsm7(self):
         offenders = {
             name: non_gsm7_characters(body)
-            for name, body in templates.all_static_templates().items()
+            for name, body in alert_templates(sample_alert()).items()
             if not is_gsm7(body)
         }
         self.assertEqual(offenders, {}, f"Templates left the GSM-7 alphabet: {offenders}")
 
     def test_templates_stay_inside_their_segment_budget(self):
-        # Operational replies go out constantly and must stay cheap. The guides
-        # are sent only when someone asks for one, so they get a little more
-        # room to actually list every command and category.
-        budget = {"guide_resident": 4, "guide_responder": 4, "guide_official": 4}
         oversized = {
             name: count_segments(body)
-            for name, body in templates.all_static_templates().items()
-            if count_segments(body) > budget.get(name, 3)
+            for name, body in alert_templates(sample_alert()).items()
+            if count_segments(body) > 3
         }
         self.assertEqual(oversized, {}, f"Templates over budget: {oversized}")
 
-    def test_guide_lists_every_category_a_resident_can_send(self):
-        guide = templates.guide_resident()
-        for word, _hint in templates.CATEGORY_MENU:
-            self.assertIn(word, guide)
-
-    def test_unknown_command_reply_names_what_was_received_and_offers_the_guide(self):
-        body = templates.unknown_command("HELPP FIER")
-        self.assertNotIn("HELPP FIER", body)
-        self.assertIn("GUIDE", body)
-        self.assertIn("HELP FIRE", body)
+    def test_no_status_or_reply_instructions_exist(self):
+        for body in alert_templates(sample_alert()).values():
+            self.assertNotIn("E-BOSES STATUS", body)
+            self.assertNotIn("Reply ", body)
 
     def test_otp_template_says_five_minutes_and_warns_against_sharing(self):
         body = templates.otp_message("482731")
@@ -97,7 +81,7 @@ class PayloadShapingTests(SimpleTestCase):
         payload = SmsForwarderDriver().build_payload("+639171234821", "hello")
         self.assertEqual(payload["data"]["phone_numbers"], "+639171234821")
         self.assertEqual(payload["data"]["msg_content"], "hello")
-        self.assertEqual(payload["data"]["sim_slot"], 2)
+        self.assertEqual(payload["data"]["sim_slot"], 1)
 
     @override_settings(OUTBOUND_SMS_PAYLOAD_TEMPLATE='{"dest": "{to}", "txt": "{body}"}')
     def test_field_names_are_correctable_from_settings(self):

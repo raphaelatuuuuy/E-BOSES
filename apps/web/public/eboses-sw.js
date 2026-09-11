@@ -1,4 +1,4 @@
-self.__EBOSES_CACHE = "eboses-shell-v13"
+self.__EBOSES_CACHE = "eboses-shell-v14"
 self.__EBOSES_MAP_CACHE = "eboses-map-v1"
 self.__EBOSES_SHELL = ["/", "/dashboard", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]
 self.__EBOSES_SOS_CONFIG = "/api/public/offline-sos-config/"
@@ -37,7 +37,6 @@ self.addEventListener("fetch", (event) => {
       const cached = await cache.match(request)
       const savedAt = Number(cached?.headers.get("x-eboses-cached-at") || 0)
       if (cached && Date.now() - savedAt < 30 * 24 * 60 * 60 * 1000) return cached
-      if (cached) await cache.delete(request)
       try {
         const response = await fetch(request)
         const usable = response.ok && (isTile || (await response.clone().json()).ok)
@@ -54,7 +53,7 @@ self.addEventListener("fetch", (event) => {
         }
         return response
       } catch {
-        return Response.error()
+        return cached || Response.error()
       }
     })())
     return

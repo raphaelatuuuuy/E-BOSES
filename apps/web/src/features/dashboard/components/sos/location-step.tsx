@@ -21,6 +21,7 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import { GLYPHS, MAP_COLORS, glyphPinHtml } from "@/features/dashboard/components/map/markers"
 import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
 
 export type SosLocationValue = {
@@ -191,16 +192,24 @@ export function SosLocationStep({
       markerRef.current.setLatLng([pin.lat, pin.lng])
       return
     }
+    const pinSize = 30
     const marker = L.marker([pin.lat, pin.lng], {
       draggable: true,
       title: "Emergency location. Drag to adjust.",
       alt: "Emergency location",
       icon: L.divIcon({
         className: "",
-        html: '<span class="eboses-pin-pulse relative block size-3 rounded-full bg-neutral-900" style="box-shadow:0 1px 4px rgba(0,0,0,0.35)"></span>',
-        iconSize: [12, 12],
-        iconAnchor: [6, 6],
+        html: glyphPinHtml({
+          paths: GLYPHS.userResident,
+          color: MAP_COLORS.you,
+          size: pinSize,
+          label: "You",
+          className: "is-you",
+        }),
+        iconSize: [pinSize, pinSize],
+        iconAnchor: [pinSize / 2, pinSize / 2],
       }),
+      zIndexOffset: 800,
     }).addTo(map)
     marker.on("dragstart", stopGps)
     marker.on("dragend", () => {
@@ -234,7 +243,9 @@ export function SosLocationStep({
         boundaryRef.current = bounds
         drawCoverage(L, L.layerGroup().addTo(map), {
           boundary,
+          showBoundary: true,
           showZone: false,
+          boundaryStyle: "quiet",
         })
         if (!valueRef.current)
           map.fitBounds(bounds, { padding: [18, 18], maxZoom: 16 })

@@ -6,6 +6,8 @@ const LOCATION_SENTINELS = [
   "sms fallback coordinates",
   "pinned coordinates",
   "pinned location",
+  "location pinned on the map",
+  "pinned location · address unavailable",
   "community pending confirmation",
   "pending",
 ]

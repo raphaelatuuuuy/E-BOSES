@@ -97,7 +97,7 @@ export function EmergencyEngagementFooter({
       ])
     ).values()
   )
-  const settled = ["resolved", "closed"].includes(alert.status)
+  const settled = !isEmergencyActive(alert.status)
   const visibleResponders = responders.slice(0, 3)
   const extraResponders = Math.max(
     responders.length - visibleResponders.length,
@@ -179,7 +179,7 @@ export function EmergencyQueueItem({
   sessionUser?: PublicUser | null
 }) {
   const live = isEmergencyActive(alert.status)
-  const resolved = ["resolved", "closed"].includes(alert.status)
+  const resolved = !isEmergencyActive(alert.status)
   // A settled emergency gets the same green wash as resolved concerns so
   // closed cases read at a glance — critical red while live, neutral red when
   // cancelled or invalid.

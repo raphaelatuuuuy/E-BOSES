@@ -46,15 +46,16 @@ function branchTitle(branch: string) {
   const titles: Record<string, string> = {
     emergency: "Emergency created and routed",
     emergency_help: "HELP shortcut, straight to dispatch",
-    duplicate: "Treated as a follow-up to the open report",
-    guide: "Command list sent",
-    status: "Status update sent",
-    safe: "Resident marked safe",
-    cancel: "Cancellation requested",
+    duplicate: "Existing emergency retained; no repeated SMS",
+    guide: "No SMS sent",
+    status: "No SMS sent",
+    safe: "No SMS sent",
+    cancel: "No SMS sent",
+    ignored: "No SMS sent",
     help_needs_category: "HELP arrived without a category",
     not_authorised: "Command refused for this sender",
     otp_dropped: "Dropped by the OTP firewall",
-    unknown: "Unknown message, guided back",
+    unknown: "No emergency detected; no SMS sent",
     past_incident: "Past incident, no emergency dispatch",
   }
   return titles[branch] ?? branch.replace(/_/g, " ")
@@ -261,18 +262,17 @@ export function SmsCommandGuide() {
       </section>
 
       <section>
-        <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Resident commands</p>
-        <GuideRow code="STATUS">Reads back the current state of your open report.</GuideRow>
-        <GuideRow code="SAFE">Marks you safe on your open report; it stays visible until a responder confirms on scene.</GuideRow>
-        <GuideRow code="CANCEL [reason]">Requests cancellation of your open report; an official confirms before it closes.</GuideRow>
-        <GuideRow code="GUIDE">Sends the full command list to the handset.</GuideRow>
+        <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Automatic updates</p>
+        <GuideRow code="Unit notified">The resident receives confirmation after the assigned unit is notified.</GuideRow>
+        <GuideRow code="Progress">The system texts the resident when a responder starts travelling, arrives, and resolves the emergency.</GuideRow>
+        <GuideRow code="No reply needed">Responders record progress in the app. Residents receive the updates directly by SMS.</GuideRow>
       </section>
 
       <section>
         <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Who is texting</p>
-        <GuideRow code="Registered">A number matched to an account gets greeted by name and richer replies.</GuideRow>
-        <GuideRow code="Unknown">An unrecognised number still gets help. The reply asks them to register so follow-ups reach them.</GuideRow>
-        <GuideRow code="One active report per sender">While a report is open, further texts become follow-ups instead of new alerts.</GuideRow>
+        <GuideRow code="Registered">A number matched to an account receives updates addressed by name.</GuideRow>
+        <GuideRow code="Unknown">An unrecognised number receives the same emergency updates with a plain greeting.</GuideRow>
+        <GuideRow code="One active report per sender">Repeated emergency submissions do not create another alert or repeat the messages.</GuideRow>
         <GuideRow code="Verification codes">Code-shaped texts are redacted and dropped before anything else reads them.</GuideRow>
       </section>
     </div>

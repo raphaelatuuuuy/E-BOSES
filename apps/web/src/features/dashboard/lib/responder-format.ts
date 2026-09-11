@@ -196,20 +196,14 @@ export function dotClass(tone: StateTone) {
 
 export const statusWords: Record<EmergencyStatus, string> = STATUS_LABEL
 
-/**
- * How a dispatch reads to *this* responder, as a word plus a tone.
- *
- * A routed dispatch the viewer has not acknowledged is the one case that
- * outranks the alert's own status: it is the responder's outstanding action.
- */
 export function dispatchState(
   alert: EmergencyAlert,
   viewerId: number | null,
 ): { label: string; tone: StateTone } {
   if (alert.status === "routed") {
     const own = (alert.assignments ?? []).find((assignment) => assignment.responder.id === viewerId)
-    if (own && own.acknowledged_at === null) {
-      return { label: "Awaiting you", tone: "alarm" }
+    if (own) {
+      return { label: "Assigned to your unit", tone: "alarm" }
     }
   }
   if (isSettled(alert.status)) {

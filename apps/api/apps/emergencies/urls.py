@@ -7,7 +7,6 @@ from .community_api import (
 )
 
 from .views import (
-    EmergencyAcknowledgeView,
     EmergencyAppealCreateView,
     EmergencyAppealListView,
     EmergencyAppealReviewView,
@@ -36,7 +35,6 @@ from .views import (
     EmergencyResponderContactView,
     EmergencyRespondView,
     EmergencyTransferView,
-    EmergencyUnableView,
     EmergencyRouteView,
     ClaimableEmergencyView,
     EmergencyLocationPingView,
@@ -119,14 +117,12 @@ urlpatterns = [
     path("<int:pk>/reassign/", EmergencyReassignView.as_view(), name="emergency-reassign"),
     path("<int:pk>/claim/", EmergencyClaimView.as_view(), name="emergency-claim"),
     path("<int:pk>/request-backup/", EmergencyBackupView.as_view(), name="emergency-request-backup"),
-    path("<int:pk>/respond/", EmergencyRespondView.as_view(), name="emergency-respond"),
-    path("<int:pk>/unable/", EmergencyUnableView.as_view(), name="emergency-unable"),
+    path("<int:pk>/en-route/", EmergencyRespondView.as_view(), name="emergency-en-route"),
     path("<int:pk>/transfer/", EmergencyTransferView.as_view(), name="emergency-transfer"),
     path("<int:pk>/appeals/", EmergencyAppealCreateView.as_view(), name="emergency-appeal-create"),
     path("<int:pk>/cancel/", EmergencyCancelView.as_view(), name="emergency-cancel"),
     path("<int:pk>/disposition/", EmergencyDispositionView.as_view(), name="emergency-disposition"),
     path("<int:pk>/location-pings/", EmergencyLocationPingView.as_view(), name="emergency-location-ping"),
-    path("<int:pk>/acknowledge/", EmergencyAcknowledgeView.as_view(), name="emergency-acknowledge"),
     path("<int:pk>/arrived/", EmergencyArrivedView.as_view(), name="emergency-arrived"),
     path("<int:pk>/resolve/", EmergencyResolveView.as_view(), name="emergency-resolve"),
 ]

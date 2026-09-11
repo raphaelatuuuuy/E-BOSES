@@ -53,12 +53,20 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   const offDuty = dutyHours ? !dutyHours.within_duty_hours : false
 
   useEffect(() => {
-    if (!user || !navigator.onLine) return
+    setTrackingAlert(null)
+    setShellOpen(false)
+    setShellMode("wizard")
+    if (!user) return
+    let cancelled = false
+    let loading = false
     async function loadActive() {
+      if (!navigator.onLine || loading || document.visibilityState === "hidden") return
+      loading = true
       try {
         const active = await getActiveEmergency()
+        if (cancelled) return
+        setTrackingAlert(active ?? null)
         if (active) {
-          setTrackingAlert(active)
           if (!suppressed && isActiveAlert(active)) {
             setShellMode("tracking")
             setShellOpen(true)
@@ -66,10 +74,21 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         }
       } catch {
         /* non-blocking */
+      } finally {
+        loading = false
       }
     }
     void loadActive()
-  }, [suppressed, user])
+    window.addEventListener("online", loadActive)
+    window.addEventListener("focus", loadActive)
+    document.addEventListener("visibilitychange", loadActive)
+    return () => {
+      cancelled = true
+      window.removeEventListener("online", loadActive)
+      window.removeEventListener("focus", loadActive)
+      document.removeEventListener("visibilitychange", loadActive)
+    }
+  }, [suppressed, user?.id])
 
   useEffect(() => {
     const active = isActiveAlert(trackingAlert)

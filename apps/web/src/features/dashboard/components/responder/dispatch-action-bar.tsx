@@ -73,13 +73,13 @@ function resolveAction(actions: Actions): Resolved {
   if (actions.resolvedReached) {
     return { label: "Incident resolved", icon: ShieldCheckIcon, disabled: true, spinning: false, quiet: true }
   }
-  if (actions.canAcknowledge) {
+  if (actions.canStartTravel) {
     return {
-      label: "Acknowledge dispatch",
+      label: "Start travelling",
       icon: CheckIcon,
-      onClick: () => void actions.handleAcknowledge(),
+      onClick: () => void actions.handleStartTravel(),
       disabled: Boolean(actions.busy),
-      spinning: actions.busy === "acknowledge",
+      spinning: actions.busy === "start-travel",
       quiet: false,
     }
   }
@@ -101,16 +101,6 @@ function resolveAction(actions: Actions): Resolved {
       disabled: Boolean(actions.busy),
       spinning: actions.busy === "resolve",
       quiet: false,
-    }
-  }
-  // Acknowledged, waiting on the GPS loop to publish the first ping.
-  if (actions.enRoutePending) {
-    return {
-      label: "Confirming you are en route…",
-      icon: LoaderCircleIcon,
-      disabled: true,
-      spinning: true,
-      quiet: true,
     }
   }
   // Parked in a holding state: state the incident plainly instead of implying

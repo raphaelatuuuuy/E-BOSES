@@ -35,6 +35,7 @@ class OfflineSosContractTests(TestCase):
         self.assertEqual(response.data["version"], 2)
         self.assertIn("boundaryGeometry", response.data["community"])
         self.assertIn("streets", response.data["community"])
+        self.assertTrue(response.data["communities"])
         for street in response.data["community"]["streets"]:
             self.assertIn("paths", street)
         self.assertNotIn("users", response.data)
@@ -89,12 +90,11 @@ class OfflineSosContractTests(TestCase):
         self.assertEqual(inbound.outcome, InboundSmsMessage.Outcome.REJECTED)
         queue_sms.assert_not_called()
 
-    def test_no_active_responder_reply_displays_official_hotlines(self):
-        alert = SimpleNamespace(pk=315, type="fire")
-        body = templates.emergency_ack(alert, assigned=False)
-        self.assertIn("No active E-Boses responder", body)
-        self.assertIn("911", body)
-        self.assertIn("161 / 8-161", body)
+    def test_pending_response_is_short_and_has_no_commands(self):
+        alert = SimpleNamespace(pk=315, type="fire", reporter=None)
+        body = templates.pending_response(alert)
+        self.assertIn("still arranging a response unit", body)
+        self.assertNotIn("Reply ", body)
 
     @override_settings(SMS_GATEWAY_NUMBER=SOS_NUMBER)
     def test_only_explicit_resident_intake_check_can_pass_echo_guard(self):
@@ -129,15 +129,16 @@ class OfflineSosContractTests(TestCase):
             latitude=14.650123,
             longitude=121.112345,
             created_at=None,
+            triage={},
         )
         body = templates.responder_dispatch(
             alert,
+            unit_name="BDRRMC",
             reporter_name="Test Resident",
             contact=SOS_NUMBER,
-            summary="Fire is still spreading",
         )
         self.assertIn(f"Contact: {SOS_NUMBER}", body)
-        self.assertIn("Reported by: Test Resident", body)
+        self.assertIn("Resident: Test Resident", body)
         self.assertIn("Dao Street", body)
         self.assertNotIn("home address", body.lower())
         self.assertNotIn("BACKUP", body)

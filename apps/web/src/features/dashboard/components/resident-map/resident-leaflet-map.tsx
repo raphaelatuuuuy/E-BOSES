@@ -37,6 +37,7 @@ import {
   polygonCentroid,
 } from "@/features/dashboard/components/community-content/area-lib"
 import {
+  advisoryDoneColor,
   geoJsonToLines,
   isActiveEmergency,
 } from "@/features/dashboard/components/alerts-map/lib"
@@ -72,6 +73,7 @@ function emergencyPinHtml(selected: boolean, resolved: boolean) {
     selected,
     live: false,
     tint: resolved,
+    hoverGrow: true,
   })
 }
 
@@ -297,7 +299,9 @@ export function ResidentLeafletMap({
         const ring = geoJsonToRing(boundary.geometry as GeoJsonPolygon)
         if (ring.length >= 3) {
           L.polygon(ring, {
-            stroke: false,
+            color: entry.wide,
+            weight: 2,
+            opacity: 0.9,
             fillColor: entry.wide,
             fillOpacity: 0.15,
             interactive: false,
@@ -564,6 +568,7 @@ export function ResidentLeafletMap({
             customLabel: post.category_ref?.custom_icon_label,
             status: post.status,
             selected,
+            hoverGrow: true,
           }),
           iconSize: [pinSize, pinSize],
           iconAnchor: [pinSize / 2, pinSize / 2],
@@ -605,10 +610,14 @@ export function ResidentLeafletMap({
       const id = announcement.id
       const selected = selectedAnnouncementId === id
       const pinSize = advisoryMarkerSize(26, selected)
+      const doneColor = advisoryDoneColor(
+        announcement,
+        advisoryMeta(announcement.tag).color
+      )
       const marker = L.marker(at, {
         icon: L.divIcon({
           className: "",
-          html: advisoryMarkerHtml(announcement.tag, 26, "light", selected),
+          html: advisoryMarkerHtml(announcement.tag, 26, "light", selected, doneColor),
           iconSize: [pinSize, pinSize],
           iconAnchor: [pinSize / 2, pinSize / 2],
         }),
@@ -658,7 +667,10 @@ export function ResidentLeafletMap({
     for (const announcement of announcements) {
       const geometry = announcement.area_geometry
       const point = validCoord(announcement.latitude, announcement.longitude)
-      const tagColor = advisoryMeta(announcement.tag).color
+      const tagColor = advisoryDoneColor(
+        announcement,
+        advisoryMeta(announcement.tag).color
+      )
       const roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }> =
         []
 
@@ -737,7 +749,7 @@ export function ResidentLeafletMap({
             style: {
               stroke: false,
               fillColor: tagColor,
-              fillOpacity: 0.18,
+              fillOpacity: 0.16,
               interactive: false,
             },
           }

@@ -57,7 +57,13 @@ def sms_ai_assist_task(self, alert_id):
     if not alert:
         return None
     try:
-        return run_rescue(alert, propagate_timeout=True)
+        result = run_rescue(alert, propagate_timeout=True)
+        # Rebuild prose using the corrected category and location. This task
+        # runs after dispatch and does not send an SMS.
+        from apps.emergencies.tasks import enqueue_emergency_description
+
+        enqueue_emergency_description(alert_id)
+        return result
     except TimeoutError as exc:
         raise self.retry(exc=exc) from exc
 

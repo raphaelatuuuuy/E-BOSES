@@ -2,6 +2,7 @@ import type {
   EmergencyAlert,
   EmergencyStatusEvent,
 } from "@/features/dashboard/emergency-api"
+import { isEmergencyActive } from "@/features/dashboard/lib/status-vocabulary"
 import type { EmergencyTimelineEntry } from "./emergency-timeline-card"
 
 const STATUS_META: Record<string, {
@@ -11,7 +12,7 @@ const STATUS_META: Record<string, {
 }> = {
   received: { label: "Received", accent: "info", icon: "inbox" },
   dispatched: { label: "Dispatched", accent: "info", icon: "network" },
-  acknowledged: { label: "Responder confirmed", accent: "brand", icon: "clock" },
+  acknowledged: { label: "Responder preparing", accent: "brand", icon: "clock" },
   en_route: { label: "Responder en route", accent: "warning", icon: "clock" },
   nearby: { label: "Responder nearby", accent: "warning", icon: "clock" },
   on_scene: { label: "Responder on scene", accent: "brand", icon: "hardhat" },
@@ -23,7 +24,7 @@ const STATUS_META: Record<string, {
 }
 
 export function buildEmergencyTimeline(alert: EmergencyAlert): EmergencyTimelineEntry[] {
-  const events = [...(alert.status_events ?? [])].sort(
+  const events = [...(alert.status_events ?? [])].filter((event) => !/ai_assist|ai_|description_generated/.test(event.event_key)).sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
   )
 
@@ -45,7 +46,7 @@ export function buildEmergencyTimeline(alert: EmergencyAlert): EmergencyTimeline
 
     return {
       id: String(event.id),
-      badge: meta.label,
+      badge: event.label || meta.label,
       time: event.created_at,
       state: isLast ? "current" : "done",
       accent: meta.accent,
@@ -62,14 +63,14 @@ export function buildEmergencyTimeline(alert: EmergencyAlert): EmergencyTimeline
 }
 
 function legacyResolvedActor(alert: EmergencyAlert, event: EmergencyStatusEvent) {
-  if (!(["resolved", "closed"].includes(event.status) || ["resolved", "closed"].includes(alert.status))) {
+  if (isEmergencyActive(event.status) && isEmergencyActive(alert.status)) {
     return null
   }
 
   const eventAt = new Date(event.created_at).getTime()
   const logs = (alert.assignment_logs ?? [])
     .filter((log) => {
-      if (log.new_status !== "resolved" && log.action !== "disposition") return false
+      if (isEmergencyActive(log.new_status) && log.action !== "disposition") return false
       const createdAt = new Date(log.created_at).getTime()
       return !Number.isFinite(eventAt) || !Number.isFinite(createdAt) || createdAt <= eventAt + 60_000
     })
@@ -79,7 +80,7 @@ function legacyResolvedActor(alert: EmergencyAlert, event: EmergencyStatusEvent)
   // old log has no actor, the responder on that log is the next best source.
   return logs[0]?.actor ?? logs[0]?.responder ??
     (alert.assignments ?? [])
-      .filter((assignment) => assignment.status === "resolved")
+      .filter((assignment) => !isEmergencyActive(assignment.status))
       .sort((a, b) => new Date(b.assigned_at).getTime() - new Date(a.assigned_at).getTime())[0]
       ?.responder ?? null
 }

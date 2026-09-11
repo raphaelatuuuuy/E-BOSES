@@ -7,6 +7,7 @@ import {
   type Severity,
 } from "./severity"
 import { toStatusView } from "./status"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 import type {
   RecordAction,
   RecordFact,
@@ -124,7 +125,7 @@ export function rankConcerns(
 
 function settledRank(status: string) {
   if (status === "rejected") return 2
-  if (status === "resolved") return 1
+  if (isResolvedRecord({ status })) return 1
   return 0
 }
 

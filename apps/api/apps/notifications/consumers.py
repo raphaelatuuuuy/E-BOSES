@@ -18,11 +18,11 @@ def get_user_from_ticket(ticket: str):
 
 @database_sync_to_async
 def user_can_view_emergency(user, alert_id: int) -> bool:
-    from apps.emergencies.views import can_view_alert
+    from apps.emergencies.views import can_track_alert
     from apps.emergencies.models import EmergencyAlert
 
     alert = EmergencyAlert.objects.filter(pk=alert_id).first()
-    return bool(alert and can_view_alert(user, alert))
+    return bool(alert and can_track_alert(user, alert))
 
 
 @database_sync_to_async

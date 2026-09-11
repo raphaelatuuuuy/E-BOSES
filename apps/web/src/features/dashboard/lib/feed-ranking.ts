@@ -1,6 +1,7 @@
 import type { Concern } from "@/features/dashboard/api"
 import { haversineMeters } from "@/features/dashboard/lib/resident-map-utils"
 import { isConcernActive } from "@/features/dashboard/lib/status-vocabulary"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 
 export const NEARBY_RADIUS_METERS = 1500
 
@@ -59,7 +60,7 @@ export function rankFeed(concerns: Concern[], tab: string, origin: FeedOrigin | 
 
   if (tab === "resolved") {
     return list
-      .filter((concern) => concern.status === "resolved")
+      .filter((concern) => isResolvedRecord(concern))
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   }
 

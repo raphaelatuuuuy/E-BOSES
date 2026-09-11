@@ -362,7 +362,7 @@ export function certaintyWord(confidence: number | null | undefined): PlainTerm 
 export const EMERGENCY_STATUS: Record<string, PlainTerm> = {
   submitted: { label: "Just sent", help: "The resident sent this. No responder assigned yet." },
   routed: { label: "Sent to responder", help: "A responder was picked and notified." },
-  acknowledged: { label: "Responder accepted", help: "The responder saw it and accepted." },
+  acknowledged: { label: "Responder preparing", help: "The assigned responder is preparing to travel." },
   en_route: { label: "On the way", help: "The responder is travelling to the location." },
   nearby: { label: "Almost there", help: "The responder is close to the location." },
   arrived: { label: "On scene", help: "The responder has reached the location." },

@@ -288,11 +288,16 @@ def _offline_path(geometry, bounds):
     return "".join(commands) + ("Z" if commands else "")
 
 
-def build_offline_sos_config():
+def build_offline_sos_config(_community=None):
     """Privacy-safe, cacheable geography used by the signed-out SOS screen."""
     from apps.live_map import static_map_payload
 
-    community = (
+    if _community is None:
+        communities = list(Community.objects.filter(status=Community.Status.ACTIVE, boundary__isnull=False, boundary__is_active=True).select_related("boundary").order_by("name", "pk"))
+        packages = [build_offline_sos_config(item)["community"] for item in communities]
+        return {"version": OFFLINE_SOS_CONFIG_VERSION, "smsNumber": SOS_SMS_NUMBER, "community": packages[0] if packages else None, "communities": packages}
+
+    community = _community or (
         Community.objects.filter(
             status=Community.Status.ACTIVE,
             boundary__isnull=False,
@@ -314,7 +319,7 @@ def build_offline_sos_config():
     policy = MapDispatchPolicy.current(community)
     map_payload = static_map_payload(community)
     streets = []
-    for street in (map_payload.get("streets") or {}).get("streets", [])[:80]:
+    for street in (map_payload.get("streets") or {}).get("streets", []):
         street_paths = []
         for geometry in street.get("geometries") or []:
             geometry_type = geometry.get("type")
@@ -326,7 +331,7 @@ def build_offline_sos_config():
             else:
                 continue
             for path in raw_paths:
-                step = max(1, len(path) // 24)
+                step = 1
                 sampled = [
                     [float(point[1]), float(point[0])]
                     for point in path[::step]

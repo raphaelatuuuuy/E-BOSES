@@ -3,6 +3,7 @@ import { BadgeCheckIcon, CheckCircle2Icon } from "lucide-react"
 import type { EmergencyAlert } from "@/features/dashboard/emergency-api"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { emergencyResponderAssignments } from "@/features/dashboard/components/emergencies/lib"
+import { isEmergencyActive } from "@/features/dashboard/lib/status-vocabulary"
 import { roleLabel } from "@/features/dashboard/lib/people"
 
 const AVATAR_CLASS =
@@ -25,10 +26,10 @@ export function EmergencyResolutionBanner({
   alert: EmergencyAlert
   trunk?: boolean
 }) {
-  if (!(alert.status === "resolved" || alert.status === "closed")) return null
+  if (isEmergencyActive(alert.status)) return null
 
   const closingEvent = [...(alert.status_events ?? [])]
-    .filter((event) => ["resolved", "closed"].includes(event.status))
+    .filter((event) => !isEmergencyActive(event.status))
     .sort(
       (a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -36,7 +37,7 @@ export function EmergencyResolutionBanner({
   const assignments = emergencyResponderAssignments(alert)
   const responder =
     closingEvent?.actor ??
-    [...assignments].reverse().find((item) => item.status === "resolved")
+    [...assignments].reverse().find((item) => !isEmergencyActive(item.status))
       ?.responder ??
     [...assignments].reverse()[0]?.responder ??
     null

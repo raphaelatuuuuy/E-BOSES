@@ -156,6 +156,12 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     normalized_sender = normalize_ph_mobile(sender_number)
     reporter = find_intake_reporter(sender_number, match)
 
+    client_request_id = getattr(parsed, "client_request_id", None)
+    if client_request_id:
+        existing = EmergencyAlert.objects.filter(reporter=reporter, client_request_id=client_request_id).first()
+        if existing:
+            return SmsIntakeResult(alert=existing, duplicate=True, reason="request_already_received")
+
     existing = active_alert_for(reporter, normalized_sender)
     if existing and not allow_new_intake_check:
         return SmsIntakeResult(alert=existing, duplicate=True, reason="active_alert_exists")
@@ -185,6 +191,7 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
 
     alert = EmergencyAlert(
         reporter=reporter,
+        client_request_id=client_request_id,
         type=category_code,
         note=parsed.note or "",
         community=resolution.community,
@@ -289,7 +296,15 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     # Even a coordinate-less SMS runs the resolver task. It records a skipped
     # attempt and only then sends the primary responder's dispatch SMS using
     # the resident-reported area or the safe map fallback.
-    schedule_location_resolution(alert)
+    if alert.latitude is not None and alert.longitude is not None:
+        try:
+            from .location_services import resolve_alert_location
+            resolve_alert_location(alert.pk)
+            alert.refresh_from_db()
+        except Exception:
+            logger.warning("SMS location lookup failed for alert %s.", alert.pk, exc_info=True)
+    if alert.reverse_geocoding_status != EmergencyAlert.ReverseGeocodingStatus.SUCCESS:
+        schedule_location_resolution(alert)
 
     create_audit_log(
         "emergency.sms_created",

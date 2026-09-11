@@ -34,17 +34,10 @@ export interface EmergencyCategory {
   created_at: string
   updated_at: string
 }
-export function respondToEmergency(id: number, note = "") {
-  return alertRequest(`/emergencies/${id}/respond/`, {
+export function markEmergencyEnRoute(id: number, note = "") {
+  return alertRequest(`/emergencies/${id}/en-route/`, {
     method: "POST",
     body: JSON.stringify({ note }),
-  })
-}
-
-export function unableToRespond(id: number, reason: string) {
-  return alertRequest(`/emergencies/${id}/unable/`, {
-    method: "POST",
-    body: JSON.stringify({ reason }),
   })
 }
 
@@ -740,13 +733,6 @@ export function sendEmergencyLocationPing(
           ? payload.accuracy
           : Number(payload.accuracy.toFixed(2)),
     }),
-  })
-}
-
-export function acknowledgeEmergency(id: number, note = "") {
-  return alertRequest(`/emergencies/${id}/acknowledge/`, {
-    method: "POST",
-    body: JSON.stringify({ note }),
   })
 }
 

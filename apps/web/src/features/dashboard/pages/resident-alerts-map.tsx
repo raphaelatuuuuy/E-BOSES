@@ -17,7 +17,6 @@ import {
   ChevronLeftIcon,
   CheckIcon,
   CircleAlertIcon,
-  CircleCheckIcon,
   HomeIcon,
   LeafIcon,
   LoaderCircleIcon,
@@ -121,7 +120,7 @@ const BARANGAY = "Community"
 
 const MODE_CHIPS: CategoryChip[] = [
   { key: "all", label: "All" },
-  { key: "posts", label: "Concerns" },
+  { key: "concerns", label: "Concerns" },
   { key: "announcements", label: "Announcements" },
 ]
 
@@ -133,7 +132,8 @@ function statusLabel(status: string): {
   label: string
   tone: "active" | "closed" | "appealed"
 } {
-  if (status === "resolved") return { label: "Resolved", tone: "closed" }
+  if (status === "resolved" || status === "partially_resolved")
+    return { label: "Resolved", tone: "closed" }
   if (status === "rejected") return { label: "Rejected", tone: "closed" }
   if (status === "appealed") return { label: "Appealed", tone: "appealed" }
   // submitted | under_review | assigned | in_progress
@@ -250,7 +250,6 @@ function FeedPreviewCard({
   actionLabel?: string
 }) {
   const st = statusLabel(post.status)
-  const resolved = post.status === "resolved"
   const dist = formatDistance(distance)
   const ago = timeAgo(post.created_at)
   const body = concernBodyText(post).replace(/\s+/g, " ").trim()
@@ -301,15 +300,11 @@ function FeedPreviewCard({
                 : "bg-orange-50 text-orange-500"
             )}
           >
-            {resolved ? (
-              <CircleCheckIcon className="size-5" strokeWidth={1.9} />
-            ) : (
-              <CategoryIcon
-                category={post.category}
-                iconKey={post.category_ref?.icon_key}
-                className="size-5"
-              />
-            )}
+            <CategoryIcon
+              category={post.category}
+              iconKey={post.category_ref?.icon_key}
+              className="size-5"
+            />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-start justify-between gap-2">
@@ -557,9 +552,9 @@ export default function ResidentAlertsMapPage() {
     () => ({
       provider: "OpenStreetMap",
       center: {
-        latitude: NETWORK_FALLBACK_CENTER.lat,
-        longitude: NETWORK_FALLBACK_CENTER.lng,
-        zoom: 15,
+        latitude: NETWORK_FALLBACK_CENTER.latitude,
+        longitude: NETWORK_FALLBACK_CENTER.longitude,
+        zoom: NETWORK_FALLBACK_CENTER.zoom,
       },
       boundary: {
         osm_relation_id: null,
@@ -994,7 +989,7 @@ export default function ResidentAlertsMapPage() {
     if (!layers.concerns) return [] as ResidentMapEmergency[]
     // “Concerns” is the complete report queue. Keep emergency/critical SOS
     // rows in this view alongside ordinary resident concerns.
-    if (chip !== "all" && chip !== "posts") return [] as ResidentMapEmergency[]
+    if (chip !== "all" && chip !== "concerns" && chip !== "posts") return [] as ResidentMapEmergency[]
     if (!activeCommunityId) return [] as ResidentMapEmergency[]
     return emergencies.filter(
       (emergency) => emergency.community.id === activeCommunityId
@@ -1030,7 +1025,9 @@ export default function ResidentAlertsMapPage() {
       ...filtered.map((item) => ({
         kind: "concern" as const,
         item,
-        group: ["resolved", "rejected"].includes(item.status) ? 1 : 0,
+        group: ["resolved", "partially_resolved", "rejected"].includes(item.status)
+          ? 1
+          : 0,
         priority: concernPriorityRank(item),
         time: new Date(item.created_at).getTime(),
       })),
@@ -1296,15 +1293,14 @@ export default function ResidentAlertsMapPage() {
       key: "concerns",
       label: "Concerns",
       hint: "Community reports by residents",
-      count:
-        posts.filter((post) => hasMapCoords(post)).length + emergencies.length,
+      count: filtered.length + filteredEmergencies.length,
       tone: MAP_COLORS.concern,
     },
     {
       key: "advisories",
       label: "Advisory areas",
       hint: "Streets, areas and barangay-wide notices",
-      count: announcements.length,
+      count: visibleAnnouncements.length,
       tone: MAP_COLORS.advisory,
     },
   ]

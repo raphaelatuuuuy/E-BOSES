@@ -1236,6 +1236,9 @@ def create_emergency_notification(
 
 def notify_emergency_status(alert, *, type: str, body: str = "") -> None:
     from .models import Notification
+    from apps.sms.notify import notify_reporter_progress
+
+    transaction.on_commit(lambda: notify_reporter_progress(alert, type))
 
     type_map = {
         "submitted": Notification.Type.EMERGENCY_SUBMITTED,

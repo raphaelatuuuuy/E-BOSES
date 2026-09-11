@@ -1,4 +1,5 @@
 import type leaflet from "leaflet"
+import { loadOfflineSosConfig } from "@/features/dashboard/components/sos/offline-sos-config"
 
 export const CARTO_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://carto.com/attributions">CARTO</a>'
@@ -23,12 +24,63 @@ export function addBaseTiles(
   tone: MapBaseTone,
   overrides: Partial<leaflet.TileLayerOptions> = {},
 ): leaflet.TileLayer {
-  return L.tileLayer(cartoTileUrl(tone), {
+  const tiles = L.tileLayer(cartoTileUrl(tone), {
     attribution: CARTO_ATTRIBUTION,
     maxZoom: 20,
     subdomains: "abcd",
     keepBuffer: 2,
     updateWhenIdle: true,
+    crossOrigin: true,
     ...overrides,
   }).addTo(map)
+  let fallback: leaflet.LayerGroup | null = null
+  const showFallback = () => {
+    if (fallback) return
+    const config = loadOfflineSosConfig()
+    const communities = config.communities ?? [config.community]
+    if (!communities.length) return
+    if (!map.getPane("offlineStreets")) {
+      const pane = map.createPane("offlineStreets")
+      pane.style.zIndex = "190"
+      pane.style.pointerEvents = "none"
+    }
+    fallback = L.layerGroup().addTo(map)
+    for (const community of communities) {
+      if (community.boundaryGeometry) {
+        L.geoJSON(community.boundaryGeometry as GeoJSON.GeoJsonObject, {
+          pane: "offlineStreets", interactive: false,
+          style: { color: "#abb7ac", weight: 1, fillColor: "#f3f1e9", fillOpacity: 1 },
+        }).addTo(fallback)
+      } else {
+        L.rectangle([
+          [community.bounds.minLatitude, community.bounds.minLongitude],
+          [community.bounds.maxLatitude, community.bounds.maxLongitude],
+        ], {
+          pane: "offlineStreets", interactive: false,
+          color: "#abb7ac", weight: 1, fillColor: "#f3f1e9", fillOpacity: 1,
+        }).addTo(fallback)
+      }
+      for (const street of community.streets) {
+        for (const path of street.paths?.length ? street.paths : [street.points]) {
+          if (path.length < 2) continue
+          const road = L.polyline(path, { pane: "offlineStreets", color: "#ffffff", weight: 5, interactive: false }).addTo(fallback)
+          const label = document.createElement("span")
+          label.textContent = street.name
+          road.bindTooltip(label, { permanent: true, direction: "center", className: "offline-street-label" })
+        }
+      }
+    }
+    map.attributionControl?.addAttribution("Offline street map · saved service-area data")
+  }
+  tiles.on("tileerror", showFallback)
+  if (!navigator.onLine) showFallback()
+  const refresh = () => tiles.redraw()
+  window.addEventListener("online", refresh)
+  const observer = new ResizeObserver(() => map.invalidateSize())
+  observer.observe(map.getContainer())
+  map.once("unload", () => {
+    window.removeEventListener("online", refresh)
+    observer.disconnect()
+  })
+  return tiles
 }

@@ -31,6 +31,7 @@ import {
 } from "@/features/dashboard/components/sheet-dialog"
 import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 import {
   slugifyStatus,
   statusLabel,
@@ -432,13 +433,13 @@ export function OfficialStatusPanel({
   // "Save update" moves the report or resolves it. "Post update" only tells
   // the resident something, leaving the status where it is — the thing an
   // official could not do before without faking a status change.
-  const isStatusSave = statusChanged || status === "resolved" || unitChanged
+  const isStatusSave = statusChanged || isResolvedRecord({ status }) || unitChanged
 
   const hasResolutionEvidence = Boolean(
     report.resolution_evidence?.length || resolutionFiles.length
   )
   const needsResolutionEvidence =
-    status === "resolved" && !hasResolutionEvidence
+    isResolvedRecord({ status }) && !hasResolutionEvidence
   // Resolution photos are valid final evidence. The API still requires a
   // note, so saveUpdate supplies a neutral note when the official submits
   // photo evidence without typing an additional message.
@@ -448,7 +449,7 @@ export function OfficialStatusPanel({
     setBusy("update")
     try {
       const updateNote =
-        status === "resolved" && !note.trim()
+        isResolvedRecord({ status }) && !note.trim()
           ? "Resolution completed with photo evidence."
           : note
       const next = await updateConcernStatus(report.id, {
@@ -459,7 +460,7 @@ export function OfficialStatusPanel({
             : updateNote,
         status_version: report.status_version,
         resolution_evidence:
-          status === "resolved" ? resolutionFiles : undefined,
+          isResolvedRecord({ status }) ? resolutionFiles : undefined,
         department_id:
           status === "assigned" && activeUnitId
             ? Number(activeUnitId)
@@ -614,7 +615,7 @@ export function OfficialStatusPanel({
         />
       </label>
 
-      {status === "resolved" ? (
+      {isResolvedRecord({ status }) ? (
         <div className="rounded-[14px] border-[1.5px] border-neutral-200 bg-white p-4">
           <p className="text-[12px] text-neutral-700">
             Photos of the finished work

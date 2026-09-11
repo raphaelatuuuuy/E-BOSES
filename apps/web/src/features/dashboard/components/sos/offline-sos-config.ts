@@ -17,8 +17,10 @@ export type OfflineStreetEstimate = {
 export type OfflineSosConfig = {
   version: number
   smsNumber: string
+  communities?: OfflineSosConfig["community"][]
   community: {
     name: string
+    boundaryGeometry?: GeoJSON.Geometry
     bounds: {
       minLatitude: number
       maxLatitude: number
@@ -208,7 +210,7 @@ export function estimateOfflineStreet(
   )
     return null
 
-  const candidates = config.community.streets
+  const candidates = (config.communities ?? [config.community]).flatMap((community) => community.streets)
     .map((street) => ({
       name: street.name.trim(),
       distanceMeters: streetDistanceMeters(latitude, longitude, street),

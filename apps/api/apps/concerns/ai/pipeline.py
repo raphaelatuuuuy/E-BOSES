@@ -423,7 +423,8 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     details["media_integrity"] = integrity_check["findings"]
     details["media_integrity_overall"] = integrity_check["overall"]
     photo_evidence_contradicted = _photo_evidence_contradicted(details)
-    if photo_evidence_contradicted:
+    photo_evidence_unsupported = _photo_evidence_unsupported(details)
+    if photo_evidence_contradicted or photo_evidence_unsupported:
         details["recommended_action"] = "request_more_information"
 
     category_match = details.get("selected_category_match")
@@ -783,6 +784,17 @@ def _apply_automated_validation(
         )
         return
 
+    if _photo_evidence_unsupported(details):
+        _reject_concern(
+            concern,
+            rejection_code="automated_photo_unsupported",
+            summary=(
+                "The photo does not show the issue described in the report. Please submit a photo "
+                "that clearly shows the reported issue."
+            ),
+        )
+        return
+
     category_mismatch = not uncertain and bool(suggested_category) and suggested_category != concern.category
     if category_mismatch:
         mismatch_action = config.mismatch_action
@@ -954,6 +966,24 @@ def _photo_evidence_contradicted(details: dict) -> bool:
         isinstance(item, dict)
         and str(item.get("relevance") or "").lower() == "contradicts_report"
         for item in details.get("photo_verdicts") or []
+    )
+
+
+def _photo_evidence_unsupported(details: dict) -> bool:
+    """Require at least one reviewed photo to visibly support the report.
+
+    Location context and a generally related scene are not evidence of the
+    claimed defect. For example, a photo of an intact wet road does not support
+    a report of road damage even when the pin and surrounding street match.
+    """
+    if details.get("image_review_succeeded") is not True:
+        return False
+    verdicts = [item for item in details.get("photo_verdicts") or [] if isinstance(item, dict)]
+    if not verdicts:
+        return True
+    return not any(
+        str(item.get("relevance") or "").lower() == "supports_report"
+        for item in verdicts
     )
 
 

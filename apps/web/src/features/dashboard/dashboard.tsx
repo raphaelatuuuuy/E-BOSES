@@ -6,7 +6,11 @@ import { cn } from "@workspace/ui/lib/utils"
 import { Sidebar } from "@/features/dashboard/components/sidebar"
 import { SidebarProvider } from "@/features/dashboard/components/sidebar-context"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
+import {
+  isOfficialUser,
+  isResponderUser,
+  isResidentUser,
+} from "@/features/auth/roles"
 import { MobileNav } from "@/features/dashboard/components/mobile-nav"
 import { StaffMobileHeader } from "@/features/dashboard/components/mobile-header"
 import { useLocationPing } from "@/features/dashboard/hooks/use-location-ping"
@@ -38,11 +42,7 @@ function DashboardContent() {
   const isDesktop = useIsDesktop()
   const { user } = useAuthSession()
   useLocationPing(user)
-  const isStaffRole =
-    user?.role === "barangay_official" ||
-    user?.role === "first_responder" ||
-    user?.is_superuser
-  const isResident = !isStaffRole
+  const isResident = isResidentUser(user)
   const isOfficialRole = isOfficialUser(user)
   const isMobile = !isDesktop
   const chrome = getRouteChrome(location.pathname)

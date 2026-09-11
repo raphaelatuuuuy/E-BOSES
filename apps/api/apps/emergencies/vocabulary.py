@@ -14,24 +14,25 @@ from __future__ import annotations
 # key -> (timeline heading, timeline detail)
 EVENTS: dict[str, tuple[str, str]] = {
     # Intake
-    "received_app": ("Emergency received", "Sent from the E-Boses app."),
-    "received_sms": ("Emergency received", "Sent by text message."),
+    "received_app": ("Emergency received", "Your emergency has been received."),
+    "received_sms": ("Emergency received", "Your emergency has been received."),
     "received_call": ("Emergency received", "Logged by the barangay from a phone call."),
 
     # Routing
-    "routing": ("Finding a responder", "Looking for an available responder in the right unit."),
-    "responder_assigned": ("Responder assigned", "A responder was automatically assigned."),
+    "routing": ("Finding a response unit", "The system is finding the appropriate response unit."),
+    "responder_assigned": ("Assigned unit", "A response unit has been assigned to your emergency."),
     "responder_reassigned": ("Responder changed", "Another responder took over."),
-    "no_responder": ("Finding another responder", "Automatic dispatch is checking available response units."),
-    "responder_searching": ("Finding a responder", "Automatic dispatch is checking available response units."),
+    "no_responder": ("Finding a response unit", "The system is checking available response units."),
+    "responder_searching": ("Finding a response unit", "The system is finding the appropriate response unit."),
 
     # Response
-    "responder_confirmed": ("Responder confirmed", "The responder acknowledged the assignment."),
-    "responder_en_route": ("Responder on the way", "The responder is travelling to the location."),
+    "responder_confirmed": ("Responder preparing", "The assigned responder is preparing to travel."),
+    "responder_en_route": ("Responder en route", "The responder is on the way to your location."),
     "responder_nearby": ("Responder nearby", "The responder is close to the location."),
-    "responder_arrived": ("Responder at the scene", "The responder reached the location."),
-    "responder_unable": ("Responder could not go", "The responder reported they could not respond."),
-    "acknowledgment_timeout": ("No response in time", "Reassigned because the responder did not confirm."),
+    "responder_arrived": ("Responder on scene", "The responder has arrived at the scene."),
+    "assisting": ("Assisting", "The responder is providing assistance."),
+    "responder_unable": ("Unit reassigned", "The emergency was reassigned to another available unit."),
+    "acknowledgment_timeout": ("Unit reassigned", "The emergency was reassigned to another available unit."),
 
     # Support
     "backup_requested": ("Backup requested", "The responder asked for more support."),
@@ -45,7 +46,7 @@ EVENTS: dict[str, tuple[str, str]] = {
     "resident_contacted": ("Reporter contacted", "Someone from the barangay reached the reporter."),
 
     # Closure
-    "resolved": ("Resolved", "The incident was handled and closed."),
+    "resolved": ("Resolved", "The emergency has been marked resolved."),
     "false_alarm": ("False alarm", "Confirmed as a false alarm."),
     "cancelled": ("Cancelled", "The request was cancelled."),
     "closed": ("Closed", "The incident record was closed."),
@@ -67,8 +68,12 @@ def describe(key: str, extra: str = "") -> tuple[str, str]:
     head = heading(key)
     body = detail(key)
     note = (extra or "").strip()
-    if note:
-        body = f"{body} {note}" if body else note
+    if key == "responder_assigned" and note.startswith("Assigned to "):
+        body = note
+    elif key in {"routing", "responder_searching"} and "community" in note.lower():
+        body = "The system is confirming the emergency location before assigning a response unit."
+    elif not body:
+        body = note
     return head, body[:255]
 
 
@@ -83,6 +88,7 @@ KEY_BY_STATUS: dict[str, str] = {
     "en_route": "responder_en_route",
     "nearby": "responder_nearby",
     "arrived": "responder_arrived",
+    "in_progress": "assisting",
     "resident_safe": "resident_safe",
     "backup_requested": "backup_requested",
     "backup_assigned": "backup_assigned",

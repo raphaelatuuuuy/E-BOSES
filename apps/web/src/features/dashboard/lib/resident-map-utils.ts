@@ -8,7 +8,13 @@ import type {
 
 import type leaflet from "leaflet"
 
-export const NETWORK_FALLBACK_CENTER = { lat: 14.5995, lng: 120.9842 }
+export const NETWORK_FALLBACK_CENTER = {
+  lat: 14.5995,
+  lng: 120.9842,
+  latitude: 14.5995,
+  longitude: 120.9842,
+  zoom: 12,
+}
 
 export const categoryMeta: Record<
   ConcernCategory,

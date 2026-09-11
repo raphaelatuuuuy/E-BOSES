@@ -143,7 +143,9 @@ def handle_inbound(payload) -> InboundSmsMessage:
         inbound.outcome = InboundSmsMessage.Outcome.ERROR
         inbound.detail = "Handler raised; resident was asked to call instead."
         inbound.save(update_fields=["outcome", "detail", "matched_user", "sender_match_status"])
-        _send(inbound, sender, Reply(templates.unknown_command(payload.body)))
+        if inbound.alert_id:
+            from .notify import notify_reporter_ack
+            notify_reporter_ack(inbound.alert, assigned=False)
         return inbound
 
     inbound.save(
@@ -216,27 +218,27 @@ def _dispatch(inbound, payload, match: SenderMatch, role: str) -> Reply | None:
     if command.keyword == "HELP":
         return _handle_help(inbound, payload, match, command)
 
+    if role == ROLE_RESPONDER and command.keyword in {"ENROUTE", "ONSCENE", "RESOLVED"}:
+        return _handle_responder_progress(inbound, match.user, command)
+
+    if role == ROLE_RESPONDER and command.recognised:
+        inbound.outcome = InboundSmsMessage.Outcome.UNRECOGNISED
+        inbound.detail = "SMS commands are retired; progress is recorded in the app."
+        return Reply(None)
+
     # A message that reads as an emergency but is not a command at all — this
     # is what the SOS wizard's offline SMS looks like.
     parsed = parse_emergency_sms(payload.body, sender_is_known=match.is_registered)
     if parsed.incident_timing in NON_CURRENT and not command.recognised:
         inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
         inbound.detail = "Past or ended incident detected; emergency dispatch was not started."
-        return Reply(templates.past_incident())
+        return Reply(None)
     if parsed.is_emergency and not command.recognised:
         return _create_emergency(inbound, parsed, payload, match)
 
     inbound.outcome = InboundSmsMessage.Outcome.UNRECOGNISED
     inbound.detail = "No emergency signal recognised; SMS commands are managed in the app."
-    return Reply(templates.emergency_only_help())
-
-
-def _guide_for(role: str) -> Reply:
-    if role == ROLE_RESPONDER:
-        return Reply(templates.guide_responder())
-    if role == ROLE_OFFICIAL:
-        return Reply(templates.guide_official())
-    return Reply(templates.guide_resident())
+    return Reply(None)
 
 
 def _handle_help(inbound, payload, match: SenderMatch, command: ParsedCommand) -> Reply:
@@ -248,14 +250,14 @@ def _handle_help(inbound, payload, match: SenderMatch, command: ParsedCommand) -
     if not code:
         inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
         inbound.detail = "HELP received without a usable category."
-        return Reply(templates.help_needs_category())
+        return Reply(None)
 
     # Rebuild a full emergency message so one parser handles both shapes.
     parsed = parse_emergency_sms(payload.body, sender_is_known=True)
     if parsed.incident_timing in NON_CURRENT:
         inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
         inbound.detail = "HELP described a past or ended incident; emergency dispatch was not started."
-        return Reply(templates.past_incident())
+        return Reply(None)
     parsed.is_emergency = True
     parsed.category_code = code
     parsed.category_needs_confirmation = False
@@ -298,48 +300,56 @@ def _create_emergency(inbound, parsed, payload, match: SenderMatch) -> Reply:
     if result.duplicate:
         inbound.outcome = InboundSmsMessage.Outcome.DUPLICATE
         inbound.detail = "Sender already has an active emergency."
-        from .commands.resident import status_body
-
-        return Reply(status_body(alert), alert=alert)
+        return Reply(None)
 
     inbound.outcome = InboundSmsMessage.Outcome.EMERGENCY_CREATED
     inbound.detail = f"Created {templates.reference(alert)}."
+    from .notify import notify_reporter_ack
+    transaction.on_commit(lambda: notify_reporter_ack(alert))
+    return Reply(None)
 
+
+def _handle_responder_progress(inbound, responder, command: ParsedCommand) -> Reply:
+    from apps.emergencies import responder_actions
     from apps.emergencies.models import EmergencyAlert
+    from .notify import notify_reporter_progress
 
-    if (
-        alert.status == EmergencyAlert.Status.INVALID
-        or alert.location_confidence == EmergencyAlert.LocationConfidence.OUTSIDE_AREA
-    ):
-        return Reply(
-            templates.outside_service_area(alert),
-            purpose=SmsPurpose.EMERGENCY_ACK,
-            alert=alert,
-        )
+    assignment = responder_actions.active_assignment_for(responder)
+    if command.reference:
+        referenced_alert = EmergencyAlert.objects.filter(pk=int(command.reference)).first()
+        assignment = responder_actions.open_assignment_for(referenced_alert, responder) if referenced_alert else None
+    if not assignment:
+        inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
+        inbound.detail = "No active assigned emergency for this progress update."
+        return Reply(None)
 
-    unit_name = result.unit_name or _unit_name_for(result.responder)
-    responders_notified = result.active_unit_member_count > 0
-    if not match.is_registered:
-        return Reply(
-            templates.emergency_ack_unregistered(
+    alert = assignment.alert
+    try:
+        if command.keyword == "ENROUTE":
+            responder_actions.mark_en_route(alert, responder, note="Responder is on the way.", source="sms")
+            progress = EmergencyAlert.Status.EN_ROUTE
+        elif command.keyword == "ONSCENE":
+            responder_actions.mark_on_scene(alert, responder, note="Responder arrived at the location.", source="sms")
+            progress = EmergencyAlert.Status.ARRIVED
+        else:
+            responder_actions.resolve(
                 alert,
-                unit_name=unit_name,
-                assigned=responders_notified,
-            ),
-            purpose=SmsPurpose.EMERGENCY_ACK,
-            alert=alert,
-        )
+                responder,
+                note=command.rest or "Incident resolved by responder.",
+                source="sms",
+            )
+            progress = EmergencyAlert.Status.RESOLVED
+    except responder_actions.ActionError as exc:
+        inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
+        inbound.detail = str(exc)
+        return Reply(None)
 
-    return Reply(
-        templates.emergency_ack(
-            alert,
-            surname=surname_for(match.user),
-            unit_name=unit_name,
-            assigned=responders_notified,
-        ),
-        purpose=SmsPurpose.EMERGENCY_ACK,
-        alert=alert,
-    )
+    alert.refresh_from_db()
+    transaction.on_commit(lambda: notify_reporter_progress(alert, progress))
+    inbound.alert = alert
+    inbound.outcome = InboundSmsMessage.Outcome.COMMAND_HANDLED
+    inbound.detail = f"Recorded responder progress: {progress}."
+    return Reply(None)
 
 
 def _unit_name_for(responder) -> str:

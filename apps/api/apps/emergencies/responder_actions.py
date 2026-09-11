@@ -47,10 +47,8 @@ class ActionError(Exception):
 def open_assignment_for(alert, responder, *, lock=False):
     """Return the responder's current assignment.
 
-    Acknowledge and timeout escalation can arrive at the same time.  Callers
-    that are about to transition the assignment must lock this row so a
-    timeout worker cannot read ``assigned`` and replace it while the responder
-    is acknowledging it.
+    Callers that transition the assignment lock this row so concurrent
+    location and progress updates cannot apply the same change twice.
     """
     queryset = alert.assignments.filter(
         responder=responder,
@@ -90,12 +88,9 @@ def _advance_alert(alert, new_status, actor, note):
 
 
 @transaction.atomic
-def acknowledge(alert, responder, *, note="", source="api"):
+def mark_en_route(alert, responder, *, note="", source="api"):
     from .views import log_assignment_action
 
-    # Keep the lock order identical to ``escalate_overdue_assignments``:
-    # assignment first, then alert.  This makes acknowledgement win cleanly
-    # over a stale timeout candidate instead of producing a second assignment.
     assignment = open_assignment_for(alert, responder, lock=True)
     if not assignment:
         raise ActionError("You are not assigned to this emergency.")
@@ -114,6 +109,7 @@ def acknowledge(alert, responder, *, note="", source="api"):
     if assignment.status in {
         EmergencyResponderAssignment.Status.EN_ROUTE,
         EmergencyResponderAssignment.Status.ARRIVED,
+        EmergencyResponderAssignment.Status.ASSISTING,
     }:
         return assignment
 
@@ -127,14 +123,14 @@ def acknowledge(alert, responder, *, note="", source="api"):
         assignment=assignment,
         responder=responder,
         actor=responder,
-        action="acknowledged",
+        action="en_route",
         new_status=assignment.status,
         note=note[:255],
         metadata={"source": source},
     )
     _advance_alert(alert, EmergencyAlert.Status.EN_ROUTE, responder, "Responder is on the way.")
     create_audit_log(
-        "emergency.acknowledged",
+        "emergency.en_route",
         actor=responder,
         target_user=alert.reporter,
         metadata={"alert_id": alert.pk, "source": source},
@@ -143,88 +139,18 @@ def acknowledge(alert, responder, *, note="", source="api"):
 
 
 @transaction.atomic
-def decline(alert, responder, *, reason, source="api"):
-    """Remove a responder and immediately look for the next eligible one."""
-    from .views import apply_routing_effects, find_auto_responders, log_assignment_action, role_map_for_responder
-
-    reason = (reason or "").strip()
-    if len(reason) < 3:
-        raise ActionError("A short reason is required so dispatch knows why.")
-
-    assignment = open_assignment_for(alert, responder)
-    if not assignment:
-        raise ActionError("You are not assigned to this emergency.")
-
-    assignment.status = EmergencyResponderAssignment.Status.DECLINED
-    assignment.status_note = reason[:255]
-    assignment.save(update_fields=["status", "status_note"])
-    log_assignment_action(
-        alert=alert,
-        assignment=assignment,
-        responder=responder,
-        actor=responder,
-        action="declined",
-        new_status=assignment.status,
-        note=reason[:255],
-        metadata={"source": source},
-    )
-
-    assigned_ids = list(alert.assignments.values_list("responder_id", flat=True))
-    replacements = find_auto_responders(alert, limit=1, exclude_ids=assigned_ids)
-    replacement = replacements[0] if replacements else None
-
-    if replacement:
-        role_map = role_map_for_responder(alert, replacement)
-        new_assignment = EmergencyResponderAssignment.objects.create(
-            alert=alert,
-            responder=replacement,
-            role_map=role_map,
-            source=EmergencyResponderAssignment.Source.ESCALATION,
-            status=EmergencyResponderAssignment.Status.ASSIGNED,
-            responding_community=role_map.community if role_map else alert.community,
-            is_cross_community=bool(role_map and role_map.community_id != alert.community_id),
-        )
-        log_assignment_action(
-            alert=alert,
-            assignment=new_assignment,
-            responder=replacement,
-            action="reassigned_after_decline",
-            new_status=new_assignment.status,
-            note=f"Replaces a responder who could not go: {reason[:120]}",
-        )
-        apply_routing_effects(alert, replacement, None, audit_action="emergency.reassigned")
-    elif not alert.assignments.filter(status__in=OPEN_ASSIGNMENT_STATUSES).exists():
-        # Availability can change at any moment. Return the case to the
-        # automatic routing queue instead of making an official dispatch it.
-        from .views import create_status_event
-
-        alert.status = EmergencyAlert.Status.ROUTING
-        alert.status_version += 1
-        alert.save(update_fields=["status", "status_version", "updated_at"])
-        create_status_event(
-            alert,
-            alert.status,
-            None,
-            "Automatically checking the next available response unit.",
-            event_key="responder_searching",
-        )
-
-    create_audit_log(
-        "emergency.declined",
-        actor=responder,
-        target_user=alert.reporter,
-        metadata={"alert_id": alert.pk, "reason": reason[:200], "replacement_id": getattr(replacement, "pk", None), "source": source},
-    )
-    return replacement
-
-
-@transaction.atomic
 def mark_on_scene(alert, responder, *, note="", source="api"):
     from .views import log_assignment_action
 
-    assignment = open_assignment_for(alert, responder)
+    alert = EmergencyAlert.objects.select_for_update().get(pk=alert.pk)
+    assignment = open_assignment_for(alert, responder, lock=True)
     if not assignment:
         raise ActionError("You are not assigned to this emergency.")
+    from .views import ACTIVE_STATUSES
+    if alert.status not in ACTIVE_STATUSES:
+        raise ActionError("This emergency is no longer active.")
+    if assignment.status in {EmergencyResponderAssignment.Status.ARRIVED, EmergencyResponderAssignment.Status.ASSISTING}:
+        return assignment
 
     assignment.status = EmergencyResponderAssignment.Status.ARRIVED
     assignment.arrived_at = assignment.arrived_at or timezone.now()

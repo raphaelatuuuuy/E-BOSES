@@ -7,12 +7,12 @@ import {
 } from "@/features/dashboard/components/map/markers"
 import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
 
-const RESOLVED_STATUSES = new Set(["resolved", "partially_resolved"])
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 
 const BASE_SIZE = 26
 
 export function isResolvedStatus(status: string) {
-  return RESOLVED_STATUSES.has(status)
+  return isResolvedRecord({ status })
 }
 
 export function escapeHtml(text: string) {

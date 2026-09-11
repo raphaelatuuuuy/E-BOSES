@@ -58,6 +58,7 @@ import {
   type LayerKey,
   type Selection,
   type StreetLine,
+  advisoryDoneColor,
   alertLayerRows,
   geoJsonToLines,
   isMapDrawableConcern,
@@ -752,6 +753,7 @@ function AlertsLeafletMapInner({
     hoverIdRef.current = null
     focusIdRef.current = null
     if (!layers.advisories) return
+    const nowMs = snapshot.generated_at ? Date.parse(snapshot.generated_at) : undefined
 
     const bindAdvisoryFocus = (
       id: number,
@@ -782,7 +784,11 @@ function AlertsLeafletMapInner({
     }
 
     for (const advisory of snapshot.advisories ?? []) {
-      const tagColor = advisoryMeta(advisory.tag).color
+      const tagColor = advisoryDoneColor(
+        advisory,
+        advisoryMeta(advisory.tag).color,
+        nowMs
+      )
       const ring = geoJsonToRing(advisory.area_geometry)
       if (ring.length >= 3) {
         L.polygon(ring, {
@@ -796,7 +802,7 @@ function AlertsLeafletMapInner({
           const marker = L.marker(centroid, {
             icon: L.divIcon({
               className: "",
-              html: advisoryMarkerHtml(advisory.tag, 26, "light"),
+              html: advisoryMarkerHtml(advisory.tag, 26, "light", false, tagColor),
               iconSize: [26, 26],
               iconAnchor: [13, 13],
             }),
@@ -864,7 +870,7 @@ function AlertsLeafletMapInner({
         const marker = L.marker(anchor, {
           icon: L.divIcon({
             className: "",
-            html: advisoryMarkerHtml(advisory.tag, 26, "light"),
+            html: advisoryMarkerHtml(advisory.tag, 26, "light", false, tagColor),
             iconSize: [26, 26],
             iconAnchor: [13, 13],
           }),
@@ -881,7 +887,7 @@ function AlertsLeafletMapInner({
         const marker = L.marker(anchor, {
           icon: L.divIcon({
             className: "",
-            html: advisoryMarkerHtml(advisory.tag, 26, "light"),
+            html: advisoryMarkerHtml(advisory.tag, 26, "light", false, tagColor),
             iconSize: [26, 26],
             iconAnchor: [13, 13],
           }),
@@ -900,6 +906,7 @@ function AlertsLeafletMapInner({
     }
   }, [
     snapshot.advisories,
+    snapshot.generated_at,
     layers.advisories,
     mapReady,
     snapshot.map.boundary.geometry,
@@ -984,7 +991,6 @@ function AlertsLeafletMapInner({
         // closed, cancelled, false alarm, invalid — not just the literal
         // "resolved" status, which used to leave those other end-states red.
         const emergencySettled = !isActiveEmergency(emergency)
-        if (!isActiveEmergency(emergency) && !emergencySettled) continue
         const coord = validCoord(emergency.latitude, emergency.longitude)
         if (!coord) continue
         const focused =

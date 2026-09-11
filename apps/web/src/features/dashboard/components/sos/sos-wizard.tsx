@@ -313,8 +313,19 @@ export function SosWizard({
 
   async function retryQueuedEmergencies() {
     if (!navigator.onLine) return
-    const queued = await listQueuedSosEmergencies().catch(() => [])
+    const [queued, active] = await Promise.all([
+      listQueuedSosEmergencies().catch(() => []),
+      getActiveEmergency().catch(() => null),
+    ])
+    if (active) {
+      for (const item of queued) {
+        if (item.userId === user?.id) await deleteQueuedSosEmergency(item.id)
+      }
+      onSubmitted(active)
+      return
+    }
     for (const item of queued) {
+      if (item.userId !== user?.id) continue
       try {
         const alert = await createEmergency(
           buildEmergencyFormData({

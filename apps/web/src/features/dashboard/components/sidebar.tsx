@@ -28,7 +28,11 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
+import {
+  isOfficialUser,
+  isResponderUser,
+  isResidentUser,
+} from "@/features/auth/roles"
 import {
   ResidentNotificationsDialog,
   ResidentProfileDialog,
@@ -345,7 +349,7 @@ export function Sidebar() {
   const { user, signOut } = useAuthSession()
   const isResponderRole = isResponderUser(user)
   const isOfficialRole = isOfficialUser(user)
-  const isResident = !isOfficialRole && !isResponderRole
+  const isResident = isResidentUser(user)
   const tone = workspaceTone()
 
   const role = isResponderRole

@@ -2,13 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import {
   CheckIcon,
-  CircleDotIcon,
-  CircleCheckIcon,
   InfoIcon,
   MessageCircleIcon,
   PhoneIcon,
   PlayIcon,
-  RadioIcon,
   RouteIcon,
   XIcon,
 } from "lucide-react"
@@ -18,11 +15,17 @@ import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
 import {
   GLYPHS,
+  MAP_COLORS,
   glyphPinHtml,
 } from "@/features/dashboard/components/map/markers"
-import { websocketTicket, websocketUrl } from "@/lib/api"
+import { apiRequest, websocketTicket, websocketUrl } from "@/lib/api"
+import {
+  bindHoverCard,
+  closeHoverCardsOnLeave,
+} from "@/features/dashboard/components/map/photo-tooltip"
 import {
   createEmergencyAppeal,
   getEmergency,
@@ -34,6 +37,8 @@ import {
   type EmergencyStatus,
 } from "@/features/dashboard/emergency-api"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
+import { EmergencyTimelineCard } from "@/features/dashboard/components/emergencies/emergency-timeline-card"
+import { buildEmergencyTimeline } from "@/features/dashboard/components/emergencies/emergency-timeline-lib"
 import {
   drawRoute,
   routeRenderGeometry,
@@ -47,7 +52,7 @@ import {
   toMediaPreviewItem,
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
-import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
+import { isEmergencyActive } from "@/features/dashboard/components/record/status"
 import { formatClock } from "@/features/dashboard/lib/responder-format"
 import { initialsFor, roleLabel } from "@/features/dashboard/lib/people"
 
@@ -77,13 +82,13 @@ const ACTIVE_ASSIGNMENT_STATUSES = new Set([
 
 const ASSIGNMENT_STATUS_LABELS: Record<string, string> = {
   assigned: "Assigned",
-  acknowledged: "Acknowledged",
+  acknowledged: "Preparing",
   en_route: "On the way",
   nearby: "Nearby",
   arrived: "On scene",
   assisting: "Assisting",
   cancelled: "Cancelled",
-  declined: "Declined",
+  declined: "Reassigned",
   resolved: "Completed",
 }
 
@@ -115,7 +120,7 @@ function assignedUnitName(alert: EmergencyAlert) {
 }
 
 function assignedUnitWaitingText(alert: EmergencyAlert) {
-  return `${assignedUnitName(alert)} is assigned. Waiting for a responder to accept.`
+  return `${assignedUnitName(alert)} is responsible for this emergency.`
 }
 
 const PIPELINE: Array<{
@@ -138,7 +143,7 @@ const PIPELINE: Array<{
   {
     status: "routed",
     eventKeys: ["responder_assigned", "responder_reassigned"],
-    label: "Responder Assigned",
+    label: "Assigned unit",
     pendingHint: assignedUnitWaitingText,
   },
   {
@@ -207,10 +212,8 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
     const hit = hitFor(step.eventKeys)
     let state: TimelineRow["state"]
 
-    if (alert.status === "resolved" || alert.status === "false_alarm") {
+    if (!isEmergencyActive(alert.status)) {
       state = "done"
-    } else if (alert.status === "cancelled") {
-      state = index <= Math.max(0, reachedIndex) ? "done" : "pending"
     } else if (index < reachedIndex) {
       state = "done"
     } else if (index === reachedIndex) {
@@ -267,15 +270,15 @@ function buildStatusTimeline(alert: EmergencyAlert): TimelineRow[] {
 function statusText(alert: EmergencyAlert) {
   switch (alert.status) {
     case "submitted":
-      return assignedUnitWaitingText(alert)
+      return "Your emergency has been received."
     case "routing":
-      return assignedUnitWaitingText(alert)
+      return "The system is finding the appropriate response unit."
     case "routed":
       return "A responder has been assigned to your location."
     case "awaiting_acknowledgment":
-      return "A responder is assigned - waiting for them to confirm."
+      return assignedUnitWaitingText(alert)
     case "acknowledged":
-      return "A responder is on the way to your location."
+      return assignedUnitWaitingText(alert)
     case "en_route":
       return "Responder is on the way."
     case "nearby":
@@ -313,7 +316,7 @@ function headline(alert: EmergencyAlert) {
   if (["en_route", "nearby", "arrived"].includes(alert.status))
     return "Help is on the way"
   if (alert.status === "submitted" || alert.status === "routing")
-    return "Response unit assigned"
+    return "Finding a response unit"
   if (
     alert.status === "routed" ||
     alert.status === "awaiting_acknowledgment" ||
@@ -363,11 +366,11 @@ function formatEta(meters: number) {
   return `ETA ${minutes} min`
 }
 
-function pinIcon(L: typeof leaflet, color: string, size = 34) {
+function pinIcon(L: typeof leaflet, color: string = MAP_COLORS.you, size = 32) {
   return L.divIcon({
     className: "eboses-emergency-pin",
     html: glyphPinHtml({
-      paths: GLYPHS.userResponder,
+      paths: GLYPHS.userResident,
       color,
       size,
       label: "You",
@@ -378,11 +381,16 @@ function pinIcon(L: typeof leaflet, color: string, size = 34) {
   })
 }
 
-function responderIcon(L: typeof leaflet, size = 32) {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}"><circle cx="12" cy="12" r="11.5" fill="#07145f"/><g transform="translate(5 5) scale(0.583)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M6.376 18.91a6 6 0 0 1 11.249.003"/><circle cx="12" cy="11" r="4"/></g></svg>`
+function responderIcon(L: typeof leaflet, size = 30) {
   return L.divIcon({
     className: "",
-    html: `<span style="display:block;line-height:0;filter:drop-shadow(0 3px 6px rgba(7,20,95,0.5))">${svg}</span>`,
+    html: glyphPinHtml({
+      paths: GLYPHS.userResponder,
+      color: MAP_COLORS.responder,
+      size,
+      tone: "light",
+      tint: true,
+    }),
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   })
@@ -406,7 +414,13 @@ function EmergencyTrackingMap({
   const routeSigRef = useRef("")
   const fittedRef = useRef(false)
   const [mapReady, setMapReady] = useState(0)
-  const isLive = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
+  const isLive = isEmergencyActive(alert.status)
+  const incidentLatitude = alert.latitude
+  const incidentLongitude = alert.longitude
+  const incidentTitle = headline(alert)
+  const incidentExcerpt = alert.address || alert.barangay || "Reported area"
+  const incidentCreatedAt = alert.created_at
+  const incidentPreview = alert.media?.[0]?.preview_url ?? null
 
   useEffect(() => {
     let cancelled = false
@@ -417,7 +431,7 @@ function EmergencyTrackingMap({
       if (cancelled || !containerRef.current) return
       leafletRef.current = L
       const map = L.map(containerRef.current, {
-        center: [Number(alert.latitude), Number(alert.longitude)],
+        center: [Number(incidentLatitude), Number(incidentLongitude)],
         zoom: 16,
         zoomControl: false,
         attributionControl: false,
@@ -433,10 +447,35 @@ function EmergencyTrackingMap({
       addBaseTiles(L, map, "light", {
         maxZoom: 19,
       })
-
-      L.marker([Number(alert.latitude), Number(alert.longitude)], {
-        icon: pinIcon(L, "#111113"),
+      const coverageGroup = L.layerGroup().addTo(map)
+      void apiRequest<{ boundary: { geometry: unknown | null } }>("/locations/map-context/")
+        .then((ctx) => {
+          if (cancelled || !ctx?.boundary?.geometry) return
+          drawCoverage(L, coverageGroup, {
+            boundary: ctx.boundary.geometry as never,
+            showBoundary: true,
+            showZone: false,
+            boundaryStyle: "quiet",
+          })
+        })
+        .catch(() => undefined)
+      closeHoverCardsOnLeave(map)
+      const incidentMarker = L.marker([Number(incidentLatitude), Number(incidentLongitude)], {
+        icon: pinIcon(L),
+        zIndexOffset: 500,
       }).addTo(map)
+      bindHoverCard(
+        L,
+        map,
+        incidentMarker,
+        {
+          title: incidentTitle,
+          excerpt: incidentExcerpt,
+          date: incidentCreatedAt,
+          image: incidentPreview,
+        },
+        32
+      )
       routeSigRef.current = ""
       fittedRef.current = false
       setMapReady((value) => value + 1)
@@ -457,7 +496,7 @@ function EmergencyTrackingMap({
       routeRef.current?.remove()
       routeRef.current = null
     }
-  }, [alert.id, alert.latitude, alert.longitude])
+  }, [alert.id, incidentCreatedAt, incidentExcerpt, incidentLatitude, incidentLongitude, incidentPreview, incidentTitle])
 
   useEffect(() => {
     mapRef.current?.invalidateSize()
@@ -498,9 +537,23 @@ function EmergencyTrackingMap({
       if (existingMarker) existingMarker.setLatLng(responderLatLng)
       else {
         const marker = L.marker(responderLatLng, {
-          icon: responderIcon(L, 22),
+          icon: responderIcon(L),
           zIndexOffset: 1000,
         }).addTo(map)
+        bindHoverCard(
+          L,
+          map,
+          marker,
+          {
+            title: assignment.responder.full_name,
+            meta: assignment.assigned_unit?.name || "Responder",
+            excerpt:
+              ASSIGNMENT_STATUS_LABELS[assignment.status] ??
+              assignment.status.replace(/_/g, " "),
+            date: assignment.assigned_at,
+          },
+          30
+        )
         responderMarkerRefs.current.set(assignment.id, marker)
       }
     }
@@ -640,105 +693,12 @@ function Section({
 }
 
 function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
-  const rows = buildStatusTimeline(alert)
-  const settled = ["resolved", "closed"].includes(alert.status)
   return (
-    <ol className="sos-timeline relative">
-      {rows.map((row, index) => {
-        const next = rows[index + 1]
-        const isLast = index === rows.length - 1
-        // The connector belongs to the gap below this node, so it reads the
-        // next row's state, not this one's. Solid up to and including the
-        // active node — the responder has already travelled that stretch —
-        // and dotted from there on.
-        const filled = next ? next.state !== "pending" : false
-        return (
-          <li
-            key={row.key}
-            className="sos-timeline__row relative flex gap-3 pb-4 last:pb-0"
-          >
-            {!isLast ? (
-              <span
-                aria-hidden
-                className={cn(
-                  "absolute top-7 bottom-0 left-[11px] w-px",
-                  filled
-                    ? settled
-                      ? "bg-neutral-400/55"
-                      : "bg-brand-orange/55"
-                    : "sos-timeline__ahead"
-                )}
-              />
-            ) : null}
-            <span
-              className={cn(
-                "relative z-[1] mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-[10px]",
-                row.state === "done" &&
-                  (settled && row.status === "resolved"
-                    ? "bg-neutral-500 text-white"
-                    : "bg-brand-navy text-white"),
-                row.state === "current" &&
-                  "sos-timeline__now bg-brand-orange text-white",
-                row.state === "pending" &&
-                  "border-2 border-neutral-200 bg-white text-neutral-300",
-                row.state === "cancelled" && "bg-sos text-white"
-              )}
-              aria-hidden
-            >
-              {settled && row.status === "resolved" ? (
-                <CircleCheckIcon className="size-3.5" strokeWidth={3} />
-              ) : row.state === "done" ? (
-                <CheckIcon className="size-3.5" strokeWidth={3} />
-              ) : row.state === "current" ? (
-                <RadioIcon className="size-3.5" strokeWidth={2.5} />
-              ) : row.state === "cancelled" ? (
-                <XIcon className="size-3.5" strokeWidth={3} />
-              ) : (
-                <CircleDotIcon className="size-3 opacity-50" />
-              )}
-            </span>
-            <div className="min-w-0 flex-1 pt-0.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <p
-                  className={cn(
-                    "text-[13px] font-semibold",
-                    row.state === "pending"
-                      ? "text-neutral-400"
-                      : "text-neutral-900"
-                  )}
-                >
-                  {row.label}
-                  {row.state === "current" ? (
-                    <span className="ml-2 text-[10px] font-bold text-brand-orange">
-                      Now
-                    </span>
-                  ) : null}
-                </p>
-                {row.time ? (
-                  <time className="shrink-0 text-[11px] text-neutral-400 tabular-nums">
-                    {formatClock(row.time)}
-                  </time>
-                ) : row.state === "pending" ? (
-                  <span className="shrink-0 text-[11px] text-neutral-300">
-                    Pending
-                  </span>
-                ) : null}
-              </div>
-              <p
-                className={cn(
-                  "mt-0.5 text-[12px] leading-5",
-                  row.state === "pending"
-                    ? "text-neutral-400"
-                    : "text-neutral-500"
-                )}
-              >
-                {row.note}
-              </p>
-            </div>
-          </li>
-        )
-      })}
-    </ol>
+    <div>
+      <h3 className="text-sm font-semibold">Updates</h3>
+      <p className="mb-4 mt-1 text-xs text-neutral-500">Every status change and update on this emergency.</p>
+      <EmergencyTimelineCard items={buildEmergencyTimeline(alert)} />
+    </div>
   )
 }
 
@@ -858,8 +818,8 @@ function DetailsColumn({
   /** Expanded two-column layout: compact horizontal tracker instead of the vertical timeline. */
   milestoneMode?: boolean
 }) {
-  const live = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
-  const settled = ["resolved", "closed"].includes(alert.status)
+  const live = isEmergencyActive(alert.status)
+  const settled = !isEmergencyActive(alert.status)
   const address = alert.address?.trim() || alert.barangay || "Pinned location"
   const responderAssignment =
     alert.current_assignment ?? alert.active_assignments?.[0] ?? null
@@ -1068,11 +1028,7 @@ export function EmergencyTrackingSheet({
   const [appealBusy, setAppealBusy] = useState(false)
   const [connectionState, setConnectionState] = useState<
     "connecting" | "live" | "degraded"
-  >(
-    initialAlert && ACTIVE_EMERGENCY_STATUSES.has(initialAlert.status)
-      ? "connecting"
-      : "live"
-  )
+  >(initialAlert && isEmergencyActive(initialAlert.status) ? "connecting" : "live")
   const [chatMessage, setChatMessage] = useState<EmergencyChatMessage | null>(
     null
   )
@@ -1138,12 +1094,7 @@ export function EmergencyTrackingSheet({
   }, [open])
 
   useEffect(() => {
-    if (
-      !open ||
-      !alertId ||
-      !alertStatus ||
-      !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)
-    )
+    if (!open || !alertId || !alertStatus || !isEmergencyActive(alertStatus))
       return
     const refreshAlert = async () => {
       try {
@@ -1166,12 +1117,7 @@ export function EmergencyTrackingSheet({
   }, [open, alertId, alertStatus, adoptAlert, connectionState])
 
   useEffect(() => {
-    if (
-      !open ||
-      !alertId ||
-      !alertStatus ||
-      !ACTIVE_EMERGENCY_STATUSES.has(alertStatus)
-    )
+    if (!open || !alertId || !alertStatus || !isEmergencyActive(alertStatus))
       return
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
@@ -1241,8 +1187,8 @@ export function EmergencyTrackingSheet({
 
   if (!open || !alert || typeof document === "undefined") return null
 
-  const isLive = ACTIVE_EMERGENCY_STATUSES.has(alert.status)
-  const settled = ["resolved", "closed"].includes(alert.status)
+  const isLive = isEmergencyActive(alert.status)
+  const settled = !isEmergencyActive(alert.status)
   const lastLocation = isLive
     ? (alert.current_assignment?.last_location ?? null)
     : (alert.assignments?.[0]?.last_location ?? null)
@@ -1256,9 +1202,7 @@ export function EmergencyTrackingSheet({
       )
     : null
   const pendingAppeal = alert.appeals?.find((a) => a.status === "submitted")
-  const canAppeal = Boolean(
-    alert && ["resolved", "cancelled"].includes(alert.status) && !pendingAppeal
-  )
+  const canAppeal = Boolean(alert && !isEmergencyActive(alert.status) && !pendingAppeal)
   const appealHistory = alert.appeals ?? []
 
   async function submitAppeal() {
@@ -1326,7 +1270,7 @@ export function EmergencyTrackingSheet({
     <EmergencyChatPanel
       alertId={alert.id}
       open={open}
-      disabled={alert.status === "cancelled" || alert.status === "resolved"}
+      disabled={!isEmergencyActive(alert.status)}
       incomingMessage={chatMessage}
       realtime={false}
       theme="light"

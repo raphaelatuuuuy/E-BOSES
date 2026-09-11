@@ -129,14 +129,14 @@ def simulate_sms(*, message: str, sender_mode: str, user, scenario: str = "defau
         if parsed is None:
             return _reply(
                 result,
-                templates.help_needs_category(),
+                "",
                 branch="help_needs_category",
                 reason="HELP arrived without a usable category word.",
             )
         if parsed.incident_timing in NON_CURRENT:
             return _reply(
                 result,
-                templates.past_incident(),
+                "",
                 branch="past_incident",
                 reason=parsed.incident_timing_reason,
             )
@@ -147,7 +147,7 @@ def simulate_sms(*, message: str, sender_mode: str, user, scenario: str = "defau
     if parsed.incident_timing in NON_CURRENT and not command.recognised:
         return _reply(
             result,
-            templates.past_incident(),
+            "",
             branch="past_incident",
             reason=parsed.incident_timing_reason,
         )
@@ -157,9 +157,9 @@ def simulate_sms(*, message: str, sender_mode: str, user, scenario: str = "defau
     if command.keyword == "GUIDE":
         return _reply(
             result,
-            templates.guide_resident(),
+            "",
             branch="guide",
-            reason="A resident asking for GUIDE gets the command list.",
+            reason="SMS commands are retired. No SMS is sent.",
         )
 
     if command.keyword in {"STATUS", "SAFE", "CANCEL"}:
@@ -168,7 +168,7 @@ def simulate_sms(*, message: str, sender_mode: str, user, scenario: str = "defau
     if command.recognised:
         return _reply(
             result,
-            templates.not_authorised(command.keyword),
+            "",
             branch="not_authorised",
             reason=f"{command.keyword} belongs to responder or official handsets,"
             " so a resident number is refused.",
@@ -176,9 +176,9 @@ def simulate_sms(*, message: str, sender_mode: str, user, scenario: str = "defau
 
     return _reply(
         result,
-        templates.unknown_command(body),
+        "",
         branch="unknown",
-        reason="No command keyword and no emergency signal — never silence.",
+        reason="No current emergency signal. No SMS is sent.",
     )
 
 
@@ -294,7 +294,7 @@ def _emergency_path(result, parsed, match, number, user, *, via_help: bool) -> d
             }
             return _reply(
                 result,
-                status_body(existing),
+                "",
                 branch="duplicate",
                 reason=f"One active emergency per sender — E-{existing.pk} is still open.",
                 alert_like=existing,
@@ -303,18 +303,10 @@ def _emergency_path(result, parsed, match, number, user, *, via_help: bool) -> d
     result["routing"] = _routing_section(alert, code)
     result["ai_assist"] = _ai_assist_section(parsed, alert)
 
-    if not match.is_registered:
-        reply_text = templates.emergency_ack_unregistered(alert)
-    elif alert.location_confidence == EmergencyAlert.LocationConfidence.OUTSIDE_AREA:
-        reply_text = templates.outside_service_area(alert)
-    else:
-        responder = result["routing"].get("responder") or {}
-        reply_text = templates.emergency_ack(
-            alert,
-            surname=_surname(match),
-            unit_name=responder.get("unit_name", ""),
-            assigned=bool(responder.get("found")),
-        )
+    responder = result["routing"].get("responder") or {}
+    department = result["routing"].get("department") or {}
+    unit = department.get("name") or responder.get("unit_name") or ""
+    reply_text = templates.emergency_ack(alert, unit_name=unit) if responder.get("found") and unit else templates.pending_response(alert)
 
     result["branch"] = "emergency_help" if via_help else "emergency"
     result["branch_reason"] = (
@@ -435,56 +427,8 @@ def _ai_assist_section(parsed, alert) -> dict:
     return section
 
 
-def _resident_command(result, command, match, number, user) -> dict:
-    from . import templates
-
-    keyword = command.keyword
-    branch = keyword.lower()
-    if not match.is_registered:
-        return _reply(
-            result,
-            templates.no_active_report(),
-            branch=branch,
-            reason=f"An unrecognised number has no report on file, so {keyword} answers with the no-report text.",
-        )
-
-    found = _latest_alert_for_user(user, number)
-    if found is None:
-        return _reply(
-            result,
-            templates.no_active_report(),
-            branch=branch,
-            reason=f"No recent report exists for this account, so {keyword} answers with the no-report text.",
-        )
-
-    from apps.sms.commands.resident import status_body
-
-    reference = f"E-{found.pk}"
-    if keyword == "STATUS":
-        return _reply(
-            result,
-            status_body(found),
-            branch=branch,
-            reason=f"STATUS reads back your real open report {reference}.",
-            alert_like=found,
-        )
-    if keyword == "SAFE":
-        return _reply(
-            result,
-            templates.safe_ack(found),
-            branch=branch,
-            reason=f"SAFE marks your open report {reference} as 'resident safe' — it stays open until a"
-            " responder confirms on scene.",
-            alert_like=found,
-        )
-    return _reply(
-        result,
-        templates.cancel_ack(found),
-        branch=branch,
-        reason=f"CANCEL records a cancellation request on {reference}; an official confirms before it closes."
-        + (" Your reason was attached." if (command.rest or "").strip() else ""),
-        alert_like=found,
-    )
+def _resident_command(result, command, match, number, user):
+    return _reply(result, "", branch="ignored", reason="SMS commands are retired. No SMS is sent.")
 
 
 def _latest_alert_for_user(user, number: str):

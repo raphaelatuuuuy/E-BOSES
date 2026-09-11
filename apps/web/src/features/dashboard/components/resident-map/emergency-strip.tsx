@@ -1,7 +1,6 @@
 import {
   AlertTriangleIcon,
   ChevronLeftIcon,
-  CircleCheckIcon,
   SignalIcon,
 } from "lucide-react"
 
@@ -83,11 +82,7 @@ export function EmergencyPreviewCard({
                 : "bg-severity-critical-surface text-sos"
             )}
           >
-            {settled ? (
-              <CircleCheckIcon className="size-5" strokeWidth={1.9} />
-            ) : (
-              <AlertTriangleIcon className="size-5" strokeWidth={1.9} />
-            )}
+            <AlertTriangleIcon className="size-5" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-start justify-between gap-2">
@@ -205,11 +200,7 @@ export function EmergencyDetailPanel({
                 : "bg-severity-critical-surface text-sos"
             )}
           >
-            {settled ? (
-              <CircleCheckIcon className="size-6" strokeWidth={1.9} />
-            ) : (
-              <AlertTriangleIcon className="size-6" strokeWidth={1.9} />
-            )}
+            <AlertTriangleIcon className="size-6" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">

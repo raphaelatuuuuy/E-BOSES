@@ -21,7 +21,12 @@ import {
   useAuthSession,
 } from "@/features/auth/auth-session"
 import { getMyResidenceVerification } from "@/features/ocr/api"
-import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
+import {
+  isOfficialUser,
+  isResponderUser,
+  isResidentUser,
+  isStaffUser,
+} from "@/features/auth/roles"
 import { LogoSpinner } from "@/components/ui/logo-spinner"
 import { RouteScrollTop } from "@/components/ui/route-scroll-top"
 import DashboardLayout from "@/features/dashboard/dashboard"
@@ -209,7 +214,7 @@ function DashboardIndex() {
 
 function ResidentRoute({ children }: { children: ReactNode }) {
   const { user } = useAuthSession()
-  return user?.role === "resident" ? (
+  return isResidentUser(user) ? (
     children
   ) : (
     <Navigate to="/dashboard" replace />
@@ -235,18 +240,13 @@ function DashboardOverviewRoute() {
 
 function StaffProfileRoute({ children }: { children: ReactNode }) {
   const { user } = useAuthSession()
-  const allowed =
-    user?.role === "resident" ||
-    user?.role === "barangay_official" ||
-    user?.role === "first_responder" ||
-    user?.is_superuser
+  const allowed = Boolean(user) && (isResidentUser(user) || isStaffUser(user))
   return allowed ? children : <Navigate to="/dashboard" replace />
 }
 
 function ConcernWorkspaceRoute() {
   const { user } = useAuthSession()
-  const allowed =
-    user?.role === "resident" || isOfficialUser(user) || isResponderUser(user)
+  const allowed = Boolean(user) && (isResidentUser(user) || isStaffUser(user))
   return allowed ? <ReportsPage /> : <Navigate to="/dashboard" replace />
 }
 
@@ -891,7 +891,7 @@ function MaintenanceGate({ children }: { children: ReactNode }) {
   const { user } = useAuthSession()
   const location = useLocation()
 
-  const staff = user?.role === "barangay_official"
+  const staff = isOfficialUser(user)
   const exempt =
     location.pathname === "/" ||
     location.pathname.startsWith("/help") ||

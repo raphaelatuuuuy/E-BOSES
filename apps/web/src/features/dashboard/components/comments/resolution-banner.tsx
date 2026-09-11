@@ -15,6 +15,7 @@ import {
   statusGroupOf,
   statusLabelOf,
 } from "@/features/dashboard/lib/status-vocabulary"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 import type { Concern, PublicUser } from "@/features/dashboard/api"
 import { CommentComposer, COMMENT_MIN_LENGTH } from "./comment-composer"
 import { CommentAction, REPLY_INDENT } from "./comment-row"
@@ -133,7 +134,7 @@ export function ResolutionBanner({
   const officialPosition = activeAssignee
     ? roleLabel(activeAssignee)
     : "Barangay Official"
-  const positive = post.status === "resolved"
+  const positive = isResolvedRecord(post)
 
   async function submitReply(media?: File | null): Promise<boolean> {
     const body = replyDraft.trim()

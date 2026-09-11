@@ -93,7 +93,7 @@ function readablePlace(
 ): string | null {
   for (const candidate of candidates) {
     const value = (candidate || "").trim()
-    if (value && !looksLikeCoordinates(value)) return value
+    if (value && !looksLikeCoordinates(value) && !/pinned|location unavailable|location pending/i.test(value)) return value
   }
   return null
 }

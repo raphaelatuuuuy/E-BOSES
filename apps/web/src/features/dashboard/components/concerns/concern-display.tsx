@@ -6,6 +6,7 @@ import type {
   ConcernValidationStatus,
 } from "@/features/dashboard/api"
 import { ACTIVE_CONCERN_STATUSES } from "@/features/dashboard/components/record/status"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 import { useMinWidth } from "@/features/dashboard/lib/shell"
 
 export { useMinWidth }
@@ -43,7 +44,7 @@ export const categoryStyles: Record<ConcernCategory, { icon: typeof TrafficConeI
 
 export function statusGroup(status: ConcernStatus): (typeof filters)[number] {
   if (activeStatuses.includes(status)) return "Active"
-  if (status === "resolved") return "Resolved"
+  if (isResolvedRecord({ status })) return "Resolved"
   if (status === "rejected") return "Rejected"
   if (status === "appealed") return "Appealed"
   return "Active"

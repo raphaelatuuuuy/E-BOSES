@@ -117,7 +117,8 @@ def run_rescue(alert, *, propagate_timeout: bool = False) -> dict:
             "error": exc.__class__.__name__,
             "started_at": started.isoformat(),
         }
-        alert.ai_assist = payload
+        alert.refresh_from_db(fields=["ai_assist"])
+        alert.ai_assist = {**(alert.ai_assist or {}), **payload}
         alert.save(update_fields=["ai_assist", "updated_at"])
         logger.warning("SMS AI assist failed for alert %s: %s", alert.pk, exc.__class__.__name__)
         if propagate_timeout and isinstance(exc, (TimeoutError, httpx.TimeoutException)):
@@ -335,7 +336,8 @@ def _apply(alert, result: SmsAssistResult, *, model: str, started_at) -> None:
         "suggested": suggestions,
         "unresolved_fields": unresolved,
     }
-    alert.ai_assist = payload
+    alert.refresh_from_db(fields=["ai_assist"])
+    alert.ai_assist = {**(alert.ai_assist or {}), **payload}
     alert.save(
         update_fields=[
             "type",

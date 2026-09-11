@@ -114,7 +114,7 @@ export const RESPONDER_ASSIGNMENT_STATUSES = new Set([
 
 /** Assignments that represent a responder who actually took the case. */
 export function emergencyResponderAssignments(alert: EmergencyAlert) {
-  const settled = ["resolved", "closed"].includes(alert.status)
+  const settled = !isEmergencyActive(alert.status)
   const allowed = settled
     ? RESPONDER_ASSIGNMENT_STATUSES
     : new Set(
@@ -212,8 +212,6 @@ export const EMERGENCY_FILTERS = ["All", "Active", "Resolved"] as const
 
 export type EmergencyFilter = (typeof EMERGENCY_FILTERS)[number]
 
-const RESOLVED_STATUSES: EmergencyStatus[] = ["resolved", "closed"]
-
 export function matchesEmergencyFilter(
   alert: EmergencyAlert,
   filter: string
@@ -224,7 +222,7 @@ export function matchesEmergencyFilter(
     case "Active":
       return isEmergencyActive(alert.status)
     case "Resolved":
-      return RESOLVED_STATUSES.includes(alert.status)
+      return !isEmergencyActive(alert.status)
     default:
       return true
   }

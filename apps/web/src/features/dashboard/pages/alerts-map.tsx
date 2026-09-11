@@ -56,6 +56,7 @@ import {
   isMapDrawableConcern,
   isResolvedRecord,
   isActiveEmergency,
+  isAdvisoryExpired,
   defaultLayers,
   emptyLiveMapSnapshot,
   mergeUpdate,
@@ -666,7 +667,7 @@ export default function AlertsMapPage() {
             id: emergency.id,
             live,
             closed: !live,
-            resolved: ["resolved", "closed"].includes(emergency.status),
+            resolved: !isActiveEmergency(emergency),
             title: `${titleCase(emergency.type)} emergency${
               emergency.address?.trim() || emergency.barangay?.trim()
                 ? ` around ${emergency.address?.trim() || emergency.barangay.trim()}`
@@ -742,8 +743,11 @@ export default function AlertsMapPage() {
     }
 
     if (feedChip === "announcements") {
+      const nowMs = snapshot?.generated_at
+        ? Date.parse(snapshot.generated_at)
+        : undefined
       for (const advisory of snapshot.advisories ?? []) {
-        const startsAt = advisory.starts_at ?? advisory.expires_at
+        const startsAt = advisory.starts_at
         rows.push({
           key: `advisory-${advisory.id}`,
           icon: <MegaphoneIcon className="size-5" strokeWidth={1.9} />,
@@ -754,7 +758,7 @@ export default function AlertsMapPage() {
             kind: "advisory",
             id: advisory.id,
             live: false,
-            closed: false,
+            closed: isAdvisoryExpired(advisory, nowMs),
             title: advisory.title,
             meta: [
               advisoryLabel(advisory.tag),

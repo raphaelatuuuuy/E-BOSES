@@ -218,6 +218,24 @@ class EmergencyPrivacyAccessMatrixTests(APITestCase):
                 self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
                 self._assert_denial_does_not_echo_private_data(response)
 
+    def test_public_category_does_not_make_another_residents_sos_trackable(self):
+        from .models import EmergencyCategory
+
+        category, _ = EmergencyCategory.objects.get_or_create(
+            community=self.community,
+            code=EmergencyAlert.Type.MEDICAL,
+            defaults={"name": "Medical"},
+        )
+        category.is_active = True
+        category.visible_to_residents = True
+        category.save(update_fields=["is_active", "visible_to_residents", "updated_at"])
+
+        self._authenticate(self.unrelated_resident)
+        response = self.client.get(f"/api/emergencies/{self.alert.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self._assert_denial_does_not_echo_private_data(response)
+
     def test_chat_history_and_attachment_metadata_follow_the_same_role_matrix(self):
         chat_url = f"/api/emergencies/{self.alert.pk}/chat/"
 

@@ -1,5 +1,4 @@
 import type { ReactNode } from "react"
-import { CircleCheckIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -28,7 +27,7 @@ export function AlertCard({
   expanded,
   onOpen,
   onAction,
-  showRealIconWhenClosed,
+  showRealIconWhenClosed: _showRealIconWhenClosed,
 }: {
   model: AlertCardModel
   icon: ReactNode
@@ -59,16 +58,12 @@ export function AlertCard({
               "flex size-9 shrink-0 items-center justify-center rounded-full",
               closed
                 ? "bg-neutral-100 text-neutral-500"
-                  : model.kind === "emergency"
-                    ? "bg-severity-critical-surface text-sos"
-                    : "bg-brand-orange-soft text-accent"
+                : model.kind === "emergency"
+                  ? "bg-severity-critical-surface text-sos"
+                  : "bg-brand-orange-soft text-accent"
             )}
           >
-            {closed && !showRealIconWhenClosed ? (
-              <CircleCheckIcon className="size-5" strokeWidth={1.9} />
-            ) : (
-              icon
-            )}
+            {icon}
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-start justify-between gap-2">

@@ -5,7 +5,11 @@ import { TriangleAlert, type LucideIcon } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@workspace/ui/components/sheet"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
+import {
+  isOfficialUser,
+  isResponderUser,
+  isResidentUser,
+} from "@/features/auth/roles"
 import { getActiveEmergency } from "@/features/dashboard/emergency-api"
 import { getRoleNav } from "@/features/dashboard/lib/navigation"
 import { CAPABILITIES, hasCapability } from "@/features/dashboard/lib/capabilities"
@@ -201,7 +205,7 @@ export function MobileNav() {
 
   const isResponderRole = isResponderUser(user)
   const isOfficialRole = isOfficialUser(user)
-  const isResident = !isOfficialRole && !isResponderRole
+  const isResident = isResidentUser(user)
 
   const nav = getRoleNav(isResponderRole ? "responder" : isOfficialRole ? "official" : "resident")
   const navItems = nav.mobileItems.filter((item) => hasCapability(user?.capabilities, item.capability))

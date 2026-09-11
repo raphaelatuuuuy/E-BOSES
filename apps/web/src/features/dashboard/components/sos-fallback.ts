@@ -96,8 +96,6 @@ export function describeTriage(triage: SosTriageAnswers): string {
 }
 
 /** GSM-7 concatenated segments are 153 characters; three is the working budget. */
-const SMS_SEGMENT_CHARS = 153
-const MAX_SEGMENTS = 3
 
 /** "Medical Emergency" -> "Medical", so the sentence is not "a Medical Emergency emergency". */
 function categoryNoun(label: string) {
@@ -111,8 +109,6 @@ function article(word: string) {
 
 function triageClauses(triage?: SosTriageAnswers): string[] {
   if (!triage) return []
-  // Ordered least-droppable last: if the message has to be trimmed, the
-  // detail clause is the first to go and the injury clause the last.
   return [
     triage.peopleAffected ? PEOPLE_CLAUSE[triage.peopleAffected] : "",
     triage.detail ? DETAIL_CLAUSE[triage.detail] : "",
@@ -140,7 +136,8 @@ export function buildEmergencySmsMessage(payload: {
   note?: string
 }) {
   const category = categoryNoun(payload.emergencyType)
-  const area = (payload.readableArea ?? "").trim()
+  const rawArea = (payload.readableArea ?? "").trim()
+  const area = rawArea.length > 160 ? `${rawArea.slice(0, 157).trimEnd()}…` : rawArea
   const hasCoordinates =
     typeof payload.latitude === "number" &&
     typeof payload.longitude === "number" &&
@@ -163,22 +160,10 @@ export function buildEmergencySmsMessage(payload: {
     return lines.join("\n")
   }
 
-  // Drop optional content one piece at a time until the message fits. The
-  // category, the area and the LOC footer are never dropped: they are what
-  // dispatch actually routes on.
-  const clauses = triageClauses(payload.triage)
-  const attempts: Array<[string[], boolean]> = [
-    [clauses, true],
-    [clauses, false],
-    [clauses.slice(1), false],
-    [clauses.slice(2), false],
-    [[], false],
-  ]
-  for (const [attemptClauses, includeNote] of attempts) {
-    const message = compose(attemptClauses, includeNote)
-    if (message.length <= SMS_SEGMENT_CHARS * MAX_SEGMENTS) return message
-  }
-  return compose([], false)
+  const complete = compose(triageClauses(payload.triage), true)
+  return complete.length <= 153 * 3
+    ? complete
+    : compose(triageClauses(payload.triage), false)
 }
 
 function openSosDb(): Promise<IDBDatabase> {

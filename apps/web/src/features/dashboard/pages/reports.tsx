@@ -48,6 +48,7 @@ import {
   searchResidentReports,
 } from "@/features/dashboard/components/concerns/resident-reports-workspace"
 import { statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 
 import { rankConcerns } from "@/features/dashboard/components/record/concern-adapter"
 import { OfficialStatusPanel } from "@/features/dashboard/components/concerns/official-status-panel"
@@ -64,6 +65,7 @@ import {
 } from "@/features/dashboard/emergency-api"
 import { isEmergencyActive } from "@/features/dashboard/lib/status-vocabulary"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
   OpsWorkspace,
@@ -185,10 +187,8 @@ const filterMeta: Record<
   All: { icon: UsersIcon, bg: "bg-neutral-700", subtext: "All concerns" },
 }
 
-const CLOSED_STATUSES = ["resolved", "rejected"]
-
 function isOpenStatus(status: string) {
-  return !CLOSED_STATUSES.includes(status)
+  return !isResolvedRecord({ status }) && status !== "rejected"
 }
 
 function hasOpenAppeal(report: Concern) {
@@ -214,7 +214,7 @@ function matchesOfficialFilter(report: Concern, filter: string) {
     case "In Progress":
       return isOpenStatus(report.status)
     case "Resolved":
-      return report.status === "resolved"
+      return isResolvedRecord(report)
     case "Rejected":
       return report.status === "rejected" && !hasOpenAppeal(report)
     case "Appealed":
@@ -294,8 +294,7 @@ function OfficialConcernDashboard({
   // Resolved emergencies are closed concerns too — they belong in the
   // "Resolved" queue next to the resolved concern reports.
   const resolvedAlerts = useMemo(
-    () =>
-      alerts.filter((alert) => ["resolved", "closed"].includes(alert.status)),
+    () => alerts.filter((alert) => !isEmergencyActive(alert.status)),
     [alerts]
   )
   const queueAlerts = useMemo(() => {
@@ -382,7 +381,7 @@ function OfficialConcernDashboard({
   }
 
   const closedCase = current
-    ? ["rejected", "resolved"].includes(current.status)
+    ? isResolvedRecord(current) || current.status === "rejected"
     : false
 
   const refreshCurrentReport = useCallback(async () => {
@@ -657,10 +656,7 @@ function OfficialConcernDashboard({
                 theme="light"
                 variant="modern"
                 bare
-                disabled={
-                  selectedAlert.status === "cancelled" ||
-                  selectedAlert.status === "resolved"
-                }
+                disabled={!isEmergencyActive(selectedAlert.status)}
                 className="h-full"
               />
             )}
@@ -870,10 +866,8 @@ export default function ReportsPage() {
   const [selectedAlertId, setSelectedAlertId] = useState<number | null>(null)
 
   const routeReportId = reportId ?? null
-  const isOfficial = Boolean(
-    user?.role === "barangay_official" || user?.is_superuser
-  )
-  const isResponder = user?.role === "first_responder"
+  const isOfficial = isOfficialUser(user)
+  const isResponder = isResponderUser(user)
   const isStaffWorkspace = isOfficial || isResponder
   const timelineViewer: PublicUser | null = user
     ? {

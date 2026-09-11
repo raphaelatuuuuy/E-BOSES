@@ -244,6 +244,21 @@ class EmergencyMediaSerializer(serializers.ModelSerializer):
 
 class EmergencyStatusEventSerializer(serializers.ModelSerializer):
     actor = PublicUserSerializer(read_only=True)
+    label = serializers.SerializerMethodField()
+    note = serializers.SerializerMethodField()
+
+    def get_label(self, obj):
+        from . import vocabulary
+        return vocabulary.heading(obj.event_key or vocabulary.key_for_status(obj.status), obj.label)
+
+    def get_note(self, obj):
+        from . import vocabulary
+        if obj.event_key == "responder_assigned" and not obj.note.startswith("Assigned to "):
+            assignment = obj.alert.assignments.filter(assigned_at__lte=obj.created_at).select_related("role_map__department").order_by("-assigned_at", "-id").first()
+            department = getattr(getattr(assignment, "role_map", None), "department", None)
+            if department:
+                return f"Assigned to {department.name}."
+        return vocabulary.describe(obj.event_key or vocabulary.key_for_status(obj.status), obj.note)[1]
 
     class Meta:
         model = EmergencyStatusEvent

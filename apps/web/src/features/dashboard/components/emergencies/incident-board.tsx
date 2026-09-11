@@ -190,7 +190,7 @@ export function IncidentMap({
             {
               paths: emergencyPaths,
               content: undefined,
-              color: settled ? MAP_COLORS.resolved : "#dc2626",
+              color: settled ? MAP_COLORS.resolved : MAP_COLORS.emergency,
               size: BASE_SIZE,
               selected: !settled,
               tone: "light",
@@ -560,9 +560,6 @@ function ResponseBand({
   const hasContact = Boolean(alert.reporter_phone?.trim())
 
   const { busy: dialBusy, call: callResident } = useReporterPhone(alert)
-  const unacknowledged = roster.filter(
-    (assignment) => !assignment.acknowledged_at
-  )
   const waiting = elapsedSince(alert.routed_at, now)
   const pings = alert.current_assignment?.location_history?.length ?? 0
 
@@ -641,13 +638,6 @@ function ResponseBand({
           })}
         </ul>
       )}
-
-      {roster.length > 0 && unacknowledged.length > 0 ? (
-        <p className="mt-2 text-[12px] font-semibold text-severity-critical">
-          {unacknowledged.length} unit{unacknowledged.length === 1 ? "" : "s"}{" "}
-          have not acknowledged.
-        </p>
-      ) : null}
 
       <FactRow className="mt-3.5 border-t border-card-line pt-3">
         <Fact
@@ -905,7 +895,7 @@ export function IncidentBoard({ alert }: { alert: EmergencyAlert | null }) {
       alertId={alert.id}
       open
       theme="light"
-      disabled={alert.status === "cancelled" || alert.status === "resolved"}
+      disabled={!isActiveEmergency(alert)}
       className="h-[min(320px,70svh)]"
     />
   )

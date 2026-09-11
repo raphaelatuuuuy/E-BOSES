@@ -43,6 +43,7 @@ import {
 } from "@/features/dashboard/lib/authenticated-media"
 import { streetOnly } from "@/features/dashboard/lib/location-text"
 import { statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 import {
   CommentAttachment,
   CommentComposer,
@@ -392,8 +393,7 @@ export function ConcernQueueItem({
   const initials = (concern.reporter?.initials || initialsOf(full)).charAt(0)
   const statusLabel = statusLabelOf(concern.status)
   const othersCount = concern.also_reported_count ?? 0
-  const statusGlyph =
-    concern.status === "resolved"
+  const statusGlyph = isResolvedRecord(concern)
       ? { Icon: CircleCheck, cls: "text-status-closed/90" }
       : concern.status === "rejected"
         ? { Icon: CircleX, cls: "text-status-open/80" }
@@ -414,7 +414,7 @@ export function ConcernQueueItem({
   const assessed = concern.severity_assessed ?? entry.assessed
   // A resolved report is done no matter how severe it once was — the corner
   // badge reads "Resolved" with a check instead of the old priority label.
-  const concernResolved = concern.status === "resolved"
+  const concernResolved = isResolvedRecord(concern)
   const priorityLabel = assessed ? SEVERITY_LABEL[severity] : "Not yet assessed"
   const modelReason = (
     concern.severity_reason ??

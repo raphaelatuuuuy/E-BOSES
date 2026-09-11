@@ -49,7 +49,7 @@ import type {
 import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
 import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
 import { PanelShell, InfoRow } from "./panel-shell"
-import { formatDistance, formatEta, formatTime, type Selection } from "./lib"
+import { formatDistance, formatEta, formatTime, isResolvedRecord, type Selection } from "./lib"
 
 /**
  * A location that reads as an incident location, not a bare place name.
@@ -540,8 +540,8 @@ export function DetailPanel({
         theme="light"
         disabled={
           !emergency.current_assignment ||
+          isResolvedRecord(emergency) ||
           emergency.status === "cancelled" ||
-          emergency.status === "resolved" ||
           emergency.status === "false_alarm" ||
           emergency.status === "invalid"
         }

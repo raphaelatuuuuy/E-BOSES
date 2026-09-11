@@ -22,16 +22,17 @@ const responderNotifications = readFileSync(
 test("automatic dispatch never claims that a responder is handling the alert", () => {
   assert.match(tracking, /hasActiveResponder\(alert\)/)
   assert.doesNotMatch(tracking, /Manual dispatch/)
-  assert.match(tracking, /is assigned\. Waiting for a responder to accept\./)
+  assert.match(tracking, /is responsible for this emergency\./)
+  assert.doesNotMatch(tracking, /Waiting for a responder to accept/)
   assert.doesNotMatch(tracking, /Finding (your|a|the nearest) responder/)
   assert.doesNotMatch(tracking, /isLive && !canCancel/)
 })
 
-test("tracking falls back to real status events and keeps pending rows visible", () => {
+test("tracking uses the shared real-event timeline", () => {
   assert.match(tracking, /alert\.status_events/)
-  assert.match(tracking, /row\.state === "pending"/)
-  assert.match(tracking, />\s*Pending\s*</)
-  assert.doesNotMatch(tracking, /buildStatusTimeline\(alert\)\.filter/)
+  assert.match(tracking, /EmergencyTimelineCard/)
+  assert.match(tracking, /buildEmergencyTimeline\(alert\)/)
+  assert.match(tracking, />Updates</)
   assert.match(
     tracking,
     /hasActiveResponder\(alert\) && alert\.status !== "submitted"/

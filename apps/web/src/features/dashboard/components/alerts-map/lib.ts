@@ -141,7 +141,29 @@ export function isMapDrawableConcern(concern: { status: string }) {
 }
 
 export function isResolvedRecord(record: { status: string }) {
-  return record.status === "resolved"
+  return record.status === "resolved" || record.status === "partially_resolved"
+}
+
+export function isAdvisoryExpired(
+  advisory: {
+    expires_at?: string | null
+    status_label?: string
+  },
+  nowMs?: number | null
+) {
+  if (advisory.status_label === "expired") return true
+  if (!advisory.expires_at) return false
+  const ts = Date.parse(advisory.expires_at)
+  const now = typeof nowMs === "number" && Number.isFinite(nowMs) ? nowMs : Date.now()
+  return Number.isFinite(ts) && ts < now
+}
+
+export function advisoryDoneColor(
+  advisory: { expires_at?: string | null; status_label?: string },
+  tagColor: string,
+  nowMs?: number | null
+) {
+  return isAdvisoryExpired(advisory, nowMs) ? BASE_MAP_COLORS.resolved : tagColor
 }
 
 export function isActiveEmergency(emergency: { status: string }) {
@@ -213,7 +235,7 @@ export const OFFICIAL_MAP_COLORS = {
   you: "#0a0a0a",
   emergency: "#f23b35",
   responder: "#2563eb",
-  responderAssigned: "#ff6a1a",
+  responderAssigned: "#4dc4ff",
   official: "#334155",
   resolved: "#6b7280",
 } as const

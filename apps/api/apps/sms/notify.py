@@ -1,217 +1,121 @@
-"""Outbound SMS triggered by emergency events.
-
-Every call is best-effort and swallows its own errors: a gateway problem must
-never roll back an assignment or block dispatch.
-"""
-
-from __future__ import annotations
-
 import logging
 
 from . import templates
 from .gateway import queue_sms
-from .models import SmsPurpose
+from .models import OutboundSmsMessage, SmsPurpose
 
 logger = logging.getLogger(__name__)
-
-PRIORITY_BY_TYPE = {
-    "fire": "CRITICAL",
-    "medical": "CRITICAL",
-    "flood": "HIGH",
-    "disaster": "CRITICAL",
-    "crime": "HIGH",
-    "domestic_violence": "CRITICAL",
-    "child_protection": "CRITICAL",
-    "dangerous_animal": "NORMAL",
-    "drug_related": "HIGH",
-    "other": "NORMAL",
-}
+PREFIX = "sms-v2"
 
 
-def priority_for(alert) -> str:
-    base = PRIORITY_BY_TYPE.get(getattr(alert, "type", ""), "HIGH")
-    triage = getattr(alert, "triage", None) or {}
-    if triage.get("injuries") == "yes" or triage.get("detail") in {"trapped", "unconscious", "immediate_danger"}:
-        return "CRITICAL"
-    if triage.get("people_affected") == "many" and base == "NORMAL":
-        return "HIGH"
-    return base
+def priority_for(alert):
+    return "CRITICAL" if (alert.triage or {}).get("injuries") == "yes" else "HIGH"
 
 
-def _summary(alert) -> str:
-    from .parsing import triage_summary
-
-    parts = [triage_summary(getattr(alert, "triage", None) or {})]
-    note = (getattr(alert, "note", "") or "").strip()
-    if note:
-        parts.append(note[:100])
-    return " ".join(part for part in parts if part).strip()
-
-
-def _reporter_name(alert) -> str:
-    profile = getattr(getattr(alert, "reporter", None), "resident_profile", None)
-    if not profile:
-        return "Unregistered resident"
-    name = " ".join(
-        part.strip()
-        for part in (getattr(profile, "first_name", ""), getattr(profile, "last_name", ""))
-        if (part or "").strip()
-    )
-    return name or "Resident"
-
-
-def notify_responder_assigned(alert, responder) -> None:
+def notify_responder_assigned(alert, responder):
     number = getattr(responder, "phone_number", "")
     if not number:
         return
+    profile = getattr(alert.reporter, "resident_profile", None)
+    name = " ".join(filter(None, [getattr(profile, "first_name", ""), getattr(profile, "last_name", "")]))
     try:
+        assignment = alert.assignments.filter(responder=responder).order_by("-assigned_at", "-id").first()
         queue_sms(
             number,
             templates.responder_dispatch(
                 alert,
-                priority=priority_for(alert),
-                summary=_summary(alert),
-                reporter_name=_reporter_name(alert),
+                recipient_name=getattr(getattr(responder, "resident_profile", None), "first_name", ""),
+                unit_name=templates.unit_label(alert),
+                reporter_name=name,
                 contact=alert.reporter_contact_number or getattr(alert.reporter, "phone_number", ""),
             ),
             purpose=SmsPurpose.DISPATCH,
-            idempotency_key=f"dispatch:{alert.pk}:{responder.pk}",
+            idempotency_key=f"{PREFIX}:dispatch:{alert.pk}:{responder.pk}:{getattr(assignment, 'pk', 0)}",
             alert=alert,
             recipient=responder,
         )
     except Exception:
-        logger.warning("Dispatch SMS failed for alert %s.", alert.pk, exc_info=True)
+        logger.warning("Unit SMS failed for emergency %s.", alert.pk, exc_info=True)
 
 
-def notify_active_unit(alert) -> list:
-    """Text each active member of the mapped unit exactly once for this alert."""
+def notify_active_unit(alert):
     from apps.emergencies.views import active_unit_responders
 
+    if (
+        alert.reporter_verification != alert.ReporterVerification.ACCOUNT
+        and alert.latitude is not None
+        and alert.longitude is not None
+        and alert.reverse_geocoding_status == alert.ReverseGeocodingStatus.PENDING
+    ):
+        return []
+
     responders = active_unit_responders(alert)
+    if not alert.assignments.exists():
+        return []
     for responder in responders:
         notify_responder_assigned(alert, responder)
     return responders
 
 
-def notify_officials_no_responder(alert, unit_name="") -> None:
-    from apps.emergencies.recipients import dispatch_officials
-
-    officials = [official for official in dispatch_officials(alert, limit=10) if official.phone_number]
-    body = templates.official_no_responder(alert, unit_name=unit_name)
-    for official in officials:
-        try:
-            queue_sms(
-                official.phone_number,
-                body,
-                purpose=SmsPurpose.OFFICIAL_ALERT,
-                idempotency_key=f"noresponder:{alert.pk}:{official.pk}",
-                alert=alert,
-                recipient=official,
-            )
-        except Exception:
-            continue
-
-
-def notify_reporter(alert, body: str, *, key: str) -> None:
+def notify_reporter(alert, body, *, key):
     number = (alert.reporter_contact_number or "").strip() or getattr(alert.reporter, "phone_number", "")
-    if not number:
+    if not number or not body:
         return
     try:
         queue_sms(
-            number,
-            body,
+            number, body,
             purpose=SmsPurpose.EMERGENCY_ACK,
-            idempotency_key=f"{key}:{alert.pk}",
-            alert=alert,
-            recipient=alert.reporter,
+            idempotency_key=f"{PREFIX}:{key}:{alert.pk}",
+            alert=alert, recipient=alert.reporter,
         )
     except Exception:
-        logger.warning("Reporter SMS failed for alert %s.", alert.pk, exc_info=True)
+        logger.warning("Resident SMS failed for emergency %s.", alert.pk, exc_info=True)
 
 
-def notify_reporter_ack(alert, *, unit_name="", assigned=True) -> None:
-    """First reply to the resident, whatever channel the emergency came from.
-
-    Previously only reachable from the inbound-SMS router, so a resident who
-    pressed SOS in the app was never told their alert had landed.
-    """
-    surname = ""
-    profile = getattr(getattr(alert, "reporter", None), "resident_profile", None)
-    if profile:
-        surname = profile.last_name or ""
-    notify_reporter(
-        alert,
-        templates.emergency_ack(
-            alert, surname=surname, unit_name=unit_name, assigned=assigned
-        ),
-        key="ack",
-    )
-
-
-def notify_reporter_resolved(alert) -> None:
-    notify_reporter(alert, templates.resident_resolved_notice(alert), key="resolved")
-
-
-def notify_reporter_backup(alert) -> None:
-    notify_reporter(alert, templates.resident_backup_notice(alert), key="backup")
-
-
-def notify_responder_reassigned(alert, responder, *, reason="") -> None:
-    number = getattr(responder, "phone_number", "")
-    if not number:
+def notify_reporter_ack(alert, *, unit_name="", assigned=True):
+    if alert.status not in {"submitted", "routing", "routed", "awaiting_acknowledgment", "escalation_required", "invalid"}:
         return
-    try:
-        queue_sms(
-            number,
-            templates.reassigned_notice(alert, reason=reason),
-            purpose=SmsPurpose.DISPATCH,
-            idempotency_key=f"reassign:{alert.pk}:{responder.pk}",
-            alert=alert,
-            recipient=responder,
-        )
-    except Exception:
-        logger.warning("Reassignment SMS failed for alert %s.", alert.pk, exc_info=True)
-
-
-def notify_responder_backup_assigned(alert, responder, *, backup_type="", urgency="", reason="") -> None:
-    number = getattr(responder, "phone_number", "")
-    if not number:
-        return
-    try:
-        queue_sms(
-            number,
-            templates.backup_assigned_notice(
-                alert, backup_type=backup_type, urgency=urgency, reason=reason
-            ),
-            purpose=SmsPurpose.DISPATCH,
-            idempotency_key=f"backup:{alert.pk}:{responder.pk}",
-            alert=alert,
-            recipient=responder,
-        )
-    except Exception:
-        logger.warning("Backup SMS failed for alert %s.", alert.pk, exc_info=True)
-
-
-def notify_officials_new_emergency(alert, *, unit_name="", responder_name="") -> None:
-    from apps.emergencies.recipients import dispatch_officials
-
-    officials = [official for official in dispatch_officials(alert, limit=10) if official.phone_number]
-    body = templates.official_new_emergency(
-        alert, unit_name=unit_name, responder_name=responder_name
+    dispatches = OutboundSmsMessage.objects.filter(
+        alert=alert, purpose=SmsPurpose.DISPATCH, idempotency_key__startswith=f"{PREFIX}:dispatch:",
     )
-    for official in officials:
-        try:
-            queue_sms(
-                official.phone_number,
-                body,
-                purpose=SmsPurpose.OFFICIAL_ALERT,
-                idempotency_key=f"newalert:{alert.pk}:{official.pk}",
-                alert=alert,
-                recipient=official,
-            )
-        except Exception:
-            continue
+    sent = dispatches.filter(status__in=["sent", "delivered"]).exists()
+    if sent and alert.assignments.exists():
+        notify_reporter(alert, templates.emergency_ack(alert, unit_name=unit_name), key="assigned")
+    elif not dispatches.filter(status__in=["queued", "sending"]).exists():
+        notify_reporter(alert, templates.pending_response(alert), key="pending")
 
 
-def notify_off_duty(alert, hotlines=None) -> None:
-    notify_reporter(alert, templates.off_duty_notice(alert, hotlines), key="offduty")
+def notify_reporter_progress(alert, status):
+    if status == "routed":
+        return
+    body = templates.resident_progress(alert, status)
+    if body:
+        notify_reporter(alert, body, key=status)
+
+
+def notify_reporter_resolved(alert):
+    notify_reporter_progress(alert, "resolved")
+
+
+def notify_reporter_backup(alert):
+    return None
+
+
+def notify_responder_reassigned(alert, responder, *, reason=""):
+    notify_responder_assigned(alert, responder)
+
+
+def notify_responder_backup_assigned(alert, responder, *, backup_type="", urgency="", reason=""):
+    notify_responder_assigned(alert, responder)
+
+
+def notify_officials_no_responder(alert, unit_name=""):
+    return None
+
+
+def notify_officials_new_emergency(alert, *, unit_name="", responder_name=""):
+    return None
+
+
+def notify_off_duty(alert, hotlines=None):
+    notify_reporter_ack(alert, assigned=False)

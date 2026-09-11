@@ -178,7 +178,7 @@ class HttpJsonSmsDriver(BaseSmsDriver):
         values = {
             "{to}": destination,
             "{body}": body,
-            "{sim_slot}": int(getattr(settings, "OUTBOUND_SMS_SIM_SLOT", 2) or 2),
+            "{sim_slot}": 1,
             "{timestamp}": int(time.time() * 1000),
             "{from}": getattr(settings, "SMS_GATEWAY_NUMBER", "") or "",
         }
@@ -221,7 +221,7 @@ class HttpJsonSmsDriver(BaseSmsDriver):
             "{to}": destination,
             "{body}": body,
             "{msg}": body,
-            "{sim_slot}": str(getattr(settings, "OUTBOUND_SMS_SIM_SLOT", 2) or 2),
+            "{sim_slot}": "1",
             "{from}": getattr(settings, "SMS_GATEWAY_NUMBER", "") or "",
         }
         for token, value in replacements.items():
@@ -362,6 +362,8 @@ DRIVERS: dict[str, type[BaseSmsDriver]] = {
 
 
 def get_driver() -> BaseSmsDriver:
+    if getattr(settings, "SMS_PIPELINE_ONLY", False):
+        return ConsoleSmsDriver()
     name = getattr(settings, "OUTBOUND_SMS_DRIVER", "disabled") or "disabled"
     try:
         return DRIVERS[name]()
@@ -479,6 +481,12 @@ def deliver(message_id: int, destination: str, body: str, timeout: float | None 
     if message.status in {OutboundSmsMessage.Status.SENT, OutboundSmsMessage.Status.DELIVERED}:
         return message.status
 
+    if message.purpose in {SmsPurpose.EMERGENCY_ACK, SmsPurpose.DISPATCH, SmsPurpose.OFFICIAL_ALERT, SmsPurpose.COMMAND_REPLY} and not message.idempotency_key.startswith("sms-v2:"):
+        message.status = OutboundSmsMessage.Status.SKIPPED
+        message.last_error = "Retired emergency SMS format; not sent."
+        message.save(update_fields=["status", "last_error"])
+        return message.status
+
     driver = get_driver()
     message.status = OutboundSmsMessage.Status.SENDING
     message.attempts += 1
@@ -492,6 +500,7 @@ def deliver(message_id: int, destination: str, body: str, timeout: float | None 
         message.last_error = str(exc)[:255]
         message.save(update_fields=["status", "last_error"])
         logger.warning("SMS #%s skipped: %s", message_id, exc)
+        _notify_dispatch_result(message)
         return message.status
     except Exception as exc:
         message.status = OutboundSmsMessage.Status.FAILED
@@ -500,6 +509,7 @@ def deliver(message_id: int, destination: str, body: str, timeout: float | None 
         # Never log the body or the destination — an OTP or a resident's
         # number must not reach the log file.
         logger.warning("SMS #%s failed on attempt %s: %s", message_id, message.attempts, type(exc).__name__)
+        _notify_dispatch_result(message)
         raise SmsDeliveryError(str(exc)) from exc
 
     message.status = OutboundSmsMessage.Status.SENT
@@ -511,7 +521,18 @@ def deliver(message_id: int, destination: str, body: str, timeout: float | None 
         message.provider_state = receipt.get("provider_state", "")
         updated += ["provider_message_id", "provider_state"]
     message.save(update_fields=updated)
+    _notify_dispatch_result(message)
     return message.status
+
+
+def _notify_dispatch_result(message):
+    if message.purpose != SmsPurpose.DISPATCH or not message.alert_id:
+        return
+    from .notify import notify_reporter_ack
+    try:
+        notify_reporter_ack(message.alert)
+    except Exception:
+        logger.warning("Dispatch confirmation could not be queued for SMS #%s.", message.pk, exc_info=True)
 
 
 def reconcile_delivery_event(payload) -> bool:

@@ -1,91 +1,43 @@
 from types import SimpleNamespace
 
 from django.core.management.base import BaseCommand
-from django.utils import timezone
 
 from apps.sms import templates
 from apps.sms.gateway import count_segments
 
 
 def sample_alert():
+    profile = SimpleNamespace(first_name="Rosario")
     return SimpleNamespace(
-        pk=1042,
-        type="fire",
-        status="routed",
-        resolved_location="Champaca Street, Marikina Heights",
-        reported_area="",
-        address="",
-        barangay="Marikina Heights",
-        created_at=timezone.now(),
-        triage={},
+        pk=None, type="flood", reporter=SimpleNamespace(resident_profile=profile),
+        canonical_street="Mayon Street, Hacienda Heights, Marikina",
+        resolved_location="Mayon Street, Hacienda Heights, Marikina",
+        reported_area="", address="", note="",
+        triage={"detail": "waist", "people_affected": "one", "injuries": "yes"},
     )
 
 
 def alert_templates(alert):
     return {
-        "emergency_ack (assigned)": templates.emergency_ack(
-            alert, surname="Cruz", unit_name="Barangay Tanod", assigned=True
-        ),
-        "emergency_ack (unassigned)": templates.emergency_ack(
-            alert, surname="Cruz", unit_name="", assigned=False
-        ),
-        "emergency_ack_unregistered": templates.emergency_ack_unregistered(alert),
-        "responder_dispatch": templates.responder_dispatch(
-            alert,
-            priority="high",
-            summary="Caller reports smoke from a second-floor window.",
-            contact="+639171234567",
-        ),
-        "official_no_responder": templates.official_no_responder(
-            alert, unit_name="Barangay Tanod"
-        ),
-        "outside_service_area": templates.outside_service_area(alert),
+        "unit_dispatch": templates.responder_dispatch(alert, recipient_name="Latoy", unit_name="BDRRMC", reporter_name="Rosario Katigbak", contact="[resident phone]"),
+        "resident_confirmation": templates.emergency_ack(alert, unit_name="BDRRMC"),
+        "resident_en_route": templates.resident_progress(alert, "en_route", unit_name="BDRRMC"),
+        "resident_arrived": templates.resident_progress(alert, "arrived", unit_name="BDRRMC"),
+        "resident_resolved": templates.resident_progress(alert, "resolved", unit_name="BDRRMC"),
+        "resident_exception": templates.pending_response(alert),
     }
 
 
 class Command(BaseCommand):
-    help = "Print every SMS message the system can send, without sending anything."
+    help = "Preview the six outbound emergency messages without sending anything."
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--name",
-            default="",
-            help="Only show templates whose name contains this text.",
-        )
-        parser.add_argument(
-            "--emergency-only",
-            action="store_true",
-            help="Skip the static command-reply templates.",
-        )
+        parser.add_argument("--name", default="")
+        parser.add_argument("--emergency-only", action="store_true")
 
     def handle(self, *args, **options):
-        needle = (options["name"] or "").lower()
-        alert = sample_alert()
-
-        groups = [("Emergency", alert_templates(alert))]
-        if not options["emergency_only"]:
-            groups.append(("Command replies", templates.all_static_templates()))
-
-        shown = 0
-        for group_name, entries in groups:
-            printed_header = False
-            for name, body in entries.items():
-                if needle and needle not in name.lower():
-                    continue
-                if not printed_header:
-                    self.stdout.write(self.style.MIGRATE_HEADING(f"\n{group_name}"))
-                    printed_header = True
-                segments = count_segments(body)
-                self.stdout.write(
-                    self.style.SUCCESS(
-                        f"\n--- {name} ({len(body)} chars, {segments} segment"
-                        f"{'s' if segments != 1 else ''}) ---"
-                    )
-                )
-                self.stdout.write(body)
-                shown += 1
-
-        if shown == 0:
-            self.stdout.write(self.style.WARNING("No template matched."))
-        else:
-            self.stdout.write(self.style.MIGRATE_HEADING(f"\n{shown} template(s) shown. Nothing was sent."))
+        for name, body in alert_templates(sample_alert()).items():
+            if options["name"] and options["name"] not in name:
+                continue
+            self.stdout.write(f"\n{name} ({count_segments(body)} SMS segments)\n{body}")
+        self.stdout.write("\nPreview only. Nothing was sent.")

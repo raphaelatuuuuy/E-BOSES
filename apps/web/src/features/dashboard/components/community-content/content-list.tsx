@@ -5,6 +5,7 @@ import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
+import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
 import {
   getConcern,
   reviewContentFlag,
@@ -136,7 +137,7 @@ export function ContentList({
   const [concernError, setConcernError] = useState("")
   // A post that is already resolved or rejected cannot be taken down again.
   const concernClosed =
-    !!concern && (concern.status === "resolved" || concern.status === "rejected")
+    !!concern && (isResolvedRecord(concern) || concern.status === "rejected")
 
   // A new filter or search starts back at page one.
   useEffect(() => {

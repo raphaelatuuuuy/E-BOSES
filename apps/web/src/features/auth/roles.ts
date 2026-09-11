@@ -11,3 +11,11 @@ export function isOfficialUser(user?: AuthUser | null) {
       (user.role === "barangay_official" || user.is_superuser),
   )
 }
+
+export function isResidentUser(user?: AuthUser | null) {
+  return Boolean(user && !isOfficialUser(user) && !isResponderUser(user))
+}
+
+export function isStaffUser(user?: AuthUser | null) {
+  return isOfficialUser(user) || isResponderUser(user)
+}

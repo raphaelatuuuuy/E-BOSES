@@ -154,11 +154,12 @@ export function advisoryMarkerHtml(
   size = 26,
   tone: MarkerTone = "light",
   selected = false,
+  colorOverride?: string | null,
 ): string {
   const meta = advisoryMeta(tag)
   return glyphPinHtml({
     paths: meta.svgPaths,
-    color: meta.color,
+    color: colorOverride ?? meta.color,
     size,
     selected,
     tone,

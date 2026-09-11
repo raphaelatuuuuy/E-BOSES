@@ -786,6 +786,45 @@ class ConcernAiTextProviderPipelineTests(TestCase):
 
     @override_settings(OLLAMA_API_KEY="test-key")
     @patch("apps.concerns.ai.pipeline._street_imagery_check")
+    def test_photo_must_show_reported_issue_even_when_area_matches(self, street_check):
+        concern = self._make_concern(latitude="14.6500000", longitude="121.1100000")
+        media = png_upload("intact-road.png")
+        ConcernMedia.objects.create(
+            concern=concern,
+            file=media,
+            original_filename=media.name,
+            mime_type="image/png",
+            file_size=media.size,
+        )
+        street_check.return_value = {
+            "status": "checked",
+            "verdict": "area_matches",
+            "explanation": "The pinned surroundings match.",
+        }
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+                evidence_relationship="partially_supports_report",
+                image_review_succeeded=True,
+                photo_verdicts=[{
+                    "index": 0,
+                    "relevance": "neutral",
+                    "note": "The photo shows an intact wet road; the reported damage is not visible.",
+                }],
+                recommended_action="accept",
+            )
+            assessment = process_concern_ai(concern.id)
+
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
+        self.assertEqual(concern.rejection_code, "automated_photo_unsupported")
+        self.assertIn("does not show", concern.validation_summary.lower())
+        self.assertEqual(assessment.recommended_action, "request_more_information")
+        street_check.assert_called_once()
+
+    @override_settings(OLLAMA_API_KEY="test-key")
+    @patch("apps.concerns.ai.pipeline._street_imagery_check")
     def test_inconclusive_street_context_requests_a_wider_photo(self, street_check):
         """A close-up cannot silently enter the queue when resubmission is configured."""
         concern = self._make_concern(latitude="14.6500000", longitude="121.1100000")

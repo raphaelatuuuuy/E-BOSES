@@ -285,6 +285,15 @@ def can_view_alert(user, alert):
     return emergency_access_mode(user, alert) is not None
 
 
+def can_track_alert(user, alert):
+    """Full SOS tracking is limited to its owner and operational participants."""
+    if not user or not user.is_authenticated:
+        return False
+    from apps.community_access import OPERATIONAL, OWNER, emergency_access_mode
+
+    return emergency_access_mode(user, alert) in {OWNER, OPERATIONAL}
+
+
 def scoped_alert_or_404(user, pk, *, lock=False):
     from apps.community_access import ForeignCommunityReadOnly, emergency_access_mode
 
@@ -668,172 +677,8 @@ def find_backup_responder(alert):
     return responders[0] if responders else None
 
 
-def acknowledgment_timeout_for(alert):
-    """Seconds an assignment may sit unacknowledged, from the routing rule."""
-    role_map = (
-        EmergencyTypeRoleMap.objects.filter(emergency_type=alert.type, is_active=True)
-        .order_by("-priority", "id")
-        .first()
-    )
-    if role_map and role_map.acknowledgment_timeout_seconds:
-        return int(role_map.acknowledgment_timeout_seconds)
-    return int(getattr(settings, "EMERGENCY_ACK_TIMEOUT_SECONDS", 300))
-
-
 def escalate_overdue_assignments(*, minutes=None, seconds=None, triggered_by=None, audit_request_meta=None):
-    """Reassign assignments nobody has acknowledged.
-
-    Previously this only bolted a backup responder onto the alert and left the
-    silent responder assigned, so an emergency could sit with someone who was
-    never coming. Now the unacknowledged assignment is closed out, the next
-    eligible responder is assigned. When nobody is free yet, the alert returns
-    to automated routing and the scheduled sweep keeps looking.
-
-    The per-category timeout from EmergencyTypeRoleMap wins; `minutes`/`seconds`
-    act as a floor for callers that want to force a sweep.
-    """
-    now = timezone.now()
-    floor_seconds = seconds if seconds is not None else (int(minutes) * 60 if minutes is not None else 0)
-
-    candidates = (
-        EmergencyResponderAssignment.objects.filter(
-            status=EmergencyResponderAssignment.Status.ASSIGNED,
-            alert__status__in=ACTIVE_STATUSES,
-        )
-        .select_related("alert")
-        .order_by("assigned_at", "id")
-    )
-
-    escalations = []
-    for assignment_id in list(candidates.values_list("pk", flat=True)):
-        with transaction.atomic():
-            assignment = (
-                EmergencyResponderAssignment.objects
-                .select_for_update()
-                .select_related("alert", "alert__reporter", "responder")
-                .filter(pk=assignment_id)
-                .first()
-            )
-            if not assignment or assignment.status != EmergencyResponderAssignment.Status.ASSIGNED:
-                continue
-
-            alert = EmergencyAlert.objects.select_for_update().get(pk=assignment.alert_id)
-            if alert.status not in ACTIVE_STATUSES:
-                continue
-
-            timeout = max(acknowledgment_timeout_for(alert), floor_seconds)
-            waited = (now - assignment.assigned_at).total_seconds()
-            if waited < timeout:
-                continue
-
-            escalations.append(
-                _reassign_unacknowledged(
-                    alert,
-                    assignment,
-                    waited=waited,
-                    triggered_by=triggered_by,
-                    audit_request_meta=audit_request_meta,
-                )
-            )
-    return [item for item in escalations if item]
-
-
-def _reassign_unacknowledged(alert, assignment, *, waited, triggered_by, audit_request_meta):
-    original = assignment.responder
-    assigned_ids = list(alert.assignments.values_list("responder_id", flat=True))
-    replacements = find_auto_responders(alert, limit=1, exclude_ids=assigned_ids)
-    replacement = replacements[0] if replacements else None
-
-    reason = f"Responder did not acknowledge within {int(waited)} seconds."
-    if replacement:
-        assignment.status = EmergencyResponderAssignment.Status.ESCALATED
-        assignment.status_note = f"No acknowledgement after {int(waited)}s."
-        assignment.save(update_fields=["status", "status_note"])
-        log_assignment_action(
-            alert=alert,
-            assignment=assignment,
-            responder=original,
-            actor=triggered_by,
-            action="acknowledgment_timeout",
-            new_status=assignment.status,
-            note=assignment.status_note,
-            metadata={"waited_seconds": int(waited)},
-        )
-        escalation = EmergencyEscalation.objects.create(
-            alert=alert,
-            previous_assignment=assignment,
-            escalated_to=replacement,
-            triggered_by=triggered_by,
-            reason=reason,
-        )
-        role_map = role_map_for_responder(alert, replacement)
-        new_assignment = EmergencyResponderAssignment.objects.create(
-            alert=alert,
-            responder=replacement,
-            role_map=role_map,
-            responding_community=role_map.community if role_map else alert.community,
-            is_cross_community=bool(role_map and role_map.community_id != alert.community_id),
-            source=EmergencyResponderAssignment.Source.ESCALATION,
-            status=EmergencyResponderAssignment.Status.ASSIGNED,
-        )
-        log_assignment_action(
-            alert=alert,
-            assignment=new_assignment,
-            responder=replacement,
-            actor=triggered_by,
-            action="reassigned_after_timeout",
-            new_status=new_assignment.status,
-            note=reason,
-        )
-        apply_routing_effects(alert, replacement, None, actor=triggered_by, audit_action="emergency.reassigned")
-    else:
-        # Never make an active emergency disappear from the only responder who
-        # can currently handle it. Keep the assignment open, reset its reminder
-        # clock, and let the responder acknowledge it from their dispatch queue.
-        assignment.assigned_at = timezone.now()
-        assignment.status_note = "Acknowledgment reminder sent; assignment remains active."
-        assignment.save(update_fields=["assigned_at", "status_note"])
-        log_assignment_action(
-            alert=alert,
-            assignment=assignment,
-            responder=original,
-            actor=triggered_by,
-            action="acknowledgment_reminder",
-            new_status=assignment.status,
-            note=assignment.status_note,
-            metadata={"waited_seconds": int(waited)},
-        )
-        create_emergency_notification(
-            alert=alert,
-            recipient=original,
-            type="emergency_routed",
-            title="Emergency still assigned to you",
-            body="Please acknowledge this dispatch. You remain the assigned responder.",
-        )
-
-    if replacement:
-        create_emergency_notification(
-            alert=alert,
-            recipient=alert.reporter,
-            type="emergency_escalated",
-            title="Responder changed",
-            body="A different responder was automatically assigned to your emergency.",
-        )
-    create_audit_log(
-        "emergency.acknowledgment_timeout",
-        actor=triggered_by,
-        target_user=alert.reporter,
-        metadata={
-            "alert_id": alert.pk,
-            "assignment_id": assignment.pk,
-            "original_responder_id": getattr(original, "pk", None),
-            "replacement_id": getattr(replacement, "pk", None),
-            "waited_seconds": int(waited),
-            "automatic": triggered_by is None,
-        },
-        request_meta=audit_request_meta or {},
-    )
-    return escalation if replacement else None
+    return []
 
 
 def send_app_emergency_sms(alert):
@@ -925,9 +770,9 @@ def apply_routing_effects(alert, responder, request, *, actor=None, audit_action
     alert.routed_at = timezone.now()
     alert.status_version += 1
     alert.save(update_fields=["status", "routed_at", "status_version", "updated_at"])
-    create_status_event(alert, EmergencyAlert.Status.ROUTED, actor, event_key="responder_assigned")
-    notify_emergency_status(alert, type=EmergencyAlert.Status.ROUTED, body="Responder routed")
     unit = responder_display_unit(responder)
+    create_status_event(alert, EmergencyAlert.Status.ROUTED, None, note=f"Assigned to {unit}.", event_key="responder_assigned")
+    notify_emergency_status(alert, type=EmergencyAlert.Status.ROUTED, body="Responder routed")
     create_emergency_notification(
         alert=alert,
         recipient=responder,
@@ -949,13 +794,8 @@ def apply_routing_effects(alert, responder, request, *, actor=None, audit_action
     )
     # SMS-originated alerts first attempt server reverse geocoding. That task
     # sends the same idempotent dispatch message to this primary assignment.
-    if alert.reporter_verification == EmergencyAlert.ReporterVerification.ACCOUNT:
-        try:
-            from apps.sms.notify import notify_responder_assigned
-
-            notify_responder_assigned(alert, responder)
-        except Exception:
-            pass
+    from apps.sms.notify import notify_active_unit
+    transaction.on_commit(lambda: notify_active_unit(alert))
 
 
 def auto_route_alert(alert, request, *, retry_escalated=False, preferred_responder=None):
@@ -2524,8 +2364,8 @@ class EmergencyDetailView(APIView):
     def get(self, request, pk):
         touch_last_seen(request.user)
         alert = get_object_or_404(alert_serialization_queryset(), pk=pk)
-        if not can_view_alert(request.user, alert):
-            return Response({"detail": "You do not have permission to view this emergency."}, status=status.HTTP_403_FORBIDDEN)
+        if not can_track_alert(request.user, alert):
+            return Response({"detail": "Emergency not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(serialize_alert(alert, request))
 
 
@@ -3474,7 +3314,7 @@ class EmergencyBackupView(APIView):
 
 
 class EmergencyRespondView(APIView):
-    """Responder confirms the assignment. No official approval is involved."""
+    """Responder records that travel to the emergency has started."""
 
     permission_classes = [IsAuthenticated]
 
@@ -3482,7 +3322,7 @@ class EmergencyRespondView(APIView):
         touch_last_seen(request.user)
         alert = scoped_alert_or_404(request.user, pk)
         try:
-            responder_actions.acknowledge(
+            responder_actions.mark_en_route(
                 alert,
                 request.user,
                 note=(request.data.get("note") or "").strip(),
@@ -3490,27 +3330,6 @@ class EmergencyRespondView(APIView):
             )
         except responder_actions.ActionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
-        transaction.on_commit(lambda: broadcast_emergency_update(alert))
-        return Response(serialize_alert(alert, request))
-
-
-class EmergencyUnableView(APIView):
-    """Unable to Respond. Requires a reason and reassigns immediately."""
-
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, pk):
-        touch_last_seen(request.user)
-        alert = scoped_alert_or_404(request.user, pk)
-        try:
-            responder_actions.decline(
-                alert,
-                request.user,
-                reason=(request.data.get("reason") or "").strip(),
-                source="api",
-            )
-        except responder_actions.ActionError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         transaction.on_commit(lambda: broadcast_emergency_update(alert))
         return Response(serialize_alert(alert, request))
 
@@ -3840,13 +3659,7 @@ class AssignmentActionMixin:
 
             transaction.on_commit(send_resolved_sms)
         # Auto chat updates for the resident group room
-        if self.target_status == EmergencyAlert.Status.ACKNOWLEDGED:
-            post_responder_chat(
-                alert,
-                request.user,
-                "I've accepted your alert and I'm preparing to respond. Please stay safe.",
-            )
-        elif self.target_status == EmergencyAlert.Status.ARRIVED:
+        if self.target_status == EmergencyAlert.Status.ARRIVED:
             post_responder_chat(
                 alert,
                 request.user,
@@ -3859,15 +3672,6 @@ class AssignmentActionMixin:
                 "This emergency has been marked resolved. Take care.",
             )
         return Response(serialize_alert(alert, request))
-
-
-class EmergencyAcknowledgeView(AssignmentActionMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    target_status = EmergencyAlert.Status.ACKNOWLEDGED
-    assignment_status = EmergencyResponderAssignment.Status.ACKNOWLEDGED
-    timestamp_field = "acknowledged_at"
-    default_note = "Responder acknowledged the dispatch and is preparing to respond."
-    allowed_statuses = {EmergencyAlert.Status.ROUTED}
 
 
 class EmergencyArrivedView(AssignmentActionMixin, APIView):

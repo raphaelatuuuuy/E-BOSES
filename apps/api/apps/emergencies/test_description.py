@@ -1,11 +1,67 @@
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 
 from .description import description_for_display, fallback_description
+from .description import generate_description
 
 
 class EmergencyDescriptionTests(SimpleTestCase):
+    def test_wizard_sms_answers_reach_complete_incident_descriptions(self):
+        from apps.sms.parsing import parse_emergency_sms, TRIAGE_PHRASES
+
+        for phrase, detail in TRIAGE_PHRASES['detail'].items():
+            with self.subTest(detail=detail, phrase=phrase):
+                parsed = parse_emergency_sms(
+                    'I need immediate help. This is a Flood emergency near Mayon Street. '
+                    f'1 person affected, {phrase}, someone is injured. Please send assistance.\n'
+                    'LOC:14.650123,121.112345'
+                )
+                self.assertEqual(parsed.triage, {
+                    'people_affected': 'one', 'detail': detail, 'injuries': 'yes'})
+                result = fallback_description(self.alert(
+                    type=parsed.category_code, note=parsed.note, triage=parsed.triage,
+                    canonical_street=parsed.reported_area))
+                self.assertIn('Mayon Street', result)
+                self.assertIn('affecting one person, with reported injuries.', result)
+                self.assertNotIn('Please send', result)
+                self.assertNotIn('LOC:', result)
+                self.assertNotIn('_', result)
+
+    def test_unknown_answers_are_explicit(self):
+        result = fallback_description(self.alert(triage={
+            'people_affected': 'unknown', 'injuries': 'unknown'}))
+        self.assertIn('number of people affected unknown', result)
+        self.assertIn('injuries unknown', result)
+
+    def test_status_sms_is_not_displayed_as_incident_prose(self):
+        raw = ('E-BOSES STATUS - E-313\nFire emergency\nDao Street\n'
+               'Status: Being reviewed\nReceived: 9:26 PM\n'
+               'Reply SAFE if you are now safe. Reply CANCEL to request cancellation.')
+        alert = self.alert(note=raw, triage={}, canonical_street='Dao Street',
+                           ai_assist={'description': 'The resident reported ' + raw})
+        self.assertEqual(description_for_display(alert),
+                         'The resident reported a fire around Dao Street.')
+
+    def test_flood_depth_is_complete_without_a_model(self):
+        alert = self.alert(type='flood', triage={
+            'detail': 'waist', 'people_affected': 'one', 'injuries': 'yes'})
+        with self.settings(OLLAMA_API_KEY=''):
+            result = generate_description(alert)
+        self.assertIn('waist-deep water or higher', result)
+        self.assertIn('affecting one person, with reported injuries.', result)
+
+    def test_model_receives_incident_data_and_rejects_sms_boilerplate(self):
+        alert = self.alert(note='E-BOSES STATUS - E-313\nReply SAFE if safe.')
+        alert.media = Mock()
+        alert.media.all.return_value = []
+        with self.settings(OLLAMA_API_KEY='test-only'), patch('ollama.Client') as client:
+            client.return_value.chat.return_value = {'message': {'content':
+                '{"description": "The resident reported E-BOSES STATUS - E-313."}'}}
+            self.assertEqual(generate_description(alert), fallback_description(alert))
+            client.assert_not_called()
+
     def alert(self, **overrides):
         values = {
             "type": "fire",
@@ -25,7 +81,7 @@ class EmergencyDescriptionTests(SimpleTestCase):
 
         self.assertEqual(
             description,
-            "The resident reported a fire around Champaca Street that has been contained, affecting a few people, with reported injuries.",
+            "The resident reported a fire around Champaca Street that has been contained, affecting 2–5 people, with reported injuries.",
         )
         self.assertNotIn("Detail:", description)
         self.assertNotIn("Injuries:", description)

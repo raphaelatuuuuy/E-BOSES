@@ -1,0 +1,433 @@
+{
+  "version": 1,
+  "created_at": "2026-09-09T19:09:17.169480+00:00",
+  "records": [
+    {
+      "id": 307,
+      "approved": true,
+      "before": {
+        "triage": {
+          "detail": "contained",
+          "injuries": "yes",
+          "people_affected": "few"
+        },
+        "ai_assist": {
+          "description": "The resident reported a contained fire around Champaca Street, Marikina Heights Subdivision, with a few people injured.",
+          "description_status": "ready"
+        },
+        "updated_at": "2026-09-01T18:39:48.804781+00:00",
+        "events": [
+          {
+            "id": 974,
+            "label": "Emergency received",
+            "note": "Sent from the E-Boses app."
+          },
+          {
+            "id": 975,
+            "label": "No responder available",
+            "note": "Escalated to an official for manual dispatch. No eligible on-duty BDRRMC in Marikina Heights."
+          },
+          {
+            "id": 976,
+            "label": "Responder assigned",
+            "note": "A responder was automatically assigned."
+          },
+          {
+            "id": 977,
+            "label": "Responder on the way",
+            "note": "The responder is travelling to the location. Responder is on the way."
+          },
+          {
+            "id": 978,
+            "label": "Responder nearby",
+            "note": "The responder is close to the location. Responder is near your location."
+          },
+          {
+            "id": 979,
+            "label": "Responder at the scene",
+            "note": "The responder reached the location. Responder arrived at the location."
+          },
+          {
+            "id": 983,
+            "label": "Responder at the scene",
+            "note": "The responder reached the location. BDRRMC backup requested with high priority."
+          },
+          {
+            "id": 986,
+            "label": "Resolved",
+            "note": "The incident was handled and closed. Naapula na po ang apoy."
+          }
+        ]
+      },
+      "after": {
+        "triage": {
+          "detail": "contained",
+          "injuries": "yes",
+          "people_affected": "few"
+        },
+        "ai_assist": {
+          "description": "The resident reported a fire around Champaca Street, Marikina Heights Subdivision that has been contained, affecting 2–5 people, with reported injuries.",
+          "description_status": "ready",
+          "presentation_version": 1
+        },
+        "updated_at": "2026-09-01T18:39:48.804781+00:00",
+        "events": [
+          {
+            "id": 974,
+            "label": "Emergency received",
+            "note": "Your emergency has been received."
+          },
+          {
+            "id": 975,
+            "label": "Finding a response unit",
+            "note": "The system is checking available response units."
+          },
+          {
+            "id": 976,
+            "label": "Assigned unit",
+            "note": "Assigned to Barangay Disaster Risk Reduction and Management Committee."
+          },
+          {
+            "id": 977,
+            "label": "Responder en route",
+            "note": "The responder is on the way to your location."
+          },
+          {
+            "id": 978,
+            "label": "Responder nearby",
+            "note": "The responder is close to the location."
+          },
+          {
+            "id": 979,
+            "label": "Responder on scene",
+            "note": "The responder has arrived at the scene."
+          },
+          {
+            "id": 983,
+            "label": "Responder on scene",
+            "note": "The responder has arrived at the scene."
+          },
+          {
+            "id": 986,
+            "label": "Resolved",
+            "note": "The emergency has been marked resolved."
+          }
+        ]
+      },
+      "before_hash": "a8722d260238b0d417fcfc4d85f38429d567271a204987b78026e0cd17a4db15",
+      "gaps": []
+    },
+    {
+      "id": 309,
+      "approved": true,
+      "before": {
+        "triage": {
+          "detail": "waist",
+          "injuries": "yes",
+          "people_affected": "one"
+        },
+        "ai_assist": {},
+        "updated_at": "2026-09-02T08:13:17.674291+00:00",
+        "events": [
+          {
+            "id": 984,
+            "label": "Emergency received",
+            "note": "Sent from the E-Boses app."
+          },
+          {
+            "id": 985,
+            "label": "No responder available",
+            "note": "Escalated to an official for manual dispatch. No eligible online BDRRMC in Concepcion Dos."
+          },
+          {
+            "id": 987,
+            "label": "Responder assigned",
+            "note": "A responder was automatically assigned."
+          },
+          {
+            "id": 988,
+            "label": "Responder assigned",
+            "note": "A responder was automatically assigned."
+          },
+          {
+            "id": 989,
+            "label": "No responder available",
+            "note": "Escalated to an official for manual dispatch. Responder did not acknowledge within 104 seconds."
+          },
+          {
+            "id": 990,
+            "label": "Finding a responder",
+            "note": "Automatic dispatch is checking available response units. Automatically checking available response units."
+          },
+          {
+            "id": 991,
+            "label": "Responder assigned",
+            "note": "A responder was automatically assigned."
+          },
+          {
+            "id": 992,
+            "label": "No responder available",
+            "note": "Escalated to an official for manual dispatch. Responder did not acknowledge within 102 seconds."
+          },
+          {
+            "id": 993,
+            "label": "Responder assigned",
+            "note": "A responder was automatically assigned."
+          },
+          {
+            "id": 996,
+            "label": "Responder on the way",
+            "note": "The responder is travelling to the location. Responder is on the way."
+          }
+        ]
+      },
+      "after": {
+        "triage": {
+          "detail": "waist",
+          "injuries": "yes",
+          "people_affected": "one"
+        },
+        "ai_assist": {
+          "description": "The resident reported a flood emergency around Mayon Street, Hacienda Heights, Marikina with waist-deep water or higher, affecting one person, with reported injuries.",
+          "description_status": "ready",
+          "presentation_version": 1
+        },
+        "updated_at": "2026-09-02T08:13:17.674291+00:00",
+        "events": [
+          {
+            "id": 984,
+            "label": "Emergency received",
+            "note": "Your emergency has been received."
+          },
+          {
+            "id": 985,
+            "label": "Finding a response unit",
+            "note": "The system is checking available response units."
+          },
+          {
+            "id": 987,
+            "label": "Assigned unit",
+            "note": "Assigned to Barangay Disaster Risk Reduction and Management Committee."
+          },
+          {
+            "id": 988,
+            "label": "Assigned unit",
+            "note": "Assigned to Barangay Disaster Risk Reduction and Management Committee."
+          },
+          {
+            "id": 989,
+            "label": "Finding a response unit",
+            "note": "The system is checking available response units."
+          },
+          {
+            "id": 990,
+            "label": "Finding a response unit",
+            "note": "The system is finding the appropriate response unit."
+          },
+          {
+            "id": 991,
+            "label": "Assigned unit",
+            "note": "Assigned to Barangay Disaster Risk Reduction and Management Committee."
+          },
+          {
+            "id": 992,
+            "label": "Finding a response unit",
+            "note": "The system is checking available response units."
+          },
+          {
+            "id": 993,
+            "label": "Assigned unit",
+            "note": "Assigned to Barangay Disaster Risk Reduction and Management Committee."
+          },
+          {
+            "id": 996,
+            "label": "Responder en route",
+            "note": "The responder is on the way to your location."
+          }
+        ]
+      },
+      "before_hash": "e378f54c6395969dda4a68ab3d1b85302051ad716390b5093448345827fbb07f",
+      "gaps": []
+    },
+    {
+      "id": 317,
+      "approved": true,
+      "before": {
+        "triage": {},
+        "ai_assist": {},
+        "updated_at": "2026-09-08T12:53:22.718366+00:00",
+        "events": [
+          {
+            "id": 1007,
+            "label": "Update",
+            "note": "Reported location is outside the configured service area."
+          }
+        ]
+      },
+      "after": {
+        "triage": {},
+        "ai_assist": {
+          "description": "The resident reported a fire around Champaca Street, Marikina Heights.",
+          "description_status": "ready",
+          "presentation_version": 1
+        },
+        "updated_at": "2026-09-08T12:53:22.718366+00:00",
+        "events": [
+          {
+            "id": 1007,
+            "label": "Update",
+            "note": "Reported location is outside the configured service area."
+          }
+        ]
+      },
+      "before_hash": "42e268f669d0daa7985d4ecc65b5dfdc663db0d4523466225e6871b60dd1d610",
+      "gaps": [
+        "No recoverable people_affected answer.",
+        "No recoverable injuries answer."
+      ]
+    },
+    {
+      "id": 319,
+      "approved": true,
+      "before": {
+        "triage": {},
+        "ai_assist": {},
+        "updated_at": "2026-09-09T08:05:00.882620+00:00",
+        "events": [
+          {
+            "id": 1012,
+            "label": "Emergency received",
+            "note": "Sent from the E-Boses app."
+          },
+          {
+            "id": 1013,
+            "label": "Finding a responder",
+            "note": "Automatic dispatch is checking available response units. Automatically checking available response units."
+          }
+        ]
+      },
+      "after": {
+        "triage": {},
+        "ai_assist": {
+          "description": "The resident reported a fire around Champaca Street.",
+          "description_status": "ready",
+          "presentation_version": 1
+        },
+        "updated_at": "2026-09-09T08:05:00.882620+00:00",
+        "events": [
+          {
+            "id": 1012,
+            "label": "Emergency received",
+            "note": "Your emergency has been received."
+          },
+          {
+            "id": 1013,
+            "label": "Finding a response unit",
+            "note": "The system is finding the appropriate response unit."
+          }
+        ]
+      },
+      "before_hash": "1974805797ff03fb8ca77f616466b2ae1b8f65ee0eb31360b3d166dc4d7bafa8",
+      "gaps": [
+        "No recoverable people_affected answer.",
+        "No recoverable injuries answer."
+      ]
+    },
+    {
+      "id": 320,
+      "approved": true,
+      "before": {
+        "triage": {},
+        "ai_assist": {
+          "model": "gemma4:31b",
+          "status": "ok",
+          "applied": {
+            "area": null,
+            "street": null,
+            "category": null
+          },
+          "suggested": {
+            "area": null,
+            "street": null,
+            "category": "fire"
+          },
+          "started_at": "2026-09-09T10:21:21.400402+00:00",
+          "description": "The resident reported a fire emergency.",
+          "finished_at": "2026-09-09T10:21:24.086731+00:00",
+          "model_family": "gemma",
+          "unresolved_fields": [
+            "location"
+          ],
+          "description_status": "ready"
+        },
+        "updated_at": "2026-09-09T10:21:28.981847+00:00",
+        "events": [
+          {
+            "id": 1014,
+            "label": "Emergency received",
+            "note": "Sent by text message."
+          },
+          {
+            "id": 1015,
+            "label": "Finding a responder",
+            "note": "Automatic dispatch is checking available response units. Automatically resolving the emergency community before routing."
+          },
+          {
+            "id": 1016,
+            "label": "Update",
+            "note": "AI assist recorded suggestions for official review"
+          }
+        ]
+      },
+      "after": {
+        "triage": {},
+        "ai_assist": {
+          "model": "gemma4:31b",
+          "status": "ok",
+          "applied": {
+            "area": null,
+            "street": null,
+            "category": null
+          },
+          "suggested": {
+            "area": null,
+            "street": null,
+            "category": "fire"
+          },
+          "started_at": "2026-09-09T10:21:21.400402+00:00",
+          "description": "The resident reported a fire.",
+          "finished_at": "2026-09-09T10:21:24.086731+00:00",
+          "model_family": "gemma",
+          "unresolved_fields": [
+            "location"
+          ],
+          "description_status": "ready",
+          "presentation_version": 1
+        },
+        "updated_at": "2026-09-09T10:21:28.981847+00:00",
+        "events": [
+          {
+            "id": 1014,
+            "label": "Emergency received",
+            "note": "Your emergency has been received."
+          },
+          {
+            "id": 1015,
+            "label": "Finding a response unit",
+            "note": "The system is confirming the emergency location before assigning a response unit."
+          },
+          {
+            "id": 1016,
+            "label": "Update",
+            "note": "AI assist recorded suggestions for official review"
+          }
+        ]
+      },
+      "before_hash": "2c7ea0e922fb61a46970e76258021f6657fccefffbb9e83c6fb0beb0652797ca",
+      "gaps": [
+        "No recoverable people_affected answer.",
+        "No recoverable injuries answer."
+      ]
+    }
+  ]
+}

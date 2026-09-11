@@ -53,6 +53,7 @@ import { EmergencyResolutionSheet } from "@/features/dashboard/components/respon
 import { useIncidentActions } from "@/features/dashboard/components/responder/use-incident-actions"
 import { EmergencyCommunityComments } from "@/features/dashboard/components/emergencies/community-comments"
 import { EmergencyResolutionBanner } from "@/features/dashboard/components/emergencies/emergency-resolution-banner"
+import { isEmergencyActive } from "@/features/dashboard/lib/status-vocabulary"
 import { emergencyDescription } from "@/features/dashboard/lib/emergency-description"
 import {
   emergencyResponderAssignments,
@@ -507,7 +508,7 @@ export function MobileEmergencyReportDetailPage({
       alert.barangay
   )
   const description = emergencyDescription(alert)
-  const settled = ["resolved", "closed"].includes(alert.status)
+  const settled = !isEmergencyActive(alert.status)
   const historicalResponders = emergencyResponderAssignments(alert)
   const responderActions = useIncidentActions({
     alert,

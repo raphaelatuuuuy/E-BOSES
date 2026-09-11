@@ -81,9 +81,9 @@ def display_location(alert) -> str:
         alert.address,
         alert.barangay,
     ):
-        if (candidate or "").strip():
+        if (candidate or "").strip() and "pinned" not in candidate.lower():
             return candidate.strip()
-    return "Location needs confirmation"
+    return "Pinned location · Address unavailable" if alert.latitude is not None and alert.longitude is not None else "Location needs confirmation"
 
 
 def resolve_alert_location(alert_id: int) -> dict:

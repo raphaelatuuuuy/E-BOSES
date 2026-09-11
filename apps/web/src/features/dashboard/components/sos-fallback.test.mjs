@@ -17,6 +17,9 @@ const GOLDEN_PATH = fileURLToPath(
     import.meta.url
   )
 )
+const TILE_LAYER_PATH = fileURLToPath(
+  new URL("./map/tile-layers.ts", import.meta.url)
+)
 
 test("buildEmergencySmsHref creates an explicit native SMS draft for a configured number", () => {
   assert.equal(
@@ -107,6 +110,20 @@ test("golden fixtures render exactly what the backend parser expects", () => {
   }
 })
 
+test("long locations never discard answered triage questions", () => {
+  const message = buildEmergencySmsMessage({
+    emergencyType: "Flood",
+    readableArea: "Mayon Street, " + "Hacienda Heights, ".repeat(24),
+    triage: { peopleAffected: "one", detail: "waist", injuries: "yes" },
+    latitude: 14.650123,
+    longitude: 121.112345,
+  })
+  assert.ok(message.includes("1 person affected"))
+  assert.ok(message.includes("water is waist deep or higher"))
+  assert.ok(message.includes("someone is injured"))
+  assert.ok(message.includes("LOC:14.650123,121.112345"))
+})
+
 test("buildPinnedCoordinateAddress keeps a usable, honest location when geocoding is unavailable", () => {
   assert.deepEqual(buildPinnedCoordinateAddress(14.6507, 121.1133), {
     primary: "Pinned location",
@@ -170,4 +187,12 @@ test("offline street matching measures the road segment and rejects weak GPS", (
   assert.equal(estimate?.name, "Actual Road")
   assert.ok(estimate.distanceMeters < 10)
   assert.equal(estimateOfflineStreet(14.65005, 121.11, 5000, config), null)
+})
+
+test("offline maps draw saved boundaries or bounds instead of a grey panel", () => {
+  const source = readFileSync(TILE_LAYER_PATH, "utf8")
+  assert.match(source, /community\.boundaryGeometry/)
+  assert.match(source, /L\.rectangle/)
+  assert.match(source, /community\.streets/)
+  assert.match(source, /tileerror/)
 })
