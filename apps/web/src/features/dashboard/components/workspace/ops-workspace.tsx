@@ -342,7 +342,7 @@ function MobileSheetLayout({
       {/* The queue pane owns scrolling on mobile. Keeping an overflow-y-auto
           host here creates a nested scroll container and traps touch/wheel
           gestures before the queue can reach its bottom. */}
-      <div className="min-h-0 flex-1 overflow-hidden">{list?.node}</div>
+      <div className="min-h-0 flex-1 overflow-visible max-lg:overflow-visible lg:overflow-hidden">{list?.node}</div>
 
       {detail && detailOpen ? (
         <div

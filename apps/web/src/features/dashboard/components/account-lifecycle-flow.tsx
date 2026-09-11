@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { ChevronDownIcon } from "lucide-react"
 import { toast } from "sonner"
 
@@ -51,9 +52,37 @@ export function AccountLifecycleFlow({
   const [step, setStep] = useState<FlowStep>("reason")
   const [reason, setReason] = useState("")
   const [reasonOpen, setReasonOpen] = useState(false)
+  const [reasonPos, setReasonPos] = useState<{ top: number; left: number; width: number } | null>(null)
+  const reasonTriggerRef = useRef<HTMLButtonElement>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [feedback, setFeedback] = useState("")
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!reasonOpen) return
+    const update = () => {
+      const rect = reasonTriggerRef.current?.getBoundingClientRect()
+      if (!rect) return
+      setReasonPos({ top: rect.bottom + 6, left: rect.left, width: rect.width })
+    }
+    update()
+    window.addEventListener("resize", update)
+    window.addEventListener("scroll", update, true)
+    function onPointerDown(event: PointerEvent) {
+      if (!reasonTriggerRef.current?.contains(event.target as Node)) setReasonOpen(false)
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setReasonOpen(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("resize", update)
+      window.removeEventListener("scroll", update, true)
+      document.removeEventListener("pointerdown", onPointerDown)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [reasonOpen])
 
   function handleBack() {
     if (step === "reason") {
@@ -131,26 +160,25 @@ export function AccountLifecycleFlow({
     <SheetDialog
       open={open}
       onClose={onClose}
-      onBack={step !== "reason" && step !== "deleteSuccess" ? handleBack : undefined}
+      onBack={step === "deleteSuccess" ? undefined : handleBack}
       title={headerTitle}
-      size="wide"
+      size="compact"
       footer={
         step === "reason" ? (
-          reason && !reasonOpen ? (
-            <div className="flex gap-2">
-              <SheetSecondaryButton onClick={onClose} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">
-                Cancel
-              </SheetSecondaryButton>
-              <SheetPrimaryButton
-                tone="accent"
-                type="button"
-                onClick={() => setStep("means")}
-                className="flex-1 text-[15px]"
-              >
-                Continue
-              </SheetPrimaryButton>
-            </div>
-          ) : null
+          <div className="flex gap-2">
+            <SheetSecondaryButton onClick={onClose} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">
+              Cancel
+            </SheetSecondaryButton>
+            <SheetPrimaryButton
+              tone="accent"
+              type="button"
+              disabled={!reason}
+              onClick={() => setStep("means")}
+              className="flex-1 text-[15px]"
+            >
+              Continue
+            </SheetPrimaryButton>
+          </div>
         ) : step === "means" ? (
           <div className="flex gap-2">
             <SheetSecondaryButton onClick={onClose} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">
@@ -222,8 +250,9 @@ export function AccountLifecycleFlow({
             </p>
           </div>
 
-          <div className="relative">
+          <div>
             <button
+              ref={reasonTriggerRef}
               type="button"
               onClick={() => setReasonOpen((v) => !v)}
               className={cn(
@@ -245,30 +274,43 @@ export function AccountLifecycleFlow({
               />
             </button>
 
-            {reasonOpen ? (
-              <div className="absolute left-0 right-0 top-full z-20 mt-1.5 max-h-[min(50vh,360px)] overflow-y-auto scrollbar-hide rounded-[14px] border-[1.5px] border-neutral-200 bg-white py-1 shadow-lg">
-                <p className="px-4 pb-1 pt-3 text-[13px] font-medium text-neutral-400">
-                  Reasons for deactivating
-                </p>
-                {DEACTIVATE_REASONS.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => {
-                      setReason(item)
-                      setReasonOpen(false)
-                      setStep("means")
+            {reasonOpen && reasonPos && typeof document !== "undefined"
+              ? createPortal(
+                  <div
+                    className="scrollbar-hide overflow-y-auto rounded-[14px] border-[1.5px] border-neutral-200 bg-white py-1 shadow-lg"
+                    style={{
+                      position: "fixed",
+                      top: Math.min(reasonPos.top, window.innerHeight - 420),
+                      left: reasonPos.left,
+                      width: reasonPos.width,
+                      maxHeight: 400,
+                      zIndex: 500,
                     }}
-                    className={cn(
-                      "flex w-full px-4 py-3 text-left text-[15px] font-medium text-neutral-900 transition-colors hover:bg-neutral-50",
-                      reason === item && "bg-neutral-50",
-                    )}
                   >
-                    {item}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+                    <p className="px-4 pb-1 pt-3 text-[13px] font-medium text-neutral-400">
+                      Reasons for deactivating
+                    </p>
+                    {DEACTIVATE_REASONS.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => {
+                          setReason(item)
+                          setReasonOpen(false)
+                          setStep("means")
+                        }}
+                        className={cn(
+                          "flex w-full px-4 py-3 text-left text-[15px] font-medium text-neutral-900 transition-colors hover:bg-neutral-50",
+                          reason === item && "bg-neutral-50",
+                        )}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>,
+                  document.body,
+                )
+              : null}
           </div>
         </div>
       ) : null}
@@ -276,7 +318,7 @@ export function AccountLifecycleFlow({
       {step === "means" ? (
         <div className="space-y-4">
           <h2 className="text-[1.2rem] font-bold leading-tight tracking-tight text-neutral-900">
-            Deactivating your account means\u2026
+            Deactivating your account means…
           </h2>
           <ul className="list-disc space-y-3 pl-5 text-[14px] leading-relaxed text-neutral-700">
             <li>

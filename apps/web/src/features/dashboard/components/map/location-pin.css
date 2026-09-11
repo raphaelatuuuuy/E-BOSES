@@ -15,6 +15,21 @@
   animation-delay: 0.9s;
   background: rgba(0, 0, 0, 0.22);
 }
+
+.eboses-map-blocked.leaflet-container,
+.eboses-map-blocked .leaflet-grab,
+.eboses-map-blocked .leaflet-interactive {
+  cursor: not-allowed !important;
+}
+.eboses-map-blocked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+  background: rgba(220, 38, 38, 0.1);
+}
+
 @keyframes eboses-pin-scan {
   0% {
     transform: scale(1);

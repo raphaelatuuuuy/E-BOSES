@@ -204,18 +204,6 @@
     "osm_id": 7328647585
   },
   {
-    "id": "osm-n7456304179",
-    "name": "Concepcion Dos Health Center",
-    "type": "health_center",
-    "label": "Health Center",
-    "sector": "public",
-    "latitude": 14.6384419,
-    "longitude": 121.111855,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 7456304179
-  },
-  {
     "id": "osm-n10647910555",
     "name": "Watsons",
     "type": "pharmacy",
@@ -238,18 +226,6 @@
     "source": "osm",
     "osm_type": "N",
     "osm_id": 10765216120
-  },
-  {
-    "id": "osm-n12006045373",
-    "name": "Sangguniang Pambarangay ng Concepcion Dos",
-    "type": "barangay_hall",
-    "label": "Barangay Hall",
-    "sector": "public",
-    "latitude": 14.638341,
-    "longitude": 121.1118178,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12006045373
   },
   {
     "id": "osm-n12014714040",
@@ -562,18 +538,6 @@
     "source": "osm",
     "osm_type": "W",
     "osm_id": 93320662
-  },
-  {
-    "id": "osm-w102524399",
-    "name": "Concepcion Dos Barangay Hall",
-    "type": "barangay_hall",
-    "label": "Barangay Hall",
-    "sector": "public",
-    "latitude": 14.6384033,
-    "longitude": 121.1117723,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 102524399
   },
   {
     "id": "osm-w104246692",

@@ -1,7 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  Building2Icon,
-  CheckIcon,
   FootprintsIcon,
   HomeIcon,
   MinusIcon,
@@ -189,10 +187,6 @@ function AlertsLeafletMapInner({
   onResetLayers,
   onMapInteract,
   counts,
-  communities,
-  currentCommunityId,
-  boundaryVisible,
-  onCommunitySelect,
 }: {
   snapshot: LiveMapSnapshot
   layers: Record<LayerKey, boolean>
@@ -203,10 +197,6 @@ function AlertsLeafletMapInner({
   onResetLayers: () => void
   onMapInteract?: () => void
   counts: { concerns: number; advisories: number }
-  communities: LiveMapSnapshot["communities"]
-  currentCommunityId: string | null
-  boundaryVisible: boolean
-  onCommunitySelect: (communityId: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -301,7 +291,6 @@ function AlertsLeafletMapInner({
   const [locating, setLocating] = useState(false)
   const [svPick, setSvPick] = useState(false)
   const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
-  const [communityListOpen, setCommunityListOpen] = useState(false)
   const streetLines = useMemo<StreetLine[]>(() => {
     return snapshot.map.streets.streets.flatMap((street) =>
       (street.geometries ?? []).flatMap((geometry) =>
@@ -643,7 +632,7 @@ function AlertsLeafletMapInner({
       }
     )
     boundaryRef.current = layer
-    if (layers.boundary && boundaryVisible) layer.addTo(map)
+    if (layers.boundary) layer.addTo(map)
     if (mapViewChanged || !boundaryFittedRef.current) {
       const bounds = layer.getBounds()
       if (bounds.isValid()) {
@@ -656,7 +645,6 @@ function AlertsLeafletMapInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     boundaryGeometry,
-    boundaryVisible,
     mapReady,
     mapViewKey,
     snapshot.map.center.latitude,
@@ -668,11 +656,11 @@ function AlertsLeafletMapInner({
     const map = mapRef.current
     const boundary = boundaryRef.current
     if (!map || !boundary) return
-    if (layers.boundary && boundaryVisible && !map.hasLayer(boundary))
+    if (layers.boundary && !map.hasLayer(boundary))
       boundary.addTo(map)
-    if ((!layers.boundary || !boundaryVisible) && map.hasLayer(boundary))
+    if (!layers.boundary && map.hasLayer(boundary))
       map.removeLayer(boundary)
-  }, [layers.boundary, boundaryGeometry, boundaryVisible, mapReady])
+  }, [layers.boundary, boundaryGeometry, mapReady])
 
   // Streets are reference geometry: hundreds of polylines that change only when
   // the OSM catalog does. They own their own group so a location ping or a
@@ -1134,14 +1122,6 @@ function AlertsLeafletMapInner({
   }, [selected?.kind, selected?.id, mapReady])
 
   const layerRows = alertLayerRows(counts)
-  const communityOptions = useMemo(() => {
-    if (!currentCommunityId) return communities
-    return [...communities].sort((a, b) => {
-      const aIsCurrent = a.id === currentCommunityId ? 1 : 0
-      const bIsCurrent = b.id === currentCommunityId ? 1 : 0
-      return bIsCurrent - aIsCurrent
-    })
-  }, [communities, currentCommunityId])
 
   return (
     // `absolute inset-0`, not `size-full`. A percentage height only resolves
@@ -1208,62 +1188,7 @@ function AlertsLeafletMapInner({
             >
               <FootprintsIcon className="size-5" strokeWidth={1.9} />
             </MapControlButton>
-            {communities.length > 1 ? (
-              <MapControlButton
-                tone="light"
-                divider
-                label="See other communities"
-                active={communityListOpen}
-                onClick={() => setCommunityListOpen((value) => !value)}
-              >
-                <Building2Icon className="size-5" strokeWidth={1.9} />
-              </MapControlButton>
-            ) : null}
           </MapControlStack>
-
-          {communities.length > 1 && communityListOpen ? (
-            <div className="absolute top-[calc(100%+8px)] right-0 z-[70] flex max-h-[min(18rem,calc(100vh-6rem))] w-60 min-w-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,0.18)]">
-              <p className="shrink-0 border-b border-neutral-100 px-4 py-3 text-[13px] font-semibold text-neutral-900">
-                See other communities
-              </p>
-              <div className="min-h-0 flex-1 overflow-y-auto py-1">
-                {communityOptions.map((community) => {
-                  const isCurrent = community.id === currentCommunityId
-                  return (
-                    <button
-                      key={community.id}
-                      type="button"
-                      onClick={() => {
-                        setCommunityListOpen(false)
-                        onCommunitySelect(community.id)
-                      }}
-                      className="flex w-full items-start gap-2 px-4 py-2.5 text-left text-[14px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50"
-                    >
-                      {isCurrent ? (
-                        <CheckIcon
-                          className="size-4 shrink-0 text-brand-orange"
-                          strokeWidth={2.25}
-                        />
-                      ) : (
-                        <Building2Icon
-                          className="size-4 shrink-0 text-neutral-500"
-                          strokeWidth={1.8}
-                        />
-                      )}
-                      <span className="min-w-0 flex-1 leading-snug break-words whitespace-normal">
-                        {community.name}
-                        {isCurrent ? (
-                          <span className="mt-0.5 block text-[11px] font-medium text-neutral-500">
-                            Your community
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          ) : null}
         </div>
 
         {svPick ? (

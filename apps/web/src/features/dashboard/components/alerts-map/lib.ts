@@ -28,7 +28,7 @@ export type Selection = { kind: "concern" | "emergency"; id: number } | null
 export type StreetLine = { name: string; line: leaflet.LatLngTuple[] }
 
 export const defaultLayers: Record<LayerKey, boolean> = {
-  boundary: true,
+  boundary: false,
   streets: false,
   concerns: true,
   advisories: true,

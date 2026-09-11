@@ -24,6 +24,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
   checkConcernMedia,
+  checkGuestConcernMedia,
   createConcern,
   getConcern,
   precheckConcern,
@@ -191,7 +192,7 @@ export function CreateReportDialog({
     addressSecondary?: string
     source?: "gps" | "manual_pin"
   } | null
-  onGuestSubmitted?: () => void
+  onGuestSubmitted?: (assignedUnit: { name: string; short_name: string } | null) => void
 } = {}) {
   const navigate = useNavigate()
   const { user } = useAuthSession()
@@ -257,13 +258,13 @@ export function CreateReportDialog({
     [mediaFiles]
   )
   const displayName = guest
-    ? "Anonymous"
+    ? "Community Reporter"
     : user
       ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
       : "Resident"
   const letter = (
     guest
-      ? "A"
+      ? "C"
       : user?.firstName?.[0] || user?.lastName?.[0] || displayName[0] || "U"
   ).toUpperCase()
   const rawStreet = (user?.address || "").split(",")[0]?.trim() || ""
@@ -564,6 +565,7 @@ export function CreateReportDialog({
   async function addFiles(files: File[]): Promise<File[]> {
     const errors: string[] = []
     const valid: File[] = []
+    const candidates: File[] = []
     // A new attachment set needs a fresh precheck; never carry a verdict from
     // an earlier photo into the new preview.
     setPhotoVerdicts([])
@@ -589,16 +591,46 @@ export function CreateReportDialog({
         errors.push("This file is already selected.")
         continue
       }
+      candidates.push(file)
+    }
+
+    const room = Math.max(0, MAX_FILES - mediaFiles.length)
+    const filesToCheck = candidates.slice(0, room)
+    if (candidates.length > room) {
+      errors.push(`You can attach up to ${MAX_FILES} photos.`)
+    }
+
+    if (filesToCheck.length > 0) {
       try {
+        // Check the whole batch once so the AI authenticity review does not
+        // make the resident wait once per attachment.
         const checkData = new FormData()
-        checkData.append("media", file)
-        if (!guest) await checkConcernMedia(checkData)
-        valid.push(file)
+        for (const file of filesToCheck) checkData.append("media", file)
+        const result = guest
+          ? await checkGuestConcernMedia(checkData)
+          : await checkConcernMedia(checkData)
+        const checkedFiles = result.files ?? []
+        const accepted = checkedFiles
+          .map((checkedFile, resultIndex) => ({
+            ...checkedFile,
+            index:
+              Number.isInteger(checkedFile.index) ? checkedFile.index : resultIndex,
+          }))
+          .filter((checkedFile) => checkedFile.status === "accepted")
+        const rejectedMessages = checkedFiles
+          .filter((checkedFile) => checkedFile.status === "rejected")
+          .map((checkedFile) => checkedFile.message)
+          .filter(Boolean)
+        valid.push(
+          ...accepted
+            .map((checkedFile) => filesToCheck[checkedFile.index])
+            .filter((file): file is File => Boolean(file))
+        )
+        errors.push(...rejectedMessages)
       } catch (error) {
         errors.push(mediaErrorFromUnknown(error))
       }
     }
-    const room = Math.max(0, MAX_FILES - mediaFiles.length)
     const added = valid.slice(0, room)
     setMediaFiles((prev) => [...prev, ...added])
     const unique = [...new Set(errors.filter(Boolean))]
@@ -827,11 +859,10 @@ export function CreateReportDialog({
     setIsSubmitting(true)
     try {
       if (guest) {
-        await submitGuestConcern(formData)
+        const result = await submitGuestConcern(formData)
         setOpen(false)
         resetForm()
-        onGuestSubmitted?.()
-        toast.success("Report submitted.")
+        onGuestSubmitted?.(result.assigned_unit ?? null)
         return
       }
       const report = await createConcern(formData, {
@@ -1089,7 +1120,9 @@ export function CreateReportDialog({
       ) : null}
 
       <Dialog
-        open={open}
+        // The location picker is a child flow. Hide this sheet while it is
+        // active so the two mobile sheets never stack on top of each other.
+        open={open && !locationOpen}
         onClose={requestClose}
         maxW="max-w-[520px]"
         mobileSheet
@@ -1144,7 +1177,7 @@ export function CreateReportDialog({
                       </p>
                       {guest ? (
                         <p className="truncate text-[13px] leading-tight text-neutral-500">
-                          No account details shared
+                          Only your report and location are shared
                         </p>
                       ) : userStreet ? (
                         <p className="truncate text-[13px] leading-tight text-neutral-500">
@@ -1262,48 +1295,6 @@ export function CreateReportDialog({
                     ) : null}
 
                     {(() => {
-                      // The ring alone says a photo has a problem but never which
-                      // one. A resident asked to fix something has to be told what.
-                      const notes = photoVerdicts
-                        .filter(
-                          (verdict) =>
-                            verdict.message && verdict.state !== "relevant"
-                        )
-                        .map((verdict) => ({
-                          key: `${verdict.index}-${verdict.state}`,
-                          label:
-                            mediaFiles.length > 1
-                              ? `Photo ${verdict.index + 1}`
-                              : "",
-                          message: verdict.message,
-                        }))
-                      if (notes.length === 0) return null
-                      return (
-                        <ul
-                          className="mt-2 list-none space-y-1 text-xs font-medium text-destructive"
-                          role="alert"
-                        >
-                          {notes.map((note) => (
-                            <li
-                              key={note.key}
-                              className="flex items-start gap-1.5"
-                            >
-                              <CircleXIcon
-                                className="mt-0.5 size-3.5 shrink-0"
-                                strokeWidth={2}
-                                aria-hidden
-                              />
-                              <span>
-                                {note.label ? `${note.label}: ` : ""}
-                                {note.message}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )
-                    })()}
-
-                    {(() => {
                       const messages = [
                         fieldErrors.concern,
                         ...(fieldErrors.media
@@ -1406,7 +1397,9 @@ export function CreateReportDialog({
                         accept={ACCEPT_STRING}
                         multiple
                         aria-label="Add report photos"
-                        className="sr-only"
+                        className="hidden"
+                        tabIndex={-1}
+                        hidden
                         onChange={(e) => {
                           void addFiles(Array.from(e.target.files ?? []))
                           e.target.value = ""
@@ -1418,7 +1411,9 @@ export function CreateReportDialog({
                         accept="image/jpeg,image/png"
                         capture="environment"
                         aria-label="Take a report photo"
-                        className="sr-only"
+                        className="hidden"
+                        tabIndex={-1}
+                        hidden
                         onChange={(e) => {
                           handleCameraCapture(Array.from(e.target.files ?? []))
                           e.target.value = ""
@@ -1499,6 +1494,7 @@ export function CreateReportDialog({
           initialLng={locationPin?.lng}
           initialAddress={address}
           signup={guest}
+          guestReport={guest}
           coverageScope="served"
           onConfirm={(payload) => {
             setPhotoVerdicts([])

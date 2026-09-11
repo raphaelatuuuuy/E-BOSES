@@ -584,6 +584,16 @@ export type LlmDecisionLogEntry = {
   concern_id?: number | null
   record_type?: "concern" | "emergency" | "verification"
   priority?: "low" | "moderate" | "high" | "critical" | null
+  tracking_id?: string | null
+  report_title?: string | null
+  report_description?: string | null
+  address?: string | null
+  reporter?: {
+    name: string
+    initials: string
+    anonymous: boolean
+  } | null
+  assigned_unit?: { id: number; name: string } | null
   final_decision?: {
     action: string
     label: string
@@ -609,6 +619,7 @@ export type LlmDecisionLogEntry = {
     latitude?: number
     longitude?: number
     image?: string
+    image_url?: string
   } | null
 }
 

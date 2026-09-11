@@ -109,6 +109,21 @@ export function SettingsWorkspace({
     setFlow(null)
     setPanelState("account")
   }
+  const openAddressFlow = () => {
+    setFlow(null)
+    setLifecycleOpen(false)
+    setAddressFlowOpen(true)
+  }
+  const openLifecycleFlow = () => {
+    setFlow(null)
+    setAddressFlowOpen(false)
+    setLifecycleOpen(true)
+  }
+  const openAccountFlow = (next: AccountFlow) => {
+    setAddressFlowOpen(false)
+    setLifecycleOpen(false)
+    setFlow(next)
+  }
 
   /**
    * The pop-up owns its panel outright. Writing `?panel=…` from a dialog also
@@ -315,16 +330,16 @@ export function SettingsWorkspace({
 
   const accountPanel = (
     <AccountPanel
-      onOpenFlow={setFlow}
+      onOpenFlow={openAccountFlow}
       fullName={
         [user?.firstName, user?.middleName, user?.lastName].filter(Boolean).join(" ").trim()
       }
       email={user?.email ?? ""}
       phoneE164={user?.phone_number ?? ""}
       displayAddress={displayAddress}
-      onOpenAddressFlow={() => setAddressFlowOpen(true)}
+      onOpenAddressFlow={openAddressFlow}
       pendingDeletion={pendingDeletion}
-      onOpenLifecycle={() => setLifecycleOpen(true)}
+      onOpenLifecycle={openLifecycleFlow}
     />
   )
 
@@ -374,7 +389,7 @@ export function SettingsWorkspace({
     return (
       <>
         <SheetDialog
-          open
+          open={!addressFlowOpen && !lifecycleOpen}
           onClose={closeDialog}
           onBack={
             flow

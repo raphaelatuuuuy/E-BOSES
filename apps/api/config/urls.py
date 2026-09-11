@@ -23,6 +23,7 @@ from apps.concerns.views import (
     BarangayEventManageListCreateView,
     BarangayEventTodayView,
     GuestConcernCreateView,
+    GuestConcernMediaCheckView,
 )
 from apps.config_summary import ConfigurationSummaryView
 from apps.concerns.system_api import (
@@ -37,6 +38,8 @@ from apps.emergencies.public_api import (
     PublicCommunityRequestView,
     PublicOfflineSosConfigView,
     PublicReportMapView,
+    PublicStreetViewCoverageView,
+    PublicStreetViewImageView,
 )
 from apps.emergencies.views import (
     ActiveCommunityBoundariesView,
@@ -126,5 +129,8 @@ urlpatterns = [
     ),
     path("api/public/community-requests/", PublicCommunityRequestView.as_view(), name="public-community-requests"),
     path("api/public/report-map/", PublicReportMapView.as_view(), name="public-report-map"),
+    path("api/public/street-view/coverage/", PublicStreetViewCoverageView.as_view(), name="public-street-view-coverage"),
+    path("api/public/street-view/image/", PublicStreetViewImageView.as_view(), name="public-street-view-image"),
+    path("api/public/concerns/guest/media-check/", GuestConcernMediaCheckView.as_view(), name="public-guest-concern-media-check"),
     path("api/public/concerns/guest/", GuestConcernCreateView.as_view(), name="public-guest-concern"),
 ]

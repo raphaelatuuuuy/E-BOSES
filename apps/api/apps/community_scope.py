@@ -1,13 +1,19 @@
 from django.db.models import Q
 from django.core.exceptions import ValidationError
 
+PRIMARY_COMMUNITY_CODE = "marikina-heights"
+
 
 def community_ids_for_user(user):
     if not user or not user.is_authenticated:
         return set()
     if user.is_superuser:
         from apps.emergencies.models import Community
-        return set(Community.objects.filter(status="active").values_list("id", flat=True))
+        return set(
+            Community.objects.filter(
+                status="active", code=PRIMARY_COMMUNITY_CODE
+            ).values_list("id", flat=True)
+        )
     ids = set(user.designations.filter(is_active=True, department__community__status="active").values_list("department__community_id", flat=True))
     profile = getattr(user, "resident_profile", None)
     if getattr(user, "role", None) == "resident" and profile and profile.community_id:

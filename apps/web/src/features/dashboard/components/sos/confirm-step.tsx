@@ -1,4 +1,4 @@
-import { PhoneIcon } from "lucide-react"
+import { AlertTriangleIcon, PhoneIcon } from "lucide-react"
 
 /**
  * Review + countdown ("confirm & send") step. Combined into one file since
@@ -40,24 +40,12 @@ export function SosConfirmStep({
             {submitting ? "…" : dispatchCountdown}
           </p>
         </div>
-        <p className="mt-5 text-[12px] font-bold tracking-wide text-white/55">
+        <p className="mt-5 text-[12px] font-bold tracking-wide text-white/55 uppercase">
           {submitting ? "Sending alert…" : "Broadcasting in"}
         </p>
         <p className="mt-2 max-w-xs text-[15px] font-medium text-white">
           Tap cancel if you sent this by accident.
         </p>
-        <div className="mt-6 w-full max-w-xs rounded-[18px] border border-white/10 bg-white/5 px-3 py-2.5 text-left text-[12px] text-white/70">
-          <p>
-            <span className="font-semibold text-white">
-              {typeLabel ?? "Emergency"}
-            </span>
-            {" · "}
-            {locationLabel || "Pinned location"}
-          </p>
-          <p className="mt-1 text-white/45">
-            After sending, cancellation requires a reason.
-          </p>
-        </div>
       </div>
     )
   }
@@ -93,7 +81,7 @@ export function SosConfirmStep({
 
       <div className="overflow-hidden rounded-[18px] border border-white/15">
         <div className="border-b border-white/10 px-4 py-3.5">
-          <p className="text-[11px] font-semibold tracking-wide text-brand-orange">
+          <p className="text-[11px] font-semibold tracking-wide text-brand-orange uppercase">
             Emergency type
           </p>
           <p className="mt-1 text-[15px] font-semibold text-white">
@@ -101,7 +89,7 @@ export function SosConfirmStep({
           </p>
         </div>
         <div className="border-b border-white/10 px-4 py-3.5">
-          <p className="text-[11px] font-semibold tracking-wide text-brand-orange">
+          <p className="text-[11px] font-semibold tracking-wide text-brand-orange uppercase">
             Location
           </p>
           <p className="mt-1 text-[15px] font-semibold text-white">
@@ -109,7 +97,7 @@ export function SosConfirmStep({
           </p>
         </div>
         <div className="px-4 py-3.5">
-          <p className="text-[11px] font-semibold tracking-wide text-brand-orange">
+          <p className="text-[11px] font-semibold tracking-wide text-brand-orange uppercase">
             Situation
           </p>
           <p className="mt-1 text-[15px] font-semibold text-white">
@@ -123,9 +111,16 @@ export function SosConfirmStep({
         </div>
       </div>
 
-      <div className="rounded-[18px] border border-neutral-400/40 bg-neutral-500/15 px-4 py-3 text-[13px] leading-5 text-white/90">
-        False or misleading alerts are logged. Repeated abuse can suspend your
-        account. Accidental alerts can be cancelled afterward with a reason.
+      <div className="flex items-start gap-3 rounded-[18px] border border-sos/40 bg-sos/15 px-4 py-3">
+        <AlertTriangleIcon
+          className="mt-0.5 size-5 shrink-0 text-sos-bright"
+          strokeWidth={2}
+          aria-hidden="true"
+        />
+        <p className="text-[13px] leading-5 font-medium text-sos-bright">
+          False or misleading alerts are logged and repeated abuse can suspend
+          your account.
+        </p>
       </div>
     </div>
   )

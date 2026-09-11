@@ -1,4 +1,5 @@
 from datetime import date
+from unittest.mock import patch
 
 from django.core.cache import cache
 from django.urls import reverse
@@ -138,6 +139,78 @@ class PublicCommunityBoundaryTests(APITestCase):
         response = self.client.get(reverse("public-community-boundary", args=[999999999]))
 
         self.assertEqual(response.status_code, 404)
+
+
+class PublicStreetViewCoverageTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+
+    @patch("apps.emergencies.public_api.nearest_street_panorama")
+    def test_returns_the_snapped_panorama_location(self, find_panorama):
+        find_panorama.return_value = {
+            "pano_id": "test-pano",
+            "captured_date": "2026-01",
+            "latitude": 14.650559,
+            "longitude": 121.120835,
+            "distance_meters": 30.1,
+        }
+
+        response = self.client.get(
+            reverse("public-street-view-coverage"),
+            {"latitude": "14.6506382", "longitude": "121.1205678"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "available")
+        self.assertEqual(response.data["latitude"], 14.650559)
+        self.assertEqual(response.data["longitude"], 121.120835)
+        self.assertEqual(response.data["distance_meters"], 30.1)
+        find_panorama.assert_called_once_with(
+            latitude=14.650638,
+            longitude=121.120568,
+            radius_meters=100,
+        )
+
+    def test_rejects_invalid_coordinates(self):
+        response = self.client.get(
+            reverse("public-street-view-coverage"),
+            {"latitude": "not-a-number", "longitude": "121.120568"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+
+class PublicStreetViewImageTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+
+    @patch("apps.emergencies.public_api.fetch_latest_street_imagery")
+    def test_returns_a_real_panorama_image(self, fetch_imagery):
+        from apps.concerns.ai.street_imagery import StreetImagery
+
+        fetch_imagery.return_value = StreetImagery(
+            pano_id="test-pano",
+            captured_date="2026-01",
+            latitude=14.650559,
+            longitude=121.120835,
+            distance_meters=30.1,
+            image_b64="cGhvdG8=",
+        )
+
+        response = self.client.get(
+            reverse("public-street-view-image"),
+            {"latitude": "14.6506382", "longitude": "121.1205678"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "available")
+        self.assertEqual(response.data["image"], "data:image/jpeg;base64,cGhvdG8=")
+        self.assertEqual(response.data["latitude"], 14.650559)
+        fetch_imagery.assert_called_once_with(
+            latitude=14.65064,
+            longitude=121.12057,
+            radius_meters=100,
+        )
 
 
 class PublicCommunityRequestTests(APITestCase):

@@ -2,10 +2,12 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { toast } from "sonner"
 import { ArrowLeftIcon, CheckIcon, PhoneIcon, XIcon } from "lucide-react"
+import { ApiError } from "@/lib/api"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
+  checkEmergencyMedia,
   createEmergency,
   sendEmergencyChat,
   getActiveEmergency,
@@ -35,7 +37,7 @@ import {
   emergencies,
   emergencyOptionsFromCategories,
 } from "@/features/dashboard/components/sos/emergency-catalog"
-import { SosDetailsStep } from "@/features/dashboard/components/sos/details-step"
+import { SosDetailsStep, SOS_MAX_FILES, sosPhotoError } from "@/features/dashboard/components/sos/details-step"
 import {
   SosTriageStep,
   hasDetailQuestion,
@@ -163,7 +165,7 @@ function SosShell({
         aria-describedby={subtitle ? subtitleId : undefined}
         className={cn(
           "relative z-10 flex w-full flex-col overflow-hidden border border-white/10 bg-brand-navy text-white shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
-          "h-[100dvh] max-h-[100dvh] rounded-none sm:h-auto sm:max-h-[min(92dvh,760px)] sm:max-w-[440px] sm:rounded-[28px]",
+          "max-h-[92dvh] rounded-t-[28px] sm:h-auto sm:max-h-[min(92dvh,760px)] sm:max-w-[440px] sm:rounded-[28px]",
           "md:max-h-[min(92dvh,820px)] md:min-h-[420px]",
           "md:w-[min(480px,92vw)] md:max-w-[min(720px,94vw)] md:min-w-[420px]",
           // CSS `resize` only works on a box that is not overflow:visible, so
@@ -175,7 +177,10 @@ function SosShell({
           "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
         )}
       >
-        <div className="flex shrink-0 items-start gap-2 px-5 pt-5 pb-4 max-sm:pt-[max(1.25rem,env(safe-area-inset-top))]">
+        <div className="flex shrink-0 flex-col items-center px-5 pt-2 pb-1">
+          <span aria-hidden className="mb-1 h-1.5 w-11 shrink-0 rounded-full bg-white/25 sm:hidden" />
+        </div>
+        <div className="flex shrink-0 items-center gap-2 px-5 pt-1 pb-4">
           {showBack ? (
             <button
               type="button"
@@ -277,6 +282,9 @@ export function SosWizard({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [submitError, setSubmitError] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [mediaFiles, setMediaFiles] = useState<File[]>([])
+  const [mediaError, setMediaError] = useState<string | null>(null)
+  const [checkingMedia, setCheckingMedia] = useState(false)
   const [dispatchCountdown, setDispatchCountdown] = useState(5)
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine
@@ -294,6 +302,7 @@ export function SosWizard({
     locationSource: "gps" | "manual_pin" | "network" | "sms" | "sms_landmark"
     locationAccuracy: number | null
     triage: SosTriageAnswers
+    media?: File[]
   }) {
     const formData = new FormData()
     formData.append("client_request_id", payload.clientRequestId)
@@ -308,7 +317,81 @@ export function SosWizard({
     if (Object.keys(payload.triage).length) {
       formData.append("triage", JSON.stringify(toServerTriage(payload.triage)))
     }
+    for (const file of payload.media ?? []) formData.append("media", file)
     return formData
+  }
+
+  function sosCheckErrorMessage(error: unknown): string {
+    if (
+      error instanceof ApiError &&
+      error.data &&
+      typeof error.data === "object"
+    ) {
+      const data = error.data as Record<string, unknown>
+      const media = data.media
+      if (Array.isArray(media) && media.length > 0) {
+        return String(media[0])
+      }
+      const detail = data.detail
+      if (typeof detail === "string") return detail
+    }
+    if (error instanceof Error && error.message) return error.message
+    return "This photo could not be validated."
+  }
+
+  async function addSosFiles(files: File[]) {
+    const errors: string[] = []
+    const seen = [...mediaFiles]
+    const candidates: File[] = []
+    for (const file of files) {
+      const error = sosPhotoError(file, seen)
+      if (error) {
+        errors.push(error)
+        continue
+      }
+      seen.push(file)
+      candidates.push(file)
+    }
+    const room = Math.max(0, SOS_MAX_FILES - mediaFiles.length)
+    const filesToCheck = candidates.slice(0, room)
+    if (candidates.length > room) {
+      errors.push(`You can attach up to ${SOS_MAX_FILES} photos.`)
+    }
+    if (filesToCheck.length > 0) {
+      // One batch check so authenticity, duplicate, and AI verdicts land
+      // immediately instead of once per attachment.
+      setCheckingMedia(true)
+      try {
+        const checkData = new FormData()
+        for (const file of filesToCheck) checkData.append("media", file)
+        const result = await checkEmergencyMedia(checkData)
+        const checkedFiles = result.files ?? []
+        const accepted = checkedFiles
+          .map((checkedFile, resultIndex) => ({
+            ...checkedFile,
+            index: Number.isInteger(checkedFile.index)
+              ? checkedFile.index
+              : resultIndex,
+          }))
+          .filter((checkedFile) => checkedFile.status === "accepted")
+        const rejectedMessages = checkedFiles
+          .filter((checkedFile) => checkedFile.status === "rejected")
+          .map((checkedFile) => checkedFile.message)
+          .filter(Boolean)
+        setMediaFiles((previous) => [
+          ...previous,
+          ...accepted
+            .map((checkedFile) => filesToCheck[checkedFile.index])
+            .filter((file): file is File => Boolean(file)),
+        ])
+        errors.push(...rejectedMessages)
+      } catch (error) {
+        errors.push(sosCheckErrorMessage(error))
+      } finally {
+        setCheckingMedia(false)
+      }
+    }
+    setMediaError(errors.length ? errors[0]! : null)
   }
 
   async function retryQueuedEmergencies() {
@@ -395,6 +478,8 @@ export function SosWizard({
     setTriage({})
     setFieldErrors({})
     setSubmitError("")
+    setMediaFiles([])
+    setMediaError(null)
     setDispatchCountdown(5)
     setSubmitting(false)
   }
@@ -466,9 +551,9 @@ export function SosWizard({
       }
       if (
         isOnline &&
-        selectedLocation.locationCheck &&
-        (!selectedLocation.locationCheck.accepted ||
-          !selectedLocation.locationCheck.acceptance_zone?.within)
+        (!selectedLocation.locationCheck ||
+          !selectedLocation.locationCheck.accepted ||
+          selectedLocation.locationCheck.status === "far")
       ) {
         setFieldErrors({
           location: friendlyLocationMessage(selectedLocation.locationCheck),
@@ -499,10 +584,14 @@ export function SosWizard({
       setSubmitError(OFFLINE_SUBMIT_ERROR)
       setStatusAnnouncement(OFFLINE_SUBMIT_ERROR)
       setDispatchCountdown(5)
+      if (mediaFiles.length > 0) {
+        toast.info("Photos need connection and were not included.")
+      }
       await enqueueCurrentEmergency().catch(() => {})
       return
     }
     setSubmitError("")
+    setMediaError(null)
     setSubmitting(true)
     setStatusAnnouncement("Sending the emergency alert now.")
     try {
@@ -517,6 +606,7 @@ export function SosWizard({
         locationAccuracy: location.accuracy ?? null,
         address: addr,
         triage,
+        media: mediaFiles,
       })
 
       const alert = await createEmergency(formData)
@@ -546,12 +636,18 @@ export function SosWizard({
       } catch {
         /* keep error */
       }
-      setStep("review")
       const message =
         error instanceof Error
           ? error.message
           : "Could not send emergency alert."
-      setSubmitError(message)
+      if (mediaFiles.length > 0 && /photo|media|image/i.test(message)) {
+        setSubmitError("")
+        setMediaError(message)
+        setStep("location")
+      } else {
+        setStep("review")
+        setSubmitError(message)
+      }
       setStatusAnnouncement(`Emergency alert was not sent. ${message}`)
       toast.error(message)
       try {
@@ -625,7 +721,7 @@ export function SosWizard({
     step === "countdown"
       ? submitting
         ? "Sending the emergency alert now. It can no longer be cancelled from this screen."
-        : `Emergency alert will send in ${dispatchCountdown} ${dispatchCountdown === 1 ? "second" : "seconds"}. Activate Cancel before send to stop it.`
+        : `Emergency alert will send in ${dispatchCountdown} ${dispatchCountdown === 1 ? "second" : "seconds"}. Activate Cancel to stop it.`
       : ""
 
   function announceSmsFallback() {
@@ -639,10 +735,11 @@ export function SosWizard({
   const locationCanContinue = Boolean(
     location &&
     isSosLocationReady(location) &&
-    (!isOnline ||
-      !location.locationCheck ||
-      (location.locationCheck.accepted &&
-        location.locationCheck.acceptance_zone?.within))
+      (!isOnline ||
+      Boolean(
+        location.locationCheck?.accepted &&
+          location.locationCheck.status !== "far"
+      ))
   )
 
   const wizardFooter =
@@ -679,26 +776,36 @@ export function SosWizard({
               "disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40 disabled:active:scale-100"
             )}
           >
-            {step === "review" ? "Send SOS in 5 seconds" : "Next"}
+            {step === "review" ? "Send SOS" : "Next"}
           </button>
         )}
       </div>
     ) : (
-      <button
-        type="button"
-        onClick={() => {
-          setStep("review")
-          setDispatchCountdown(5)
-          setStatusAnnouncement(
-            "Emergency alert cancelled before sending. Your details are still available."
-          )
-          toast.info("Alert cancelled before sending.")
-        }}
-        disabled={submitting}
-        className="h-[52px] w-full rounded-full border border-sos/50 bg-sos/15 text-[16px] font-semibold text-sos-bright transition-colors hover:bg-sos/25 disabled:opacity-60"
-      >
-        {submitting ? "Sending…" : "Cancel before send"}
-      </button>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setStep("review")
+            setDispatchCountdown(5)
+            setStatusAnnouncement(
+              "Emergency alert cancelled before sending. Your details are still available."
+            )
+            toast.info("Alert cancelled before sending.")
+          }}
+          disabled={submitting}
+          className="h-[52px] flex-1 rounded-full border border-sos/50 bg-sos/15 text-[16px] font-semibold text-sos-bright transition-colors hover:bg-sos/25 disabled:opacity-60"
+        >
+          {submitting ? "Sending…" : "Cancel"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void submitEmergency()}
+          disabled={submitting}
+          className="h-[52px] flex-[1.4] rounded-full bg-sos text-[16px] font-semibold text-white transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-60"
+        >
+          {submitting ? "Sending…" : "Send Immediately"}
+        </button>
+      </div>
     )
 
   return (
@@ -725,9 +832,7 @@ export function SosWizard({
         onClose={closeShell}
         title={stepTitle(step)}
         subtitle={
-          step === "countdown"
-            ? "Tap cancel if this was accidental"
-            : `Step ${Math.min(stepIndex(step), WIZARD_STEP_COUNT)} of 4 · Emergency SOS`
+          step === "countdown" ? "Tap cancel if this was accidental" : undefined
         }
         showBack={step !== "category" && step !== "countdown"}
         onBack={goBack}
@@ -765,7 +870,7 @@ export function SosWizard({
                     </span>
                     <span
                       className={cn(
-                        "truncate text-[10px] font-semibold",
+                        "truncate text-[11px] font-semibold",
                         active
                           ? "text-white"
                           : done
@@ -805,7 +910,6 @@ export function SosWizard({
         {step === "location" ? (
           <div className="flex flex-col gap-4">
             <SosLocationStep value={location} onChange={setLocation} />
-            <SosDetailsStep note={note} onNoteChange={setNote} />
             {fieldErrors.location ? (
               <p
                 className="text-[13px] font-medium text-sos-bright"
@@ -818,15 +922,30 @@ export function SosWizard({
         ) : null}
 
         {step === "triage" ? (
-          <SosTriageStep
-            categoryCode={emergency || ""}
-            value={triage}
-            onChange={(next) => {
-              setTriage(next)
-              setFieldErrors((c) => ({ ...c, triage: "" }))
-            }}
-            error={fieldErrors.triage}
-          />
+          <div className="flex flex-col gap-4">
+            <SosTriageStep
+              categoryCode={emergency || ""}
+              value={triage}
+              onChange={(next) => {
+                setTriage(next)
+                setFieldErrors((c) => ({ ...c, triage: "" }))
+              }}
+              error={fieldErrors.triage}
+            />
+            <SosDetailsStep
+              note={note}
+              onNoteChange={setNote}
+              online={isOnline}
+              checking={checkingMedia}
+              mediaFiles={mediaFiles}
+              mediaError={mediaError}
+              onAddFiles={(files) => void addSosFiles(files)}
+              onRemoveFile={(index) => {
+                setMediaFiles((previous) => previous.filter((_, i) => i !== index))
+                setMediaError(null)
+              }}
+            />
+          </div>
         ) : null}
 
         {step === "review" || step === "countdown" ? (

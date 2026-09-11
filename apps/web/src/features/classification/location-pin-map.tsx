@@ -26,6 +26,8 @@ import {
 } from "@/features/dashboard/components/map/street-view"
 
 const DEFAULT_CENTER: [number, number] = [14.5995, 120.9842]
+const STREET_LOOKUP_DEBOUNCE_MS = 900
+const STREET_LOOKUP_MIN_INTERVAL_MS = 1_200
 
 export type LocationPin = { lat: number; lng: number }
 
@@ -74,6 +76,8 @@ export function LocationPinMap({
   const fittedRef = useRef(false)
   const observerRef = useRef<ResizeObserver | null>(null)
   const reverseTimer = useRef<number | null>(null)
+  const lastStreetLookupKeyRef = useRef<string | null>(null)
+  const lastStreetLookupAtRef = useRef(0)
   const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(
     null
   )
@@ -91,14 +95,28 @@ export function LocationPinMap({
   const [svPicking, setSvPicking] = useState(false)
 
   function scheduleStreetLookup(lat: number, lng: number) {
+    const lookupKey = `${lat.toFixed(5)},${lng.toFixed(5)}`
+    if (lookupKey === lastStreetLookupKeyRef.current) return
     if (reverseTimer.current) window.clearTimeout(reverseTimer.current)
     setGeocoding(true)
-    reverseTimer.current = window.setTimeout(() => {
+    const run = () => {
+      const wait = Math.max(
+        0,
+        STREET_LOOKUP_MIN_INTERVAL_MS -
+          (Date.now() - lastStreetLookupAtRef.current),
+      )
+      if (wait > 0) {
+        reverseTimer.current = window.setTimeout(run, wait)
+        return
+      }
+      lastStreetLookupKeyRef.current = lookupKey
+      lastStreetLookupAtRef.current = Date.now()
       void reverseGeocode(lat, lng).then((data) => {
         setStreet(streetLabel(data))
         setGeocoding(false)
       })
-    }, 350)
+    }
+    reverseTimer.current = window.setTimeout(run, STREET_LOOKUP_DEBOUNCE_MS)
   }
 
   useEffect(() => {
@@ -275,6 +293,8 @@ export function LocationPinMap({
       cancelled = true
       styleEl?.remove()
       if (reverseTimer.current) window.clearTimeout(reverseTimer.current)
+      lastStreetLookupKeyRef.current = null
+      lastStreetLookupAtRef.current = 0
       observerRef.current?.disconnect()
       observerRef.current = null
       try {

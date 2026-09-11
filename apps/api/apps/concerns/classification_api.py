@@ -4,7 +4,7 @@ from datetime import timedelta
 from difflib import SequenceMatcher
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Count, Q
+from django.db.models import Count, OuterRef, Q, Subquery
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -1609,7 +1609,14 @@ class LlmDecisionLogListView(APIView):
         community = selected_community(request.user, request.query_params.get("community_id"))
         if not community:
             return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
-        qs = LlmDecisionLog.objects.select_related("assigned_department", "concern").prefetch_related(
+        qs = LlmDecisionLog.objects.select_related(
+            "assigned_department",
+            "concern",
+            "concern__reporter",
+            "concern__reporter__resident_profile",
+            "concern__assigned_department",
+            "concern__category_ref__department",
+        ).prefetch_related(
             "concern__media",
             "concern__ai_assessment",
             "concern__escalated_emergencies",
@@ -1621,7 +1628,10 @@ class LlmDecisionLogListView(APIView):
 
         domain = request.query_params.get("domain", "")
         if domain == LlmDecisionLog.Domain.CONCERN:
-            qs = qs.filter(domain__in=[LlmDecisionLog.Domain.CONCERN, LlmDecisionLog.Domain.COMMUNITY])
+            qs = qs.filter(domain__in=[
+                LlmDecisionLog.Domain.CONCERN,
+                LlmDecisionLog.Domain.EMERGENCY,
+            ])
         elif domain == LlmDecisionLog.Domain.EMERGENCY:
             # Escalated concerns are the same report at a higher priority. Keep
             # them visible in the emergency view without creating a duplicate
@@ -1636,6 +1646,21 @@ class LlmDecisionLogListView(APIView):
         run_kind = request.query_params.get("run_kind", "")
         if run_kind in LlmDecisionLog.RunKind.values:
             qs = qs.filter(run_kind=run_kind)
+
+        if domain == LlmDecisionLog.Domain.CONCERN:
+            latest_rows = LlmDecisionLog.objects.filter(
+                concern_id=OuterRef("concern_id"),
+                domain__in=[
+                    LlmDecisionLog.Domain.CONCERN,
+                    LlmDecisionLog.Domain.EMERGENCY,
+                ],
+            )
+            if run_kind in LlmDecisionLog.RunKind.values:
+                latest_rows = latest_rows.filter(run_kind=run_kind)
+            qs = qs.filter(
+                concern_id__isnull=False,
+                pk=Subquery(latest_rows.order_by("-created_at", "-id").values("pk")[:1]),
+            )
 
         search = request.query_params.get("search", "").strip()
         if search:
@@ -1746,10 +1771,57 @@ def _decision_log_payload(row: LlmDecisionLog) -> dict:
         decision_source = "Model simulation" if row.run_kind == LlmDecisionLog.RunKind.SIMULATION else "Automated validation"
 
     street_imagery = output.get("street_imagery")
+    display_output = dict(output)
     if not isinstance(street_imagery, dict) or not street_imagery:
         street_imagery = None
     if street_imagery:
-        street_imagery = {key: value for key, value in street_imagery.items() if key != "image_b64"}
+        street_imagery = dict(street_imagery)
+        image_b64 = street_imagery.pop("image_b64", "")
+        display_output["street_imagery"] = dict(street_imagery)
+        if image_b64:
+            street_imagery["image"] = f"data:image/jpeg;base64,{image_b64}"
+
+    input_snapshot = row.input_snapshot if isinstance(row.input_snapshot, dict) else {}
+    address = (concern.address if concern and concern.address else input_snapshot.get("location")) or ""
+    category_unit = None
+    if concern and concern.category_ref_id:
+        category_unit = concern.category_ref.department
+    assigned_unit = (
+        concern.assigned_department
+        if concern and concern.assigned_department_id
+        else row.assigned_department or category_unit
+    )
+    reporter = None
+    tracking_id = None
+    if concern:
+        profile = getattr(concern.reporter, "resident_profile", None)
+        profile_name = " ".join(
+            part for part in [
+                getattr(profile, "first_name", ""),
+                getattr(profile, "middle_name", ""),
+                getattr(profile, "last_name", ""),
+            ] if part
+        ).strip()
+        reporter_name = "Anonymous resident" if concern.is_anonymous else (
+            concern.reporter.get_full_name().strip() or profile_name or concern.reporter.email
+        )
+        reporter = {
+            "name": reporter_name,
+            "initials": "".join(part[0] for part in reporter_name.split()[:2]).upper(),
+            "anonymous": concern.is_anonymous,
+        }
+        tracking_id = concern.tracking_number or str(concern.public_id)
+
+    priority = _concern_priority(concern)
+    if not priority:
+        raw_priority = output.get("priority") or output.get("severity")
+        priority = {
+            "medium": "moderate",
+            "moderate": "moderate",
+            "high": "high",
+            "critical": "critical",
+            "low": "low",
+        }.get(str(raw_priority or "").casefold())
 
     return {
         "id": row.pk,
@@ -1767,19 +1839,26 @@ def _decision_log_payload(row: LlmDecisionLog) -> dict:
         "routing_reason": row.routing_reason,
         "model_version": row.model_version,
         "duration_ms": row.duration_ms,
-        "location": (
-            (row.input_snapshot or {}).get("location")
-            or (concern.address if concern else "")
+        "location": address,
+        "address": address,
+        "tracking_id": tracking_id,
+        "report_title": concern.title if concern else input_snapshot.get("title") or "",
+        "report_description": concern.description if concern else input_snapshot.get("description") or "",
+        "reporter": reporter,
+        "assigned_unit": (
+            {"id": assigned_unit.pk, "name": assigned_unit.name}
+            if assigned_unit
+            else None
         ),
         "input_snapshot": row.input_snapshot,
-        "output_snapshot": row.output_snapshot,
+        "output_snapshot": display_output,
         "content_flag_id": row.content_flag_id,
         "concern_id": row.concern_id,
         # An emergency-domain audit row is already the critical path even
         # when the companion Concern record is no longer available. Keep the
         # one priority vocabulary in the UI instead of adding an Emergency
         # badge beside it.
-        "priority": _concern_priority(concern) or ("critical" if row.domain == LlmDecisionLog.Domain.EMERGENCY else None),
+        "priority": priority or ("critical" if row.domain == LlmDecisionLog.Domain.EMERGENCY else None),
         "final_decision": {
             "action": effective_action,
             "label": decision_label,

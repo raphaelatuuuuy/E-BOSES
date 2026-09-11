@@ -319,6 +319,8 @@ export interface OcrTestResult {
   id: number | string
   filename: string
   document_type?: { key: string; name: string } | string | null
+  document_type_name?: string
+  requested_by_name?: string
   status: "queued" | "processing" | "passed" | "warning" | "failed" | "error" | "cancelled"
   confidence?: number | null
   overall_confidence?: number | null

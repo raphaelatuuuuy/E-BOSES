@@ -34,7 +34,26 @@ const LUCIDE_PATHS: Record<string, readonly string[]> = {
  * Get SVG path `d` strings for a Lucide icon by its export name.
  * Returns the array of path data, or null if the icon is not in our mapping.
  */
+function kebabToPascalIcon(key: string): string {
+  return key
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("") + "Icon"
+}
+
 export function lucideIconPaths(iconKey: string | undefined | null): readonly string[] | null {
   if (!iconKey) return null
-  return LUCIDE_PATHS[iconKey] ?? null
+  const direct = LUCIDE_PATHS[iconKey]
+  if (direct) return direct
+  const kebabPascal = kebabToPascalIcon(iconKey)
+  const kebabHit = LUCIDE_PATHS[kebabPascal]
+  if (kebabHit) return kebabHit
+  const lower = iconKey.toLowerCase()
+  for (const [name, paths] of Object.entries(LUCIDE_PATHS)) {
+    if (name.toLowerCase() === lower || name.toLowerCase() === lower + "icon") return paths
+  }
+  for (const [name, paths] of Object.entries(LUCIDE_PATHS)) {
+    if (name.toLowerCase().includes(lower)) return paths
+  }
+  return null
 }

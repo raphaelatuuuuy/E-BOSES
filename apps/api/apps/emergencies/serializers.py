@@ -11,7 +11,11 @@ from apps.accounts.services import (
 )
 from apps.concerns.models import Department
 from apps.concerns.serializers import PublicUserSerializer
-from apps.concerns.units import RESPONDER_UNIT_TO_DEPARTMENT, department_for_responder_unit
+from apps.concerns.units import (
+    RESPONDER_UNIT_TO_DEPARTMENT,
+    department_for_responder_unit,
+    departments_declaring_emergency_type,
+)
 from apps.geo_services import validate_emergency_location
 
 from .models import (
@@ -278,11 +282,24 @@ def emergency_category_is_covered(code, community=None):
     if not code:
         return False
     queryset = EmergencyTypeRoleMap.objects.filter(
-        emergency_type=code, is_active=True, department__isnull=False
+        emergency_type=code,
+        is_active=True,
+        department__isnull=False,
+        department__is_active=True,
     )
     if community is not None:
-        queryset = queryset.filter(community=community)
-    return queryset.exists()
+        queryset = queryset.filter(community=community, department__community=community)
+    if queryset.exists():
+        return True
+
+    # A unit configured from the Units screen is a valid answering unit even
+    # when an official has not also created a legacy role-map row. Keep this
+    # lookup in Python because the JSONField `__contains` lookup is unsupported
+    # by SQLite, which is used by the test suite.
+    departments = departments_declaring_emergency_type(code)
+    if community is not None:
+        departments = [item for item in departments if item.community_id == community.pk]
+    return bool(departments)
 
 
 class EmergencyTypeRoleMapSerializer(serializers.ModelSerializer):

@@ -65,7 +65,7 @@ const FINDING_TONE: Record<Finding["tone"], string> = {
 }
 
 function ResultLabel({ children }: { children: ReactNode }) {
-  return <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">{children}</p>
+  return <p className="text-[12px] font-semibold tracking-tight text-neutral-500">{children}</p>
 }
 
 export function ConcernTestWorkspace({ config }: { config: ConcernClassificationConfig }) {
@@ -146,14 +146,13 @@ export function ConcernTestWorkspace({ config }: { config: ConcernClassification
 
   const streetImagery =
     reportResult?.street_imagery?.status === "checked" &&
-    reportResult.street_imagery.image &&
     reportResult.street_imagery.latitude != null &&
     reportResult.street_imagery.longitude != null
       ? reportResult.street_imagery
       : null
 
   const mapMarkers = useMemo<MapPhotoMarker[]>(() => {
-    if (!streetImagery) return []
+    if (!streetImagery?.image) return []
     return [
       {
         id: "street",
@@ -355,6 +354,9 @@ function ConcernResult({
   const categoryOk = result.category_match === true
   const categoryBad = result.category_match === false
   const photoOk = result.image_uploaded && !photoUnreviewable && result.evidence_relationship === "supports_report"
+  const resultCategory = categoryLabel(config, result.primary_category || selectedCategory)
+  const resultPriority = result.urgent_attention ? "Critical" : result.severity ? readable(result.severity) : "Review"
+  const resultPhoto = !result.image_uploaded ? "Not submitted" : photoUnreviewable ? "Needs review" : "Received"
 
   if (categoryOk && photoOk) {
     // Both the easy, common-case checks passed — one line instead of two.
@@ -458,22 +460,20 @@ function ConcernResult({
   // Every submitted photo is shown, not just the first — and wherever a
   // privacy-protected version exists for a photo, that replaces the raw
   // upload here so nothing sensitive is ever the one on display.
-  const galleryPhotos = previews.map((url, index) => ({
+  const submittedPhotos = previews.map((url, index) => ({
     key: url,
     src: index === 0 && result.privacy?.protected_image ? result.privacy.protected_image : url,
     label: previews.length > 1 ? `Sample photo ${index + 1}` : "Your sample photo",
   }))
-  if (streetImagery) {
-    galleryPhotos.push({ key: "street-view", src: streetImagery.image as string, label: "Street view" })
-  }
-  for (const comparison of result.photo_duplicate_llm?.comparisons ?? []) {
-    if (comparison.verdict === "different" || !comparison.image) continue
-    galleryPhotos.push({
+  const areaPhotos = streetImagery?.image ? [{ key: "street-view", src: streetImagery.image, label: "Panorama near the pin" }] : []
+  const possibleMatchPhotos = (result.photo_duplicate_llm?.comparisons ?? []).flatMap((comparison) => {
+    if (comparison.verdict === "different" || !comparison.image) return []
+    return [{
       key: `dup-${comparison.concern_id ?? comparison.tracking_id}`,
       src: comparison.image,
       label: comparison.tracking_id ? `Possible match: ${comparison.tracking_id}` : "Possible match",
-    })
-  }
+    }]
+  })
 
   // Gemma's own recommended_action is computed before the street-imagery
   // check ever runs, so it has no way to know about a mismatch. On a real
@@ -502,7 +502,7 @@ function ConcernResult({
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
+      <section className="rounded-[18px] bg-neutral-50 p-4 sm:p-5">
         <div className="flex items-start gap-3">
           <HeaderIcon className={cn("mt-0.5 size-5 shrink-0", headerTone)} strokeWidth={2} aria-hidden />
           <div className="min-w-0">
@@ -512,9 +512,17 @@ function ConcernResult({
             ) : null}
           </div>
         </div>
+        <dl className="mt-5 grid grid-cols-2 gap-3 border-t border-neutral-200 pt-4 sm:grid-cols-4">
+          <div><dt className="text-meta text-neutral-400">Category</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{resultCategory}</dd></div>
+          <div><dt className="text-meta text-neutral-400">Priority</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{resultPriority}</dd></div>
+          <div><dt className="text-meta text-neutral-400">Photo</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{resultPhoto}</dd></div>
+          <div><dt className="text-meta text-neutral-400">Location</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{streetImagery ? "Verified area" : "Not compared"}</dd></div>
+        </dl>
 
         {findings.length ? (
-          <ul className="space-y-1.5 pl-8">
+          <div className="mt-5 border-t border-neutral-200 pt-4">
+            <ResultLabel>What the checks found</ResultLabel>
+            <ul className="mt-2 space-y-1.5">
             {findings.map((finding) => (
               <li key={finding.text} className="flex gap-2 text-[13.5px] leading-relaxed text-neutral-700">
                 <finding.icon
@@ -525,16 +533,46 @@ function ConcernResult({
                 <span className="min-w-0 break-words">{finding.text}</span>
               </li>
             ))}
-          </ul>
+            </ul>
+          </div>
         ) : null}
-      </div>
+      </section>
 
-      {galleryPhotos.length ? (
-        <div className="flex flex-wrap justify-center gap-4">
-          {galleryPhotos.map((photo) => (
-            <PhotoTile key={photo.key} src={photo.src} label={photo.label} onExpand={() => setLightbox(photo.src)} />
-          ))}
-        </div>
+      {submittedPhotos.length ? (
+        <section>
+          <ResultLabel>Submitted photo</ResultLabel>
+          <div className="mt-2 flex flex-wrap justify-center gap-4">
+            {submittedPhotos.map((photo) => (
+              <PhotoTile key={photo.key} src={photo.src} label={photo.label} onExpand={() => setLightbox(photo.src)} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {streetImagery ? (
+        <section>
+          <ResultLabel>Area image</ResultLabel>
+          {areaPhotos.length ? (
+            <div className="mt-2 flex flex-wrap justify-center gap-4">
+              {areaPhotos.map((photo) => (
+                <PhotoTile key={photo.key} src={photo.src} label={photo.label} fit="contain" onExpand={() => setLightbox(photo.src)} />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-meta text-neutral-500">Panorama image unavailable.</p>
+          )}
+        </section>
+      ) : null}
+
+      {possibleMatchPhotos.length ? (
+        <section>
+          <ResultLabel>Possible duplicate</ResultLabel>
+          <div className="mt-2 flex flex-wrap justify-center gap-4">
+            {possibleMatchPhotos.map((photo) => (
+              <PhotoTile key={photo.key} src={photo.src} label={photo.label} onExpand={() => setLightbox(photo.src)} />
+            ))}
+          </div>
+        </section>
       ) : null}
 
       {result.assigned_unit || result.matched_emergency_type ? (
@@ -595,15 +633,15 @@ function ConcernResult({
   )
 }
 
-function PhotoTile({ src, label, onExpand }: { src: string; label: string; onExpand: () => void }) {
+function PhotoTile({ src, label, fit = "cover", onExpand }: { src: string; label: string; fit?: "cover" | "contain"; onExpand: () => void }) {
   return (
-    <div className="w-56 sm:w-72">
+    <div className="w-full max-w-[30rem]">
       <button
         type="button"
         onClick={onExpand}
-        className="group relative block aspect-[4/3] w-full overflow-hidden rounded-[14px] border border-neutral-200 bg-neutral-50"
+        className="group relative block w-full overflow-hidden rounded-[14px]"
       >
-        <img src={src} alt={label} className="size-full object-cover transition-opacity group-hover:opacity-80" />
+        <img src={src} alt={label} className={cn("block h-auto w-full rounded-[14px] transition-opacity group-hover:opacity-80", fit === "contain" ? "object-contain" : "object-cover")} />
         <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
           <Maximize2Icon className="size-5 text-white drop-shadow" strokeWidth={2} aria-hidden />
         </span>

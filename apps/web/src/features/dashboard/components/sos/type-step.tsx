@@ -1,3 +1,5 @@
+import { CheckIcon } from "lucide-react"
+
 import { cn } from "@workspace/ui/lib/utils"
 import type { EmergencyType } from "@/features/dashboard/emergency-api"
 import {
@@ -34,12 +36,20 @@ export function SosTypeStep({
               aria-pressed={selected}
               onClick={() => onSelect(item.value)}
               className={cn(
-                "flex items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-colors",
+                "relative flex items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-colors",
                 selected
                   ? "border-brand-orange bg-brand-orange/15 ring-1 ring-brand-orange/40"
                   : "border-white/15 bg-white/5 hover:bg-white/10"
               )}
             >
+              {selected ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-brand-orange text-white shadow-md"
+                >
+                  <CheckIcon className="size-3.5" strokeWidth={3} />
+                </span>
+              ) : null}
               {item.iconImageUrl ? (
                 <img src={item.iconImageUrl} alt="" className="size-12 shrink-0 rounded-lg object-cover" />
               ) : item.customIconLabel ? (
@@ -51,11 +61,8 @@ export function SosTypeStep({
                 />
               )}
               <span className="min-w-0">
-                <span className="block truncate text-[15px] font-semibold text-white">
+                <span className="block text-[15px] leading-snug font-semibold text-white line-clamp-2">
                   {item.label}
-                </span>
-                <span className="mt-0.5 block text-[12px] leading-snug text-white/55">
-                  {item.desc}
                 </span>
               </span>
             </button>

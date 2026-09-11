@@ -1,5 +1,6 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
+import * as LucideIcons from "lucide-react"
 import {
   CircleCheck,
   ChevronDownIcon,
@@ -7,6 +8,7 @@ import {
   PlusIcon,
   SirenIcon,
   CircleX,
+  type LucideIcon,
 } from "lucide-react"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { toast } from "sonner"
@@ -56,15 +58,48 @@ function slugify(value: string) {
     .slice(0, 80)
 }
 
+/** The exact keys the backend accepts (see validate_icon_key). */
+const EMERGENCY_ICONS: Array<{ key: string; label: string; Icon: LucideIcon }> = [
+  { key: "activity", label: "Activity", Icon: LucideIcons.Activity },
+  { key: "ambulance", label: "Ambulance", Icon: LucideIcons.Ambulance },
+  { key: "baby", label: "Baby", Icon: LucideIcons.Baby },
+  { key: "badge-alert", label: "Alert badge", Icon: LucideIcons.BadgeAlert },
+  { key: "bell", label: "Bell", Icon: LucideIcons.Bell },
+  {
+    key: "cloud-rain-wind",
+    label: "Storm",
+    Icon: LucideIcons.CloudRainWind,
+  },
+  { key: "flame", label: "Fire", Icon: LucideIcons.Flame },
+  { key: "heart-crack", label: "Heart", Icon: LucideIcons.HeartCrack },
+  { key: "home", label: "Home", Icon: LucideIcons.Home },
+  { key: "map-pin", label: "Map pin", Icon: LucideIcons.MapPin },
+  { key: "pill", label: "Medicine", Icon: LucideIcons.Pill },
+  { key: "shield-alert", label: "Shield", Icon: LucideIcons.ShieldAlert },
+  { key: "siren", label: "Siren", Icon: LucideIcons.Siren },
+  { key: "stethoscope", label: "Doctor", Icon: LucideIcons.Stethoscope },
+  { key: "waves", label: "Flood", Icon: LucideIcons.Waves },
+  { key: "zap", label: "Electric", Icon: LucideIcons.Zap },
+]
+
+function iconLabelFor(key: string) {
+  return EMERGENCY_ICONS.find((entry) => entry.key === key)?.label ?? key
+}
+
 function iconFor(key: string) {
-  return resolveIconByKey(key) ?? SirenIcon
+  return (
+    EMERGENCY_ICONS.find((entry) => entry.key === key)?.Icon ??
+    resolveIconByKey(key) ??
+    SirenIcon
+  )
 }
 
 const inputCls =
   "mt-1.5 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
 const labelCls = "text-[13px] font-semibold text-neutral-500"
 
-/* Custom dropdown that shows icons — native <select> can't render React elements */
+/* Dropdown over the backend-supported keys — native <select> can't render icons,
+   and free text is rejected by validate_icon_key, so search only filters. */
 function IconDropdown({
   value,
   onChange,
@@ -75,7 +110,7 @@ function IconDropdown({
   onPickCustom?: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const [customInput, setCustomInput] = useState("")
+  const [search, setSearch] = useState("")
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -85,8 +120,25 @@ function IconDropdown({
     return () => document.removeEventListener("mousedown", handler)
   }, [])
 
-  const CurrentIcon = resolveIconByKey(value) ?? SirenIcon
+  const CurrentIcon = iconFor(value)
   const isCustomImage = value === "custom"
+  const isKnownKey =
+    !value || isCustomImage || EMERGENCY_ICONS.some((entry) => entry.key === value)
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return EMERGENCY_ICONS
+    return EMERGENCY_ICONS.filter(
+      (entry) =>
+        entry.label.toLowerCase().includes(query) ||
+        entry.key.toLowerCase().includes(query)
+    )
+  }, [search])
+
+  function pick(key: string) {
+    onChange(key)
+    setSearch("")
+    setOpen(false)
+  }
 
   return (
     <div ref={ref} className="relative">
@@ -98,7 +150,7 @@ function IconDropdown({
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
           {createElement(CurrentIcon, { className: "size-4", strokeWidth: 1.7 })}
         </span>
-        <span className="flex-1 truncate font-medium">{isCustomImage ? "Custom image" : value || "Siren"}</span>
+        <span className="flex-1 truncate font-medium">{isCustomImage ? "Custom image" : iconLabelFor(value) || "Siren"}</span>
         {open ? (
           <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" />
         ) : (
@@ -108,29 +160,61 @@ function IconDropdown({
       {open && (
         <div
           className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          style={{ maxHeight: "280px", overflowY: "auto" }}
+          style={{ maxHeight: "320px", overflowY: "auto" }}
         >
           <div className="px-4 py-3">
             <input
               type="text"
-              value={customInput}
-              onChange={(e) => setCustomInput(e.target.value)}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && customInput.trim()) {
-                  onChange(customInput.trim())
-                  setCustomInput("")
-                  setOpen(false)
+                if (e.key === "Enter" && filtered.length > 0) {
+                  pick(filtered[0]!.key)
                 }
               }}
-              placeholder="Type any Lucide icon name…"
+              placeholder="Search icons…"
+              aria-label="Search emergency icons"
               className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[13px] text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-400"
             />
           </div>
+          {!isKnownKey ? (
+            <p className="border-b border-neutral-100 px-4 py-2.5 text-[12px] font-medium text-sos" role="alert">
+              “{value}” isn’t a supported icon and won’t save — pick one below.
+            </p>
+          ) : null}
+          {filtered.length > 0 ? (
+            <div className="grid grid-cols-4 gap-1 px-3 pb-3">
+              {filtered.map(({ key, label, Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  title={label}
+                  onClick={() => pick(key)}
+                  aria-pressed={value === key}
+                  className={
+                    value === key
+                      ? "flex flex-col items-center gap-1 rounded-lg bg-brand-navy px-1 py-2 text-white"
+                      : "flex flex-col items-center gap-1 rounded-lg px-1 py-2 text-neutral-600 transition-colors hover:bg-neutral-100"
+                  }
+                >
+                  <Icon className="size-5" strokeWidth={1.7} aria-hidden="true" />
+                  <span className="max-w-full truncate text-[10px] font-medium">
+                    {label}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="px-4 pb-4 text-center text-[12px] text-neutral-400">
+              No icons match — only the supported emergency icons can be used.
+            </p>
+          )}
           <div className="border-t border-neutral-100 py-1">
             <button
               type="button"
               onClick={() => {
                 onChange("custom")
+                setSearch("")
                 setOpen(false)
                 onPickCustom?.()
               }}
@@ -570,7 +654,17 @@ export default function OfficialDispatchRulesPage() {
             />
           </div>
 
-          <div className="mt-6 space-y-3">
+          <div className="mt-6 flex gap-2">
+            <SheetPrimaryButton
+              disabled={busy === "category"}
+              onClick={() => {
+                setEditOpen(false)
+                setDraft(null)
+              }}
+              className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]"
+            >
+              Cancel
+            </SheetPrimaryButton>
             <button
               type="button"
               disabled={
@@ -579,7 +673,7 @@ export default function OfficialDispatchRulesPage() {
                 Boolean(draft.id && draftSnapshot(draft) === originalDraft)
               }
               onClick={() => void saveCategory()}
-              className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
+              className="flex h-[52px] flex-1 items-center justify-center rounded-full bg-accent text-[15px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
             >
               {busy === "category"
                 ? "Saving\u2026"
@@ -587,15 +681,6 @@ export default function OfficialDispatchRulesPage() {
                   ? "Save changes"
                   : "Create category"}
             </button>
-            <SheetPrimaryButton
-              disabled={busy === "category"}
-              onClick={() => {
-                setEditOpen(false)
-                setDraft(null)
-              }}
-            >
-              Cancel
-            </SheetPrimaryButton>
           </div>
         </SheetDialog>
       )}

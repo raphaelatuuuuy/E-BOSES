@@ -9,6 +9,7 @@ from math import asin, cos, radians, sin, sqrt
 from django.utils import timezone
 
 from apps.geo_services import active_communities_for_point, point_in_geojson_inclusive
+from apps.community_scope import PRIMARY_COMMUNITY_CODE
 
 from .models import Community, MapGeometry, MapServicePoi
 
@@ -64,7 +65,7 @@ def _geometry_points(geometry):
 
 def _street_communities(street):
     communities = list(
-        Community.objects.filter(status=Community.Status.ACTIVE, boundary__is_active=True)
+        Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE, boundary__is_active=True)
         .select_related("boundary")
         .order_by("name")
     )
@@ -88,7 +89,7 @@ def _named_communities(text):
         return []
     return [
         community
-        for community in Community.objects.filter(status=Community.Status.ACTIVE)
+        for community in Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE)
         .select_related("boundary")
         .order_by("name")
         if _key(community.name) in key or _key(community.code) in key
@@ -108,7 +109,7 @@ def _landmark_communities(text):
     if not key:
         return []
     communities = []
-    for poi in MapServicePoi.objects.filter(is_active=True, community__status=Community.Status.ACTIVE).select_related("community"):
+    for poi in MapServicePoi.objects.filter(is_active=True, community__status=Community.Status.ACTIVE, community__code=PRIMARY_COMMUNITY_CODE).select_related("community"):
         if len(_key(poi.name)) >= 3 and _key(poi.name) in key and poi.community not in communities:
             communities.append(poi.community)
     return communities
@@ -174,7 +175,7 @@ def _result_is_in_marikina(item: dict) -> bool:
         return False
     active_places = {
         _key(value)
-        for row in Community.objects.filter(status=Community.Status.ACTIVE).values("name", "boundary__locality")
+        for row in Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).values("name", "boundary__locality")
         for value in (row.get("name") or "", row.get("boundary__locality") or "")
         if value
     }

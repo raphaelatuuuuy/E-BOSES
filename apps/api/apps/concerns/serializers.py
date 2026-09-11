@@ -1182,7 +1182,7 @@ class ConcernSerializer(serializers.ModelSerializer):
 
     def get_reporter_full_name(self, obj):
         if obj.is_anonymous:
-            return "Anonymous"
+            return "Community Reporter"
         if self.is_privacy_safe():
             return PublicUserSerializer(obj.reporter, context=self.context).data.get("full_name", "")
         profile = getattr(obj.reporter, "resident_profile", None)
@@ -1194,8 +1194,8 @@ class ConcernSerializer(serializers.ModelSerializer):
         if obj.is_anonymous:
             return {
                 "id": 0,
-                "full_name": "Anonymous",
-                "initials": "A",
+                "full_name": "Community Reporter",
+                "initials": "CR",
                 "role": User.Role.RESIDENT,
                 "last_seen_at": None,
                 "avatar": "",
@@ -1778,7 +1778,7 @@ class ConcernListSerializer(serializers.ModelSerializer):
 
     def get_reporter(self, obj):
         if obj.is_anonymous:
-            return {"full_name": "Anonymous"}
+            return {"full_name": "Community Reporter"}
         return ConcernListReporterSerializer(obj.reporter, context=self.context).data
 
     def get_severity_reason(self, obj) -> str:

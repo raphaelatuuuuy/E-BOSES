@@ -6,6 +6,7 @@ and the geography a stranger on the landing page is allowed to see.
 
 import html
 import logging
+import math
 from datetime import timedelta
 
 import httpx
@@ -20,7 +21,9 @@ from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.models import ResidentProfile, User
+from apps.concerns.ai.street_imagery import fetch_latest_street_imagery, nearest_street_panorama
 from apps.concerns.models import Concern, ConcernMedia
+from apps.community_scope import PRIMARY_COMMUNITY_CODE
 from apps.media_urls import concern_media_preview_url
 from apps.emergencies.description import description_for_display
 from apps.emergencies.models import Community, EmergencyAlert, EmergencyCategory, MapDispatchPolicy, MapGeometry
@@ -100,6 +103,7 @@ def build_public_report_map_payload():
     active_communities = list(
         Community.objects.filter(
             status=Community.Status.ACTIVE,
+            code=PRIMARY_COMMUNITY_CODE,
             boundary__isnull=False,
             boundary__is_active=True,
             boundary__kind=MapGeometry.Kind.BOUNDARY,
@@ -154,13 +158,14 @@ def build_public_report_map_payload():
                 "summary": summary,
                 "category": category.code if category else concern.category,
                 "category_label": category.name if category else concern.get_category_display(),
+                "icon_key": category.icon_key if category else "tag",
                 "status": concern.status,
                 "address": public_street_address(concern.address, concern.barangay),
                 # Four decimals keeps a public marker useful without returning
                 # the resident's original seven-decimal pin.
                 "latitude": round(float(concern.latitude), 4),
                 "longitude": round(float(concern.longitude), 4),
-                "reporter_label": "Anonymous" if concern.is_anonymous else "Community resident",
+                "reporter_label": "Community Reporter" if concern.is_anonymous else "Community resident",
                 "preview_url": concern_media_preview_url(preview_media.pk) if preview_media else None,
                 "created_at": concern.created_at,
                 "updated_at": concern.updated_at,
@@ -267,6 +272,123 @@ class PublicReportMapView(APIView):
         return Response(build_public_report_map_payload())
 
 
+class PublicStreetViewCoverageThrottle(AnonRateThrottle):
+    """Keep anonymous panorama lookups bounded and cacheable."""
+
+    scope = "public_street_view_coverage"
+    rate = "60/minute"
+
+
+class PublicStreetViewCoverageView(APIView):
+    """Resolve whether a public map point has nearby Street View coverage."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [PublicStreetViewCoverageThrottle]
+
+    def get(self, request):
+        try:
+            latitude = round(float(request.query_params.get("latitude", "")), 6)
+            longitude = round(float(request.query_params.get("longitude", "")), 6)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "A valid latitude and longitude are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not (
+            math.isfinite(latitude)
+            and math.isfinite(longitude)
+            and -90 <= latitude <= 90
+            and -180 <= longitude <= 180
+        ):
+            return Response(
+                {"detail": "A valid latitude and longitude are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cache_key = f"public:street-view-coverage:v1:{latitude:.6f}:{longitude:.6f}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        panorama = nearest_street_panorama(
+            latitude=latitude,
+            longitude=longitude,
+            radius_meters=100,
+        )
+        payload = (
+            {
+                "status": "available",
+                "latitude": panorama["latitude"],
+                "longitude": panorama["longitude"],
+                "distance_meters": panorama["distance_meters"],
+            }
+            if panorama
+            else {"status": "no_coverage"}
+        )
+        cache.set(cache_key, payload, 600)
+        return Response(payload)
+
+
+class PublicStreetViewImageThrottle(AnonRateThrottle):
+    """Keep the more expensive panorama image endpoint bounded."""
+
+    scope = "public_street_view_image"
+    rate = "20/minute"
+
+
+class PublicStreetViewImageView(APIView):
+    """Return the actual nearby panorama image without a Maps API key."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [PublicStreetViewImageThrottle]
+
+    def get(self, request):
+        try:
+            latitude = round(float(request.query_params.get("latitude", "")), 5)
+            longitude = round(float(request.query_params.get("longitude", "")), 5)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "A valid latitude and longitude are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not (
+            math.isfinite(latitude)
+            and math.isfinite(longitude)
+            and -90 <= latitude <= 90
+            and -180 <= longitude <= 180
+        ):
+            return Response(
+                {"detail": "A valid latitude and longitude are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cache_key = f"public:street-view-image:v4:{latitude:.5f}:{longitude:.5f}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        imagery = fetch_latest_street_imagery(
+            latitude=latitude,
+            longitude=longitude,
+            radius_meters=100,
+        )
+        payload = (
+            {
+                "status": "available",
+                "latitude": imagery.latitude,
+                "longitude": imagery.longitude,
+                "distance_meters": imagery.distance_meters,
+                "image": f"data:{imagery.mime_type};base64,{imagery.image_b64}",
+            }
+            if imagery
+            else {"status": "no_coverage"}
+        )
+        cache.set(cache_key, payload, 600)
+        return Response(payload)
+
+
 def _offline_path(geometry, bounds):
     coordinates = (geometry or {}).get("coordinates") or []
     if (geometry or {}).get("type") == "MultiPolygon":
@@ -293,13 +415,14 @@ def build_offline_sos_config(_community=None):
     from apps.live_map import static_map_payload
 
     if _community is None:
-        communities = list(Community.objects.filter(status=Community.Status.ACTIVE, boundary__isnull=False, boundary__is_active=True).select_related("boundary").order_by("name", "pk"))
+        communities = list(Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE, boundary__isnull=False, boundary__is_active=True).select_related("boundary").order_by("name", "pk"))
         packages = [build_offline_sos_config(item)["community"] for item in communities]
         return {"version": OFFLINE_SOS_CONFIG_VERSION, "smsNumber": SOS_SMS_NUMBER, "community": packages[0] if packages else None, "communities": packages}
 
     community = _community or (
         Community.objects.filter(
             status=Community.Status.ACTIVE,
+            code=PRIMARY_COMMUNITY_CODE,
             boundary__isnull=False,
             boundary__is_active=True,
         )
@@ -468,7 +591,7 @@ def served_barangay_names():
     boundary for. The PSGC import stores the whole country, so "has an active
     boundary row" would answer forty thousand.
     """
-    return set(Community.objects.filter(status=Community.Status.ACTIVE).values_list("name", flat=True))
+    return set(Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).values_list("name", flat=True))
 
 
 def build_communities_payload():
@@ -501,7 +624,7 @@ def build_communities_payload():
     emergencies = {row_key(row): row for row in emergency_rows}
     since = {row_key(row): row["first"] for row in since_rows if row["first"]}
 
-    active = Community.objects.filter(status=Community.Status.ACTIVE, boundary__is_active=True).select_related("boundary")
+    active = Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE, boundary__is_active=True).select_related("boundary")
 
     communities = []
     for community in active.order_by("name", "pk"):

@@ -13,9 +13,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react"
 import {
-  Building2Icon,
   ChevronLeftIcon,
-  CheckIcon,
   CircleAlertIcon,
   HomeIcon,
   LeafIcon,
@@ -545,8 +543,6 @@ export default function ResidentAlertsMapPage() {
   const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(
     null
   )
-  const [communityBoundaryVisible, setCommunityBoundaryVisible] =
-    useState(false)
   // Mount map immediately with barangay defaults — don't wait on API (slow OSM/POI path)
   const [mapMeta, setMapMeta] = useState<ResidentAlertsMapSnapshot["map"]>(
     () => ({
@@ -614,7 +610,6 @@ export default function ResidentAlertsMapPage() {
     onSettle: () => mapApiRef.current?.invalidateSize(),
   })
   const [weatherOpen, setWeatherOpen] = useState(false)
-  const [communityListOpen, setCommunityListOpen] = useState(false)
   const [svPick, setSvPick] = useState(false)
   const [locating, setLocating] = useState(false)
   /** Desktop left alerts panel collapsed vs open. */
@@ -698,14 +693,6 @@ export default function ResidentAlertsMapPage() {
     communities.find((community) => community.id === homeCommunityId) ??
     null
   const activeCommunityId = selectedCommunity?.id ?? homeCommunityId
-  const communityOptions = useMemo(() => {
-    if (!homeCommunityId) return communities
-    return [...communities].sort((a, b) => {
-      const aIsCurrent = a.id === homeCommunityId ? 1 : 0
-      const bIsCurrent = b.id === homeCommunityId ? 1 : 0
-      return bIsCurrent - aIsCurrent
-    })
-  }, [communities, homeCommunityId])
   const selectedCenter = useMemo(
     () =>
       selectedCommunity
@@ -1177,26 +1164,6 @@ export default function ResidentAlertsMapPage() {
     }, 100)
   }
 
-  function selectCommunity(id: string) {
-    const target = communities.find((community) => community.id === id)
-    if (!target) return
-    const isAlreadySelected = activeCommunityId === id
-    if (isAlreadySelected) {
-      setCommunityBoundaryVisible((visible) => !visible)
-    } else {
-      setSelectedCommunityId(id)
-      setCommunityBoundaryVisible(true)
-      mapApiRef.current?.flyTo(
-        target.center.latitude,
-        target.center.longitude,
-        15
-      )
-    }
-    setCommunityListOpen(false)
-    clearSelection()
-    setWeatherOpen(false)
-  }
-
   function goMyLocation() {
     if (!navigator.geolocation) {
       toast.error("Location unavailable")
@@ -1555,7 +1522,10 @@ export default function ResidentAlertsMapPage() {
       {mapMeta ? (
         <ResidentLeafletMap
           center={selectedCenter}
-          boundary={communityBoundaryVisible ? selectedBoundary : null}
+          // Keep the geometry available for Home/initial framing. The map
+          // component renders this layer fully transparent, so coverage
+          // indicators remain hidden while centering still works.
+          boundary={selectedBoundary}
           policy={mapMeta.dispatch_policy}
           posts={filtered}
           emergencies={filteredEmergencies}
@@ -1675,64 +1645,7 @@ export default function ResidentAlertsMapPage() {
             >
               <FootprintsIcon className="size-5" strokeWidth={1.9} />
             </MapControlButton>
-            {communities.length > 1 ? (
-              <MapControlButton
-                tone="light"
-                divider
-                label="See other communities"
-                active={communityListOpen}
-                onClick={() => setCommunityListOpen((value) => !value)}
-              >
-                <Building2Icon className="size-5" strokeWidth={1.9} />
-              </MapControlButton>
-            ) : null}
           </MapControlStack>
-
-          {communities.length > 1 && communityListOpen ? (
-            <div className="absolute top-[calc(100%+8px)] right-0 z-[70] flex max-h-[min(18rem,calc(100vh-6rem))] w-[min(19rem,calc(100vw-1.5rem))] min-w-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,0.18)]">
-              <p className="shrink-0 border-b border-neutral-100 px-4 py-3 text-[13px] font-semibold text-neutral-900">
-                See other communities
-              </p>
-              <div className="min-h-0 flex-1 overflow-y-auto py-1">
-                {communityOptions.map((community) => {
-                  const isCurrent = community.id === homeCommunityId
-                  const isSelected = community.id === activeCommunityId
-                  return (
-                    <button
-                      key={community.id}
-                      type="button"
-                      onClick={() => selectCommunity(community.id)}
-                      className={cn(
-                        "flex w-full items-start gap-2 px-4 py-2.5 text-left text-[14px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50",
-                        isSelected && "bg-orange-50 text-neutral-950"
-                      )}
-                      aria-current={isSelected ? "true" : undefined}
-                    >
-                      {isSelected ? (
-                        <CheckIcon
-                          className="size-4 shrink-0 text-brand-orange"
-                          strokeWidth={2.25}
-                        />
-                      ) : (
-                        <Building2Icon
-                          className="size-4 shrink-0 text-neutral-500"
-                          strokeWidth={1.8}
-                        />
-                      )}
-                      <span className="min-w-0 flex-1 leading-snug break-words whitespace-normal">
-                        {community.name}
-                        {isCurrent ? (
-                          <span className="mt-0.5 block text-[11px] font-medium text-neutral-500">
-                            Your community
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          ) : null}
         </div>
 
         {svPick ? (
@@ -1964,7 +1877,7 @@ export default function ResidentAlertsMapPage() {
                     )}
                   </div>
                 ) : showDetail ? (
-                  <div className="h-full min-h-0 overflow-hidden bg-white">
+                  <div className="h-full min-h-0 overflow-y-auto overscroll-contain touch-pan-y bg-white">
                     {panelBody}
                   </div>
                 ) : (

@@ -1,14 +1,19 @@
-import { useEffect, useMemo, useState } from "react"
-import { Ban, ChevronDownIcon, CircleCheck, LoaderCircleIcon, RefreshCwIcon, SirenIcon, TriangleAlert } from "lucide-react"
+import { createElement, useEffect, useMemo, useState } from "react"
+import { Ban, ChevronDownIcon, CircleCheck, ImageOffIcon, LoaderCircleIcon, Maximize2Icon, RefreshCwIcon, ScanLineIcon, SignalHighIcon, SignalIcon, SignalLowIcon, SignalMediumIcon, SirenIcon, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { FilterRow, ListSearch, Pager } from "@/components/ui/list-controls"
 import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
-import { getLlmDecisionLog, rerunLlmDecisionLogStreetImagery, revertAutomatedContentAction, type LlmDecisionLogDomain, type LlmDecisionLogEntry } from "./api"
+import { getLlmDecisionLog, revertAutomatedContentAction, type LlmDecisionLogDomain, type LlmDecisionLogEntry } from "./api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { mediaIntegrityVerdict } from "@/features/dashboard/lib/plain-language"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
+import { SEVERITY_TONE } from "@/features/dashboard/components/concerns/concern-queue-item"
+import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
+import { toMediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { fetchAuthorizedProof, listOcrTests, type OcrTestResult } from "@/features/ocr/api"
+import { getStreetViewImage } from "@/features/dashboard/api"
 import { displayValue, readable, verdictMeta } from "./shared"
 
 /**
@@ -29,7 +34,10 @@ function integrityVerdictOf(snapshot: Record<string, unknown>): string | null {
 }
 
 function locationOf(entry: DisplayLogEntry): string {
-  if (entry.source === "ocr") return "Not applicable"
+  if (entry.source === "ocr") {
+    return "Document verification"
+  }
+  if (entry.address?.trim()) return entry.address.trim()
   if (entry.location?.trim()) return entry.location.trim()
   const input = entry.input_snapshot
   for (const key of ["location", "address", "reported_area"]) {
@@ -42,10 +50,26 @@ function locationOf(entry: DisplayLogEntry): string {
   return "No location"
 }
 
+function descriptionOf(entry: DisplayLogEntry): string {
+  const value = entry.report_description || entry.input_snapshot.description
+  return typeof value === "string" && value.trim() ? value.trim() : "No description was captured."
+}
+
+function titleOf(entry: DisplayLogEntry): string {
+  if (entry.source === "ocr") {
+    const document = entry.input_snapshot.document_type
+    return `${typeof document === "string" && document.trim() ? document.trim() : "Document"} verification`
+  }
+  if (entry.report_title?.trim()) return entry.report_title.trim()
+  const value = entry.input_snapshot.title
+  if (typeof value === "string" && value.trim()) return value.trim()
+  return generatedSummaryOf(entry)
+}
+
 function reportTextOf(entry: DisplayLogEntry): string {
   if (entry.source === "ocr") {
     const document = entry.input_snapshot.document_type
-    return typeof document === "string" ? `OCR check · ${document}` : "OCR document check"
+    return typeof document === "string" ? document : "Document verification"
   }
   const input = entry.input_snapshot
   for (const key of ["description", "content_text", "title"]) {
@@ -55,25 +79,9 @@ function reportTextOf(entry: DisplayLogEntry): string {
   return DOMAIN_LABEL[entry.domain]
 }
 
-function submittedDescriptionOf(entry: DisplayLogEntry): string {
-  const value = entry.input_snapshot?.description
-  return typeof value === "string" && value.trim() ? value.trim() : "No submitted description was captured."
-}
-
 function generatedSummaryOf(entry: DisplayLogEntry): string {
   if (entry.source !== "ocr" && entry.resident_message?.trim()) return entry.resident_message.trim()
   return reportTextOf(entry)
-}
-
-function normaliseCopy(value: string): string {
-  return value.replace(/[“”"']/g, "").replace(/\s+/g, " ").trim().toLocaleLowerCase()
-}
-
-function descriptionCopyOf(entry: DisplayLogEntry) {
-  const generated = generatedSummaryOf(entry)
-  const submitted = submittedDescriptionOf(entry)
-  const same = entry.source !== "ocr" && normaliseCopy(generated) === normaliseCopy(submitted)
-  return { generated, submitted, same }
 }
 
 function categoryOf(entry: DisplayLogEntry): string {
@@ -94,10 +102,10 @@ function outcomeOf(action: string | null | undefined): string {
     "escalate as emergency": "Escalated",
     "take down": "Remove from community",
     "ocr queued": "Waiting to be checked",
-    "ocr processing": "Checking now",
+    "ocr processing": "In progress",
     "ocr passed": "Verification passed",
-    "ocr warning": "Passed with warnings",
-    "ocr failed": "Needs attention",
+    "ocr warning": "Accepted",
+    "ocr failed": "Rejected",
     "ocr error": "Could not complete",
     "ocr cancelled": "Cancelled",
   }
@@ -107,7 +115,6 @@ function outcomeOf(action: string | null | undefined): string {
 const DOMAIN_FILTERS: { value: LlmDecisionLogDomain | ""; label: string }[] = [
   { value: "", label: "All reports" },
   { value: "concern", label: "Concerns" },
-  { value: "emergency", label: "Emergencies" },
   { value: "verification", label: "Verification" },
 ]
 
@@ -132,11 +139,25 @@ const AUDIT_RANGES = [
   { key: "all", label: "All time" },
 ] as const
 
-function outcomeUnit(entry: DisplayLogEntry): string {
-  if (entry.assigned_department?.name) return entry.assigned_department.name
-  if (entry.source === "ocr") return "OCR document check"
-  if (entry.content_flag_id) return "Community moderation"
-  return "No responsible unit"
+function priorityIconOf(priority: DisplayLogEntry["priority"]) {
+  if (priority === "critical") return SignalIcon
+  if (priority === "high") return SignalHighIcon
+  if (priority === "moderate") return SignalMediumIcon
+  if (priority === "low") return SignalLowIcon
+  return null
+}
+
+type DetailFinding = {
+  icon: typeof CircleCheck
+  tone: "good" | "warn" | "bad" | "muted"
+  text: string
+}
+
+const DETAIL_FINDING_TONE: Record<DetailFinding["tone"], string> = {
+  good: "text-green-600",
+  warn: "text-amber-500",
+  bad: "text-sos",
+  muted: "text-neutral-400",
 }
 
 const SNAPSHOT_LABELS: Record<string, string> = {
@@ -200,14 +221,45 @@ function snapshotValue(value: unknown) {
 }
 
 function ocrAction(status: OcrTestResult["status"] | undefined) {
-  if (status === "passed") return "accept"
+  if (status === "passed" || status === "warning") return "accept"
   if (status === "failed") return "reject as irrelevant"
   return "manual review"
 }
 
 function ocrLogEntry(test: OcrTestResult): DisplayLogEntry {
   const id = -Math.abs(Number(test.id) || 1)
-  const documentName = typeof test.document_type === "string" ? test.document_type : test.document_type?.name
+  const documentName = test.document_type_name || (typeof test.document_type === "string" ? test.document_type : test.document_type?.name)
+  const requestedBy = test.requested_by_name?.trim() || "Barangay official"
+  const statusSummary = test.status === "passed" || test.status === "warning"
+    ? "The document was accepted automatically because all required checks passed."
+    : test.status === "failed"
+        ? test.error || "The submitted document did not pass verification."
+        : test.error || "The document check could not be completed."
+  const results: Array<{ tone: DetailFinding["tone"]; text: string }> = []
+  if (test.status === "passed" || test.status === "warning") results.push({ tone: "good", text: "The document was accepted automatically." })
+  if (test.status === "failed") results.push({ tone: "bad", text: test.error || "The document did not pass the configured requirements." })
+  if (test.status === "error" || test.status === "cancelled") results.push({ tone: "warn", text: test.error || "The document check was not completed." })
+  const pictureChecks = test.id_integrity_checks?.length
+    ? test.id_integrity_checks
+    : test.pipeline?.integrity_checks?.length
+      ? test.pipeline.integrity_checks
+      : test.id_integrity
+        ? [test.id_integrity]
+        : []
+  if (pictureChecks.some((check) => check.format_verdict === "format_mismatch")) {
+    results.push({ tone: "bad", text: "The document layout does not match the configured reference sample." })
+  } else if (pictureChecks.some((check) => check.format_verdict === "format_matches")) {
+    results.push({ tone: "good", text: "The document layout matches the configured reference sample." })
+  }
+  if (pictureChecks.some((check) => check.integrity_verdict === "suspected_edit" || check.integrity_verdict === "suspected_ai" || check.integrity_verdict === "photo_of_screen" || check.integrity_verdict === "impossible_content")) {
+    results.push({ tone: "bad", text: "The document image shows authenticity concerns." })
+  } else if (pictureChecks.some((check) => check.integrity_verdict === "authentic")) {
+    results.push({ tone: "good", text: "The document looks like an original camera photo." })
+  }
+  const failedRules = (test.rule_results || []).filter((rule) => rule.passed === false)
+  if (failedRules.length && test.status === "warning") {
+    results.push({ tone: "muted", text: `${failedRules.length} optional ${failedRules.length === 1 ? "check did" : "checks did"} not match, but this did not block acceptance.` })
+  }
   const submittedMedia = test.image_url
     ? [{
         id: Math.abs(Number(test.id) || 1),
@@ -222,25 +274,20 @@ function ocrLogEntry(test: OcrTestResult): DisplayLogEntry {
     domain: "verification",
     created_at: test.created_at || new Date().toISOString(),
     recommended_action: `ocr_${test.status}`,
-    resident_message: test.error || "OCR test completed.",
+    resident_message: statusSummary,
     assigned_department: null,
     routing_reason: "",
-    model_version: test.provider || "OCR",
+    model_version: "Document verification",
     duration_ms: null,
-    location: "Not applicable",
+    location: "Document verification",
     input_snapshot: {
-      document_type: documentName || "Configured document",
+      document_type: documentName || "Document",
+      requested_by: requestedBy,
       image_side: test.test_side || "single",
-      filename: test.filename,
-      image_url: test.image_url || null,
     },
     output_snapshot: {
       status: test.status,
-      provider: test.provider || "OCR",
-      ocr_confidence: test.confidence ?? test.overall_confidence ?? null,
-      extracted_fields: test.extracted_fields || {},
-      picture_check: test.id_integrity_checks || test.id_integrity || null,
-      error: test.error || null,
+      results,
     },
     source: "ocr",
     ocr_status: test.status,
@@ -249,7 +296,7 @@ function ocrLogEntry(test: OcrTestResult): DisplayLogEntry {
     final_decision: {
       action: ocrAction(test.status),
       label: outcomeOf(`ocr_${test.status}`),
-      reason: test.error || "The configured verification checks were run against this image.",
+      reason: statusSummary,
       source: "Document verification",
     },
     submitted_media: submittedMedia,
@@ -261,13 +308,90 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+function decisionFindings(
+  entry: DisplayLogEntry,
+  street: NonNullable<LlmDecisionLogEntry["street_imagery"]> | null,
+): DetailFinding[] {
+  if (entry.source === "ocr" && Array.isArray(entry.output_snapshot.results)) {
+    return entry.output_snapshot.results.flatMap((item: unknown) => {
+      if (!isPlainObject(item) || typeof item.text !== "string") return []
+      const tone = item.tone === "good" || item.tone === "warn" || item.tone === "bad" ? item.tone : "muted"
+      const icon = tone === "good" ? CircleCheck : tone === "bad" ? Ban : TriangleAlert
+      return [{ icon, tone, text: item.text }]
+    })
+  }
+  const findings: DetailFinding[] = []
+  const output = entry.output_snapshot
+  const relationship = typeof output.evidence_relationship === "string" ? output.evidence_relationship : ""
+  const relationshipFinding: Record<string, DetailFinding> = {
+    supports_report: { icon: CircleCheck, tone: "good", text: "The submitted photo supports the report." },
+    partially_supports_report: { icon: TriangleAlert, tone: "warn", text: "The submitted photo partly supports the report." },
+    contradicts_report: { icon: Ban, tone: "bad", text: "The submitted photo does not match the report." },
+    image_unavailable: { icon: ImageOffIcon, tone: "muted", text: "The submitted photo could not be reviewed automatically." },
+    image_review_failed: { icon: ImageOffIcon, tone: "muted", text: "The submitted photo could not be reviewed automatically." },
+    no_useful_image_evidence: { icon: ImageOffIcon, tone: "muted", text: "The photo does not confirm the report." },
+  }
+  if (relationship && relationshipFinding[relationship]) findings.push(relationshipFinding[relationship])
+
+  const integrity = integrityVerdictOf(output)
+  if (integrity) {
+    findings.push({
+      icon: Ban,
+      tone: "bad",
+      text: mediaIntegrityVerdict(integrity).label.replace(/\.$/, ""),
+    })
+  }
+
+  if (street?.status === "checked") {
+    const explanation = street.explanation?.trim()
+      .replace(/^Image 1 (shows|depicts)/i, "The evidence shows")
+      .replace(/Image 2 (shows|depicts)/gi, "the area near the pin shows")
+      .replace(/\.$/, "") || ""
+    if (street.verdict === "area_matches") {
+      findings.push({
+        icon: CircleCheck,
+        tone: "good",
+        text: explanation
+          ? `${explanation}, which supports the pinned location.`
+          : "The evidence matches the area near the pin.",
+      })
+    } else if (street.verdict === "area_mismatch") {
+      findings.push({
+        icon: Ban,
+        tone: "bad",
+        text: explanation
+          ? `${explanation}, so the surroundings do not match the pinned area.`
+          : "The evidence does not match the area near the pin.",
+      })
+    } else {
+      findings.push({ icon: ScanLineIcon, tone: "muted", text: "Area comparison was inconclusive." })
+    }
+  } else if (street?.status === "no_coverage") {
+    findings.push({ icon: ScanLineIcon, tone: "muted", text: "No street imagery covers this pin." })
+  }
+
+  return findings
+}
+
 function formatPrimitive(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—"
   if (typeof value === "boolean") return value ? "Yes" : "No"
   return String(snapshotValue(value))
 }
 
-function ProtectedLogImage({ src, label }: { src: string; label: string }) {
+function ProtectedLogImage({
+  src,
+  label,
+  className,
+  unavailableText = "Image unavailable",
+  allowRetry = true,
+}: {
+  src: string
+  label: string
+  className?: string
+  unavailableText?: string
+  allowRetry?: boolean
+}) {
   const [state, setState] = useState({ src: "", objectUrl: "", error: false, loading: false })
   const [attempt, setAttempt] = useState(0)
   const isDataUri = /^data:image\//i.test(src)
@@ -294,10 +418,11 @@ function ProtectedLogImage({ src, label }: { src: string; label: string }) {
     }
   }, [src, attempt, isDataUri])
 
-  if (isDataUri) return <img src={src} alt={label} className="mt-2 max-h-52 max-w-full rounded-lg border border-neutral-200 object-contain" />
+  if (isDataUri) return <img src={src} alt={label} className={cn("mt-2 max-h-52 max-w-full rounded-lg border border-neutral-200 object-contain", className)} />
 
   if (state.src !== src || state.loading) return <span className="text-neutral-400">Loading image…</span>
   if (state.error || !state.objectUrl) {
+    if (!allowRetry) return <span className="text-meta text-neutral-500">{unavailableText}</span>
     return (
       <span className="inline-flex flex-wrap items-center gap-2 text-neutral-400">
         Image unavailable
@@ -311,7 +436,7 @@ function ProtectedLogImage({ src, label }: { src: string; label: string }) {
       </span>
     )
   }
-  return <img src={state.objectUrl} alt={label} className="mt-2 max-h-52 max-w-full rounded-lg border border-neutral-200 object-contain" />
+  return <img src={state.objectUrl} alt={label} className={cn("mt-2 max-h-52 max-w-full rounded-lg border border-neutral-200 object-contain", className)} />
 }
 
 function SnapshotValue({ value, keyName = "" }: { value: unknown; keyName?: string }) {
@@ -334,7 +459,7 @@ function SnapshotValue({ value, keyName = "" }: { value: unknown; keyName?: stri
       return <>{value.map((item) => formatPrimitive(item)).join(", ")}</>
   }
   if (isPlainObject(value)) {
-    const rows = Object.entries(value)
+    const rows = Object.entries(value).filter(([key]) => key !== "source" && key !== "decision_source")
     if (!rows.length) return <>—</>
     return (
       <dl className="space-y-1 border-l-2 border-neutral-200 pl-3">
@@ -353,7 +478,7 @@ function SnapshotValue({ value, keyName = "" }: { value: unknown; keyName?: stri
 }
 
 function SnapshotTable({ label, snapshot }: { label: string; snapshot: Record<string, unknown> }) {
-  const rows = Object.entries(snapshot ?? {})
+  const rows = Object.entries(snapshot ?? {}).filter(([key]) => key !== "source" && key !== "decision_source")
   if (rows.length === 0) return null
   return (
     <div>
@@ -374,80 +499,69 @@ function SnapshotTable({ label, snapshot }: { label: string; snapshot: Record<st
 
 function StreetViewEvidence({
   street,
-  retrying,
-  onRetry,
 }: {
   street: NonNullable<LlmDecisionLogEntry["street_imagery"]> | null
-  retrying: boolean
-  onRetry: () => void
 }) {
-  const [failedSrc, setFailedSrc] = useState("")
-  const imageFailed = Boolean(street?.image && failedSrc === street.image)
+  const canLoadImage = Boolean(
+    street &&
+      !street.image &&
+      street.status === "checked" &&
+      street.latitude != null &&
+      street.longitude != null
+  )
+  const [image, setImage] = useState(street?.image || "")
+  const [imageLoading, setImageLoading] = useState(canLoadImage)
+  const [imageFailed, setImageFailed] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
 
-  const verdictLabel = street?.verdict === "inconclusive"
-    ? "Could not confirm the location"
-    : street?.verdict
-      ? readable(street.verdict).replace(/^./, (value) => value.toUpperCase())
-      : "Not available"
-  const verdictExplanation = street?.verdict === "inconclusive"
-    ? "The submitted photo did not contain enough stable landmarks to make a reliable comparison. This is not a rejection."
-    : street?.explanation || "The comparison explains whether the submitted photo matches the pinned area."
+  useEffect(() => {
+    const latitude = street?.latitude
+    const longitude = street?.longitude
+    if (!canLoadImage || latitude == null || longitude == null) return
+    const controller = new AbortController()
+    void getStreetViewImage({ lat: latitude, lng: longitude }, controller.signal)
+      .then((result) => {
+        if (result.image) setImage(result.image)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setImageFailed(true)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setImageLoading(false)
+    })
+    return () => controller.abort()
+  }, [canLoadImage, street?.latitude, street?.longitude])
 
-  const statusText = street?.status === "no_coverage"
-    ? "No street imagery was found for this location."
-    : street?.status === "skipped"
-      ? "The street-view comparison was skipped for this run."
-      : street?.status === "disabled"
-        ? "Street-view checks are not enabled for this category."
-        : "The comparison image was not captured for this run."
-  const canRetry = street?.status !== "disabled" && street?.status !== "skipped"
+  if ((!image && !canLoadImage) || imageFailed) return null
 
   return (
-    <section>
-      <p className="mb-2 text-meta font-semibold uppercase tracking-wide text-neutral-400">Location comparison</p>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(220px,0.75fr)]">
-        <div className="min-w-0">
-          <p className="text-meta font-medium text-neutral-500">Street view</p>
-          {street?.image && !imageFailed ? (
-            <img
-              src={street.image}
-              alt="Street-view comparison"
-              className="mt-2 max-h-64 w-full rounded-lg border border-neutral-200 object-contain"
-              onError={() => setFailedSrc(street.image || "")}
-            />
-          ) : (
-            <div className="mt-2 flex min-h-40 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-neutral-200 bg-neutral-50 px-4 text-center">
-              <p className="text-meta text-neutral-500">{imageFailed ? "The street-view image could not be loaded." : statusText}</p>
-              {canRetry ? (
-                <button
-                  type="button"
-                  onClick={onRetry}
-                  disabled={retrying}
-                  className="inline-flex items-center gap-1.5 text-meta font-semibold text-brand-navy hover:text-accent disabled:opacity-50"
-                >
-                  <RefreshCwIcon className={cn("size-3.5", retrying && "animate-spin")} aria-hidden />
-                  {retrying ? "Retrying comparison…" : "Retry street-view check"}
-                </button>
-              ) : null}
-            </div>
-          )}
-          {street?.captured_date || street?.distance_meters != null ? (
-            <p className="mt-2 text-meta text-neutral-500">
-              {[street.captured_date, street.distance_meters != null ? `${street.distance_meters} m from the pin` : null].filter(Boolean).join(" · ")}
-            </p>
-          ) : null}
-        </div>
-        <div className="border-l border-neutral-200 pl-4">
-          <p className="text-meta font-medium text-neutral-500">Result</p>
-          <p className="mt-2 text-[14px] font-semibold text-neutral-900">
-            {verdictLabel}
-          </p>
-          <p className="mt-1 text-meta leading-relaxed text-neutral-600">
-            {verdictExplanation}
-          </p>
-        </div>
-      </div>
-    </section>
+    <div className="min-w-0">
+      <p className="mb-2 text-[12px] font-semibold tracking-tight text-neutral-500">Panorama image</p>
+      {image && !imageFailed ? (
+        <button
+          type="button"
+          onClick={() => setPreviewOpen(true)}
+          aria-label="Preview panorama image"
+          className="mt-2 block w-full overflow-hidden rounded-[14px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy focus-visible:ring-offset-2"
+        >
+          <img
+            src={image}
+            alt="Panorama near the pin"
+            className="block h-auto w-full rounded-[14px] object-cover"
+            onError={() => setImageFailed(true)}
+          />
+        </button>
+      ) : imageLoading ? (
+        <p className="mt-2 text-meta text-neutral-500">Loading panorama image…</p>
+      ) : null}
+      {previewOpen && image ? (
+        <MediaLightbox
+          items={[toMediaPreviewItem(image, "Panorama near the pin", "image/jpeg")]}
+          index={0}
+          onClose={() => setPreviewOpen(false)}
+        />
+      ) : null}
+    </div>
   )
 }
 
@@ -474,8 +588,6 @@ function decisionPresentation(entry: DisplayLogEntry) {
 function DecisionDetailsDialog({
   entry,
   street,
-  retrying,
-  onRetryStreetView,
   onClose,
   onRevert,
   reverting,
@@ -483,98 +595,200 @@ function DecisionDetailsDialog({
 }: {
   entry: DisplayLogEntry | null
   street: NonNullable<LlmDecisionLogEntry["street_imagery"]> | null
-  retrying: boolean
-  onRetryStreetView: () => void
   onClose: () => void
   onRevert: () => void
   reverting: boolean
   reverted: boolean
 }) {
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   if (!entry) return null
   const { decision, decisionLabel, DecisionIcon, decisionTone } = decisionPresentation(entry)
-  const { generated, submitted, same } = descriptionCopyOf(entry)
+  const priorityLabel = entry.source === "ocr" ? "Not applicable" : entry.priority ? readable(entry.priority) : "Not assessed"
+  const PriorityIcon = priorityIconOf(entry.priority)
+  const findings = decisionFindings(entry, street)
+  const isVerification = entry.source === "ocr"
+  const summary = entry.resident_message?.trim() || decision.reason
+  const description = descriptionOf(entry)
+  const requestedBy = entry.input_snapshot.requested_by
+  const reporterName = isVerification && typeof requestedBy === "string"
+    ? requestedBy
+    : entry.reporter?.name || "Submitter unavailable"
+  const reporterInitials = entry.reporter?.initials || reporterName.split(/\s+/).map((part) => part[0] || "").join("").slice(0, 2).toUpperCase()
+  const address = entry.address?.trim() || locationOf(entry)
+  const trackingId = entry.tracking_id || "Not available"
+  const assignedUnit = entry.assigned_unit?.name || entry.assigned_department?.name || "Unassigned"
+  const verificationSide = String(entry.input_snapshot.image_side || "single").toLowerCase()
+  const verificationReferences = (entry.reference_images || []).filter(
+    (sample, index, all) => all.findIndex((item) => item.url === sample.url) === index,
+  )
+  const verificationReference = verificationReferences.find((sample) => sample.side === verificationSide) || verificationReferences[0]
+  const displayedSide = ["front", "back"].includes(verificationSide)
+    ? readable(verificationSide)
+    : verificationReference && ["front", "back"].includes(verificationReference.side)
+      ? readable(verificationReference.side)
+      : ""
+  const verificationImages = isVerification
+    ? [
+        ...(entry.submitted_media?.slice(0, 1).map((media) => ({
+          src: media.preview_url || media.raw_url,
+          label: "Submitted document",
+        })) || []),
+        ...(verificationReference ? [{ src: verificationReference.url, label: "Reference template" }] : []),
+      ]
+    : []
 
   return (
     <SheetDialog
       open
       onClose={onClose}
-      title={entry.source === "ocr" ? "Verification details" : "Report details"}
-      description={`${new Date(entry.created_at).toLocaleDateString("en-PH", { dateStyle: "medium" })} · ${categoryOf(entry)}`}
+      title={entry.source === "ocr" ? "Verification result" : "Concern check result"}
+      description={entry.source === "ocr" ? "This is a recorded verification result." : "This is a recorded concern check."}
       size="wide"
+      className="sm:h-[min(760px,90dvh)] sm:min-h-[480px] sm:min-w-[min(92vw,640px)] sm:max-h-[90dvh] sm:max-w-[min(92vw,1100px)] sm:resize sm:overflow-auto [&::-webkit-resizer]:hidden"
     >
-      <div className="space-y-6">
-        <section className="border-b border-neutral-200 pb-5">
-          <div className="flex items-start gap-3">
+      <div className="space-y-8">
+        <section className="border-b border-neutral-200 pb-6">
+          <p className="text-[12px] font-medium tracking-wide text-neutral-500">Summary</p>
+          <div className="mt-3 flex items-start gap-3">
             <DecisionIcon className={cn("mt-0.5 size-5 shrink-0", decisionTone)} strokeWidth={2} aria-hidden />
-            <div className="min-w-0">
-              <p className="text-[17px] font-semibold leading-snug text-neutral-900">{decisionLabel}</p>
-              <p className="mt-1 text-[14px] leading-relaxed text-neutral-600">{decision.reason}</p>
+            <div className="min-w-0 max-w-[65ch]">
+              <h3 className="text-pretty text-[18px] font-semibold leading-snug tracking-[-0.015em] text-neutral-950">{decisionLabel}</h3>
+              <p className="mt-1.5 text-pretty text-[14px] leading-6 text-neutral-600">{summary}</p>
             </div>
           </div>
-          <dl className="mt-4 grid gap-3 border-t border-neutral-100 pt-4 sm:grid-cols-3">
-            <div><dt className="text-meta text-neutral-400">Decision source</dt><dd className="mt-0.5 text-meta text-brand-navy">{decision.source}</dd></div>
-            <div><dt className="text-meta text-neutral-400">Assigned unit</dt><dd className="mt-0.5 text-meta text-brand-navy">{outcomeUnit(entry)}</dd></div>
-            <div><dt className="text-meta text-neutral-400">Model suggestion</dt><dd className="mt-0.5 text-meta text-brand-navy">{outcomeOf(entry.recommended_action)}</dd></div>
-          </dl>
-          {decision.legacy ? <p className="mt-3 text-meta text-amber-700">This is a legacy run. The final evidence was not captured at the time.</p> : null}
         </section>
 
-        <section>
-          <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-neutral-800">{same ? submitted : generated}</p>
-          {!same && entry.source !== "ocr" ? (
-            <div className="mt-4 border-t border-neutral-200 pt-3">
-              <p className="mb-1 text-meta font-semibold uppercase tracking-wide text-neutral-400">Submitted description</p>
-              <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-neutral-700">{submitted}</p>
+        <section className="border-b border-neutral-200 pb-5">
+          <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-neutral-950">{isVerification ? "Verification details" : "Breakdown"}</h3>
+          {!isVerification ? (
+            <div className="mt-4 flex flex-wrap items-center gap-3 border-b border-neutral-200 pb-4">
+              <UserAvatar user={{ full_name: reporterName, initials: reporterInitials }} size="md" />
+              <div className="min-w-0">
+                <p className="text-meta text-neutral-400">Submitted by</p>
+                <p className="truncate text-[14px] font-semibold text-neutral-900">{reporterName}</p>
+              </div>
+              <div className="min-w-0 sm:ml-auto sm:text-right">
+                <p className="text-meta text-neutral-400">Tracking ID</p>
+                <p className="truncate text-[14px] font-semibold text-neutral-900" title={trackingId}>{trackingId}</p>
+              </div>
             </div>
           ) : null}
-          {entry.source !== "ocr" ? (
-            <dl className="mt-4 grid gap-x-8 gap-y-3 border-t border-neutral-200 pt-3 sm:grid-cols-2">
-              <div><dt className="text-meta text-neutral-400">Category</dt><dd className="mt-0.5 text-meta text-brand-navy">{categoryOf(entry)}</dd></div>
-              <div><dt className="text-meta text-neutral-400">Location</dt><dd className="mt-0.5 text-meta text-brand-navy">{locationOf(entry)}</dd></div>
+          {isVerification ? (
+            <dl className="mt-4 grid gap-4 sm:grid-cols-3">
+              <div><dt className="text-meta text-neutral-400">Document</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{String(entry.input_snapshot.document_type || "Document")}</dd></div>
+              <div><dt className="text-meta text-neutral-400">Outcome</dt><dd className={cn("mt-1 text-meta font-semibold", decisionTone)}>{decisionLabel}</dd></div>
+              <div><dt className="text-meta text-neutral-400">Automatically checked</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{new Date(entry.created_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}</dd></div>
             </dl>
+          ) : (
+            <dl className="grid gap-4 pt-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div><dt className="text-meta text-neutral-400">Category</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{categoryOf(entry)}</dd></div>
+              <div>
+                <dt className="text-meta text-neutral-400">Priority</dt>
+                <dd className={cn("mt-1 inline-flex items-center gap-1.5 text-meta font-semibold", entry.priority ? SEVERITY_TONE[entry.priority] : "text-neutral-700")}>
+                  {PriorityIcon ? createElement(PriorityIcon, { className: "size-4", strokeWidth: 2, "aria-hidden": true }) : null}
+                  {priorityLabel}
+                </dd>
+              </div>
+              <div><dt className="text-meta text-neutral-400">Pinned address</dt><dd className="mt-1 text-meta font-semibold text-neutral-900" title={address}>{address}</dd></div>
+              <div><dt className="text-meta text-neutral-400">Assigned unit</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{assignedUnit}</dd></div>
+              <div><dt className="text-meta text-neutral-400">Checked</dt><dd className="mt-1 text-meta font-semibold text-neutral-900">{new Date(entry.created_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}</dd></div>
+            </dl>
+          )}
+          {!isVerification && description ? (
+            <div className="mt-5 border-t border-neutral-200 pt-4">
+              <p className="text-[12px] font-medium tracking-wide text-neutral-500">Description</p>
+              <p className="mt-2 whitespace-pre-wrap text-[14px] leading-relaxed text-neutral-800">{description}</p>
+            </div>
+          ) : null}
+          {findings.length ? (
+            <div className="mt-5 border-t border-neutral-200 pt-4">
+              <p className="text-[12px] font-medium tracking-wide text-neutral-500">Results</p>
+              <ul className="mt-3 space-y-2">
+                {findings.map((finding) => (
+                  <li key={finding.text} className="flex gap-2 text-[13.5px] leading-relaxed text-neutral-700">
+                    {createElement(finding.icon, { className: cn("mt-0.5 size-4 shrink-0", DETAIL_FINDING_TONE[finding.tone]), strokeWidth: 2, "aria-hidden": true })}
+                    <span className="min-w-0 break-words">{finding.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
         </section>
 
-        {entry.submitted_media?.length ? (
+        {isVerification && verificationImages.length ? (
           <section>
-            <p className="mb-2 text-meta font-semibold uppercase tracking-wide text-neutral-400">Submitted evidence</p>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {entry.submitted_media.map((media) => (
-                <figure key={media.id} className="min-w-0">
-                  <div className="overflow-hidden rounded-[12px] border border-neutral-200 bg-neutral-50 p-2">
-                  <ProtectedLogImage src={media.raw_url || media.preview_url} label={media.label} />
-                  </div>
-                  <figcaption className="mt-2 truncate text-meta text-neutral-500" title={media.label}>{media.label}</figcaption>
+            <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-neutral-950">Image comparison</h3>
+            <div className={cn("mt-3 grid gap-4", verificationImages.length > 1 && "sm:grid-cols-2")}>
+              {verificationImages.map((image, index) => (
+                <figure key={`${image.label}-${image.src}`} className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewIndex(index)}
+                    aria-label={`Preview ${image.label.toLowerCase()}`}
+                    className="group relative block w-full overflow-hidden rounded-[14px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy focus-visible:ring-offset-2"
+                  >
+                    <ProtectedLogImage
+                      src={image.src}
+                      label={image.label}
+                      unavailableText={`${image.label} is no longer available.`}
+                      allowRetry={false}
+                      className="block h-auto w-full rounded-[14px] border-0 object-contain"
+                    />
+                    <span className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-neutral-950/70 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
+                      <Maximize2Icon className="size-3.5" strokeWidth={2} aria-hidden /> Preview
+                    </span>
+                    {displayedSide ? (
+                      <span className="absolute bottom-3 left-3 rounded-full bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 backdrop-blur-sm">
+                        {displayedSide}
+                      </span>
+                    ) : null}
+                  </button>
+                  <figcaption className="mt-2 text-[12px] font-medium text-neutral-600">{image.label}</figcaption>
                 </figure>
               ))}
             </div>
           </section>
         ) : null}
 
-        {entry.source === "ocr" && entry.reference_images?.length ? (
+        {!isVerification && entry.submitted_media?.length ? (
           <section>
-            <p className="mb-2 text-meta font-semibold uppercase tracking-wide text-neutral-400">Configured reference samples</p>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {entry.reference_images.map((sample) => (
-                <figure key={`${sample.side}-${sample.url}`} className="min-w-0">
-                  <div className="overflow-hidden rounded-[12px] border border-neutral-200 bg-neutral-50 p-2">
-                  <ProtectedLogImage src={sample.url} label={sample.label || `${sample.side} reference`} />
-                  </div>
-                  <figcaption className="mt-2 text-meta text-neutral-500">{sample.label || `${sample.side} reference`}</figcaption>
-                </figure>
-              ))}
+            <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-neutral-950">{isVerification ? "Submitted document" : "Evidence"}</h3>
+            <div className={cn("mt-3 grid gap-5", (entry.submitted_media?.length ?? 0) > 1 && "md:grid-cols-2")}>
+              {entry.submitted_media.map((media, index) => {
+                const label = isVerification
+                  ? "Submitted document"
+                  : entry.submitted_media?.length === 1 ? "Submitted evidence" : `Submitted evidence ${index + 1}`
+                return (
+                  <figure key={media.id} className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewIndex(index)}
+                      aria-label={`Preview ${label.toLowerCase()}`}
+                      className="block w-full overflow-hidden rounded-[14px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy focus-visible:ring-offset-2"
+                    >
+                      <ProtectedLogImage src={media.preview_url || media.raw_url} label={label} className="mt-0 block h-auto w-full max-h-none max-w-none rounded-[14px] border-0 object-contain" />
+                    </button>
+                    {(entry.submitted_media?.length ?? 0) > 1 ? <figcaption className="mt-2 text-meta text-neutral-500">{label}</figcaption> : null}
+                  </figure>
+                )
+              })}
             </div>
           </section>
         ) : null}
 
-        {entry.concern_id ? (
-          <StreetViewEvidence street={street} retrying={retrying} onRetry={onRetryStreetView} />
+        {!isVerification && street ? (
+          <section>
+            <StreetViewEvidence
+              key={`${street.latitude ?? ""}-${street.longitude ?? ""}-${street.image ?? ""}`}
+              street={street}
+            />
+          </section>
         ) : null}
 
         {entry.content_flag_id ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2.5">
             <p className="text-[12px] leading-relaxed text-amber-900">
-              {reverted ? "Reverted — content is back for staff review." : "This check is linked to an automated community action."}
+              {reverted ? "Reverted. Content is back for staff review." : "This check is linked to an automated community action."}
             </p>
             {!reverted ? (
               <button
@@ -588,13 +802,24 @@ function DecisionDetailsDialog({
             ) : null}
           </div>
         ) : null}
+        {previewIndex !== null && (isVerification ? verificationImages.length : entry.submitted_media?.length) ? (
+          <MediaLightbox
+            items={isVerification
+              ? verificationImages.map((image) => toMediaPreviewItem(image.src, image.label, "image"))
+              : (entry.submitted_media || []).map((media, index) =>
+                  toMediaPreviewItem(media.preview_url || media.raw_url, media.label || `Submitted evidence ${index + 1}`, "image")
+                )}
+            index={previewIndex}
+            onClose={() => setPreviewIndex(null)}
+          />
+        ) : null}
       </div>
     </SheetDialog>
   )
 }
 
 export function DecisionLogTab() {
-  const [domain, setDomain] = useState<LlmDecisionLogDomain | "">("")
+  const [domain, setDomain] = useState<LlmDecisionLogDomain | "">("concern")
   const [entries, setEntries] = useState<DisplayLogEntry[]>([])
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(1)
@@ -605,8 +830,6 @@ export function DecisionLogTab() {
   const [search, setSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [range, setRange] = useState<(typeof AUDIT_RANGES)[number]["key"]>("30")
-  const [streetRetry, setStreetRetry] = useState<number | null>(null)
-  const [streetResults, setStreetResults] = useState<Record<number, NonNullable<LlmDecisionLogEntry["street_imagery"]>>>({})
   const requestKey = `${domain}|${page}|${debouncedSearch}|${range}`
 
   useEffect(() => {
@@ -643,6 +866,11 @@ export function DecisionLogTab() {
         nextCount += ocrEntries.length
       }
       if (!cancelled) {
+        const maxPage = Math.max(1, Math.ceil(nextCount / PAGE_SIZE))
+        if (page > maxPage) {
+          setPage(maxPage)
+          return
+        }
         setEntries(nextEntries)
         setCount(nextCount)
         setDetailId(null)
@@ -678,20 +906,6 @@ export function DecisionLogTab() {
     }
   }
 
-  async function retryStreetView(entry: DisplayLogEntry) {
-    if (!entry.concern_id || streetRetry != null) return
-    setStreetRetry(entry.id)
-    try {
-      const result = await rerunLlmDecisionLogStreetImagery(entry.id)
-      setStreetResults((previous) => ({ ...previous, [entry.id]: result }))
-      setDetailId(entry.id)
-    } catch (error) {
-      toast.error(describeApiError(error, "The street-view comparison could not be rerun."))
-    } finally {
-      setStreetRetry(null)
-    }
-  }
-
   const domainOptions = DOMAIN_FILTERS.map((filter) => ({ key: filter.value, label: filter.label }))
   const loading = loadedKey !== requestKey
   const filteredEntries = useMemo(
@@ -714,8 +928,8 @@ export function DecisionLogTab() {
         <ListSearch
           value={search}
           onChange={(value) => { setSearch(value); setPage(1) }}
-          placeholder="Search reports, locations, or decisions"
-          label="Search system behavior log"
+          placeholder={domain === "verification" ? "Search document checks" : "Search reports, locations, or decisions"}
+          label={domain === "verification" ? "Search verification results" : "Search system behavior log"}
           className="flex-1 sm:max-w-sm"
         />
         <div className="flex items-center gap-6 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -744,52 +958,32 @@ export function DecisionLogTab() {
           No system checks in this section yet.
         </p>
       ) : (
-        <ol className="border-y border-neutral-200">
+        <ol>
           {filteredEntries.map((entry) => {
-            const { decision, decisionLabel, DecisionIcon, decisionTone } = decisionPresentation(entry)
-            const priorityLabel = entry.priority ? entry.priority.charAt(0).toUpperCase() + entry.priority.slice(1) : ""
+            const { DecisionIcon, decisionTone } = decisionPresentation(entry)
             return (
               <li key={entry.id} className="grid gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[150px_minmax(0,1fr)]">
                 <div className="text-meta tabular-nums text-neutral-400">
                   <p className="text-neutral-500">{new Date(entry.created_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}</p>
                   <p className="mt-0.5">{new Date(entry.created_at).toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit" })}</p>
                 </div>
-                <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
                   <div className="min-w-0">
-                    <div className="flex items-start gap-2">
-                      <DecisionIcon className={cn("mt-0.5 size-5 shrink-0", decisionTone)} strokeWidth={2} aria-hidden />
-                      <div className="min-w-0">
-                        <p className="text-row font-normal text-brand-navy">{decisionLabel}</p>
-                        <p className="mt-0.5 line-clamp-2 text-meta leading-relaxed text-neutral-600">{generatedSummaryOf(entry)}</p>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 text-pretty text-[15px] font-semibold leading-snug tracking-[-0.01em] text-brand-navy">{titleOf(entry)}</p>
+                        {entry.source !== "ocr" ? <p className="mt-0.5 truncate text-meta text-neutral-500">{locationOf(entry)}</p> : null}
                       </div>
                     </div>
-                    <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2 pl-7">
-                      <div className="min-w-0">
-                        <dt className="text-meta text-neutral-400">{entry.source === "ocr" ? "Document" : "Category"}</dt>
-                        <dd className="mt-0.5 truncate text-meta text-brand-navy">{categoryOf(entry)}</dd>
-                      </div>
-                      {entry.source !== "ocr" ? (
-                        <div className="min-w-0">
-                          <dt className="text-meta text-neutral-400">Location</dt>
-                          <dd className="mt-0.5 truncate text-meta text-brand-navy">{locationOf(entry)}</dd>
-                        </div>
-                      ) : null}
-                      {priorityLabel ? (
-                        <div className="min-w-0">
-                          <dt className="text-meta text-neutral-400">Priority</dt>
-                          <dd className="mt-0.5 text-meta font-medium text-brand-navy">{priorityLabel}</dd>
-                        </div>
-                      ) : null}
-                      <div className="min-w-0">
-                        <dt className="text-meta text-neutral-400">Source</dt>
-                        <dd className="mt-0.5 truncate text-meta text-brand-navy">{decision.source}</dd>
-                      </div>
-                    </dl>
+                    <div className="mt-2 flex items-start gap-2">
+                      <DecisionIcon className={cn("mt-0.5 size-4 shrink-0", decisionTone)} strokeWidth={2} aria-hidden />
+                      <p className="line-clamp-2 min-w-0 text-meta leading-relaxed text-neutral-600">{generatedSummaryOf(entry)}</p>
+                    </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => setDetailId(entry.id)}
-                    className="inline-flex items-center gap-1 self-start justify-self-start text-meta font-medium text-brand-navy transition-colors hover:text-accent sm:justify-self-end"
+                    className="inline-flex items-center gap-1 self-center justify-self-start text-meta font-medium text-brand-navy transition-colors hover:text-accent sm:justify-self-end"
                   >
                     View details
                     <ChevronDownIcon className="size-4 -rotate-90" aria-hidden />
@@ -801,16 +995,11 @@ export function DecisionLogTab() {
         </ol>
       )}
 
-      {!loading ? <Pager offset={(page - 1) * PAGE_SIZE} total={count} pageSize={PAGE_SIZE} onChange={(nextOffset) => setPage(Math.floor(nextOffset / PAGE_SIZE) + 1)} noun="checks" /> : null}
+      {!loading ? <Pager offset={(page - 1) * PAGE_SIZE} total={count} pageSize={PAGE_SIZE} onChange={(nextOffset) => setPage(Math.floor(nextOffset / PAGE_SIZE) + 1)} noun={domain === "concern" ? "concerns" : domain === "verification" ? "verification checks" : "checks"} className="mt-4 border-t-0 pt-0" /> : null}
 
       <DecisionDetailsDialog
         entry={detailId === null ? null : entries.find((entry) => entry.id === detailId) ?? null}
-        street={detailId === null ? null : streetResults[detailId] ?? entries.find((entry) => entry.id === detailId)?.street_imagery ?? null}
-        retrying={detailId !== null && streetRetry === detailId}
-        onRetryStreetView={() => {
-          const entry = detailId === null ? null : entries.find((item) => item.id === detailId)
-          if (entry) void retryStreetView(entry)
-        }}
+        street={detailId === null ? null : entries.find((entry) => entry.id === detailId)?.street_imagery ?? null}
         onClose={() => setDetailId(null)}
         onRevert={() => {
           const entry = detailId === null ? null : entries.find((item) => item.id === detailId)
@@ -970,7 +1159,7 @@ export function LegacyDecisionLogTab() {
                     {entry.content_flag_id ? (
                       <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2.5">
                         <p className="text-[12px] leading-relaxed text-amber-900">
-                          {reverted.has(entry.id) ? "Reverted — content is back for staff review." : "This decision is linked to an automated community moderation action."}
+                          {reverted.has(entry.id) ? "Reverted. Content is back for staff review." : "This decision is linked to an automated community moderation action."}
                         </p>
                         {!reverted.has(entry.id) ? (
                           <button

@@ -8,7 +8,6 @@ import { toast } from "sonner"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useAuthSession } from "@/features/auth/auth-session"
 import { changePassword } from "@/features/auth/api"
 import { FloatingLabelInput } from "@/features/auth/components/floating-label-input"
 import { PASSWORD_REQUIREMENTS } from "@/features/auth/lib/password-requirements"
@@ -27,7 +26,6 @@ export function ChangePasswordFlow({
   onExit: () => void
 }) {
   const navigate = useNavigate()
-  const { user } = useAuthSession()
 
   useEffect(() => {
     registerBack(onExit)
@@ -81,8 +79,7 @@ export function ChangePasswordFlow({
   return (
     <>
       <h2 className="text-[1.45rem] font-bold leading-tight tracking-tight text-foreground">
-        Set a new password for{" "}
-        <span className="break-all">{user?.email || "your account"}</span>
+        Set a new password
       </h2>
       <p className="mt-2 text-[15px] leading-relaxed text-neutral-500">
         For a strong password, choose a unique phrase that you don&apos;t use

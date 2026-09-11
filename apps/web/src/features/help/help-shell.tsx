@@ -38,19 +38,20 @@ function HelpShellInner({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-svh bg-white text-brand-navy">
-      <div className="mx-auto w-full max-w-[1340px] px-6 pb-28 pt-12 sm:px-12 lg:px-16">
-        <header className="flex items-center justify-between gap-4">
-          <Link to="/" className="flex items-center gap-2.5">
-            <img src="/contents/logo.webp" alt="E-Boses" className="h-12 w-auto object-contain" />
-            <span className="text-2xl font-bold text-accent">
-              Boses <span className="font-semibold text-neutral-400">{t.helpCenter}</span>
+      <div className="mx-auto w-full max-w-[1340px] px-6 pb-28 pt-[max(3rem,env(safe-area-inset-top))] sm:px-12 lg:px-16">
+        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
+          <Link to="/" className="flex min-w-0 items-center gap-2">
+            <img src="/contents/logo.webp" alt="E-Boses" className="h-9 w-auto shrink-0 object-contain sm:h-12" />
+            <span className="flex min-w-0 flex-col leading-none min-[420px]:flex-row min-[420px]:items-baseline min-[420px]:gap-2">
+              <span className="truncate text-lg font-bold text-accent sm:text-2xl">Boses</span>
+              <span className="truncate text-[13px] font-semibold text-neutral-400 sm:text-2xl">{t.helpCenter}</span>
             </span>
           </Link>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <HelpLanguagePicker />
             <Link
               to="/sign-in"
-              className="rounded-full px-4 py-2 text-base font-semibold text-brand-navy underline decoration-accent decoration-2 underline-offset-4 transition-colors hover:text-accent"
+              className="whitespace-nowrap rounded-full px-2 py-2 text-sm font-semibold text-brand-navy underline decoration-accent decoration-2 underline-offset-4 transition-colors hover:text-accent sm:px-4 sm:text-base"
             >
               {t.signIn}
             </Link>

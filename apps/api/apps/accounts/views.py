@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.cache import caches
+from django.core.cache import cache, caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q
 from django.db import transaction
@@ -14,6 +14,7 @@ from rest_framework import serializers as drf_serializers
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from apps.throttling import LoginIPThrottle, LoginIdentifierThrottle, RefreshSessionThrottle
 from django.utils.decorators import method_decorator
@@ -254,6 +255,7 @@ class RegistrationCommunitiesView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
     throttle_scope = "geocode"
 
     def get(self, request):
@@ -267,6 +269,7 @@ class RegistrationStreetSearchView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
     throttle_scope = "geocode"
 
     def get(self, request):
@@ -285,7 +288,8 @@ class RegistrationPinAddressView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_scope = "geocode"
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "registration_geocode"
 
     def get(self, request):
         from apps.live_map import address_for_pin
@@ -297,7 +301,12 @@ class RegistrationPinAddressView(APIView):
             return Response({"detail": "lat and lng are required."}, status=400)
         if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
             return Response({"detail": "That point is not on the earth."}, status=400)
-        return Response(address_for_pin(latitude, longitude))
+        cache_key = f"registration-pin-address:v2:{latitude:.5f}:{longitude:.5f}"
+        payload = cache.get(cache_key)
+        if payload is None:
+            payload = address_for_pin(latitude, longitude)
+            cache.set(cache_key, payload, 600)
+        return Response(payload)
 
 
 class CommunityResolveView(APIView):

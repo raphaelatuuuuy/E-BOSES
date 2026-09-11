@@ -498,6 +498,138 @@ def media_looks_duplicate(phash, blocks, candidates):
     return False
 
 
+def _media_check_configuration(request):
+    """Select the active community policy used by upload-time AI checks."""
+    from apps.emergencies.models import Community
+
+    active = Community.objects.filter(status=Community.Status.ACTIVE, code="marikina-heights")
+    community_id = request.data.get("community_id")
+    community = active.filter(pk=community_id).first() if community_id else None
+    community = community or active.order_by("name").first()
+    try:
+        return ConcernClassificationConfiguration.current(community)
+    except ValueError:
+        return ConcernClassificationConfiguration.current_fresh(community)
+
+
+def _attachment_authenticity_results(uploaded_files, *, config):
+    """Run duplicate-independent authenticity checks without persisting files.
+
+    The final submit endpoint still repeats the complete validation pipeline;
+    this function only provides early feedback while the composer is open.
+    """
+    from apps.accounts.media_forensics import forensics_findings
+    from apps.concerns.ai.classification import classification_payload
+    from apps.concerns.ai.gemma_analyzer import INTEGRITY_FLAGGED_VERDICTS
+    from apps.concerns.classification_api import (
+        _media_integrity_preview,
+        _prepared_images_from_uploads,
+    )
+    from django.conf import settings
+
+    images, image_errors, prepared_indices = _prepared_images_from_uploads(uploaded_files)
+    result = classification_payload(
+        title="Attachment authenticity check",
+        description=(
+            "Review the attached photos for duplicate, edited, or AI-generated media. "
+            "Do not assess the report description."
+        ),
+        selected_category=Concern.Category.OTHERS,
+        configuration=config,
+        images=images or None,
+        image_uploaded=bool(uploaded_files),
+        text_timeout=getattr(settings, "OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", 8),
+    )
+    details = result.get("details") or {}
+    integrity = _media_integrity_preview(config, details=details, images=images)
+    findings = {
+        int(item.get("index", -1)): item
+        for item in integrity.get("findings") or []
+        if isinstance(item, dict)
+    }
+    prepared_index_by_file = {
+        file_index: image_index
+        for image_index, file_index in enumerate(prepared_indices)
+    }
+
+    checked = []
+    for file_index, uploaded_file in enumerate(uploaded_files):
+        try:
+            uploaded_file.seek(0)
+            raw_content = uploaded_file.read()
+            uploaded_file.seek(0)
+        except Exception:
+            raw_content = b""
+        forensic = forensics_findings(raw_content) if raw_content else {
+            "checked": False,
+            "flagged": False,
+            "message": "",
+        }
+        if forensic.get("flagged"):
+            checked.append(
+                {
+                    "index": file_index,
+                    "name": uploaded_file.name,
+                    "status": "rejected",
+                    "authenticity_status": "blocked",
+                    "authenticity_verdict": "forensics_flagged",
+                    "message": forensic.get("message") or (
+                        "This photo could not pass the authenticity check. "
+                        "Please upload the original photo."
+                    ),
+                }
+            )
+            continue
+
+        if file_index in image_errors:
+            checked.append(
+                {
+                    "index": file_index,
+                    "name": uploaded_file.name,
+                    "status": "accepted",
+                    "authenticity_status": "review_required",
+                    "authenticity_verdict": "inconclusive",
+                    "message": "This photo could not be checked automatically. An official will review it.",
+                }
+            )
+            continue
+
+        finding = findings.get(prepared_index_by_file.get(file_index, -1))
+        verdict = str((finding or {}).get("verdict") or "").lower()
+        if integrity.get("status") == "checked" and verdict in INTEGRITY_FLAGGED_VERDICTS:
+            checked.append(
+                {
+                    "index": file_index,
+                    "name": uploaded_file.name,
+                    "status": "rejected",
+                    "authenticity_status": "blocked",
+                    "authenticity_verdict": verdict,
+                    "message": (
+                        "This photo appears to be AI-generated or edited. "
+                        "Please upload a genuine photo taken with your camera."
+                    ),
+                }
+            )
+            continue
+
+        review_required = integrity.get("status") != "checked" or verdict == "inconclusive"
+        checked.append(
+            {
+                "index": file_index,
+                "name": uploaded_file.name,
+                "status": "accepted",
+                "authenticity_status": "review_required" if review_required else "passed",
+                "authenticity_verdict": verdict or "inconclusive",
+                "message": (
+                    "Authenticity could not be confirmed automatically; an official will review it."
+                    if review_required
+                    else ""
+                ),
+            }
+        )
+    return checked
+
+
 def can_access_concern(user, concern):
     if not user or not user.is_authenticated:
         return (
@@ -767,7 +899,14 @@ class ConcernMediaCheckView(APIView):
             current_hashes.add(media_hash)
             current_phashes.append((media_phash, media_phash_blocks))
             checked.append({"name": uploaded_file.name, "status": "accepted"})
-        return Response({"files": checked})
+        return Response(
+            {
+                "files": _attachment_authenticity_results(
+                    media_files,
+                    config=_media_check_configuration(request),
+                )
+            }
+        )
 
 
 class GuestConcernThrottle(AnonRateThrottle):
@@ -775,6 +914,79 @@ class GuestConcernThrottle(AnonRateThrottle):
 
     scope = "public_guest_concern"
     rate = "5/hour"
+
+
+class GuestConcernMediaCheckThrottle(AnonRateThrottle):
+    """Bound anonymous image-only checks separately from report submissions."""
+
+    scope = "public_guest_concern_media"
+    rate = "20/hour"
+
+
+class GuestConcernMediaCheckView(APIView):
+    """Run attachment checks before a guest report is submitted.
+
+    The files are never persisted or included in audit/LLM decision logs. The
+    final guest submit endpoint repeats the checks before committing a report.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestConcernMediaCheckThrottle]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        media_files = request.FILES.getlist("media")
+        if not media_files:
+            return Response({"media": ["Choose a photo to check."]}, status=status.HTTP_400_BAD_REQUEST)
+        if len(media_files) > 5:
+            return Response({"media": ["You can attach up to 5 photos."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Reuse the same deterministic duplicate gate as authenticated uploads.
+        current_phashes = []
+        current_hashes = set()
+        for uploaded_file in media_files:
+            try:
+                validated_file = validate_concern_media_file(uploaded_file)
+            except ValidationError as exc:
+                messages = [str(message) for message in getattr(exc, "messages", [])] or [str(exc)]
+                return Response({"media": messages}, status=status.HTTP_400_BAD_REQUEST)
+            media_hash = sha256_file(validated_file)
+            raw_content = validated_file.read()
+            validated_file.seek(0)
+            media_phash = phash_file(raw_content)
+            media_phash_blocks = phash_blocks_file(raw_content)
+            if media_hash in current_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
+                return Response(
+                    {"media": ["This photo was already uploaded before."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            candidate_ids = phash_candidate_ids(
+                SCOPE_CONCERN_MEDIA,
+                phashes=[media_phash],
+                blocks=media_phash_blocks,
+            )
+            existing_phashes = (
+                list(ConcernMedia.objects.filter(pk__in=candidate_ids).exclude(phash="").values_list("phash", "phash_blocks"))
+                if candidate_ids
+                else []
+            )
+            if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
+                return Response(
+                    {"media": ["This image appears to have been uploaded before."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            current_hashes.add(media_hash)
+            current_phashes.append((media_phash, media_phash_blocks))
+
+        return Response(
+            {
+                "files": _attachment_authenticity_results(
+                    media_files,
+                    config=_media_check_configuration(request),
+                )
+            }
+        )
 
 
 def _notify_anonymous_concern_staff(concern):
@@ -955,7 +1167,7 @@ class GuestConcernCreateView(APIView):
             current_phashes.append((media_phash, media_phash_blocks))
             validated_media.append((uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks))
 
-        title = description.splitlines()[0].strip()[:160] or "Anonymous report"
+        title = description.splitlines()[0].strip()[:160] or "Community Reporter report"
         fingerprints = report_fingerprints(
             barangay=community.name,
             category=selected_category,
@@ -1019,14 +1231,14 @@ class GuestConcernCreateView(APIView):
         ConcernStatusEvent.objects.create(
             concern=concern,
             status=Concern.Status.SUBMITTED,
-            note="Anonymous report submitted.",
+            note="Community Reporter report submitted.",
             actor=None,
         )
         create_timeline_entry(
             concern=concern,
             event_type=ConcernTimelineEntry.EventType.SUBMITTED,
             status=Concern.Status.SUBMITTED,
-            message="Anonymous report submitted.",
+            message="Community Reporter report submitted.",
             actor=None,
         )
         if category_ref:
@@ -1048,6 +1260,18 @@ class GuestConcernCreateView(APIView):
         validation_error = _validate_concern_before_commit(concern)
         if validation_error is not None:
             return validation_error
+        concern.refresh_from_db()
+        assigned_unit = None
+        if concern.assigned_department_id and concern.assigned_department:
+            assigned_unit = {
+                "name": concern.assigned_department.name,
+                "short_name": concern.assigned_department.short_name or concern.assigned_department.name,
+            }
+        elif concern.category_ref and concern.category_ref.department_id and concern.category_ref.department:
+            assigned_unit = {
+                "name": concern.category_ref.department.name,
+                "short_name": concern.category_ref.department.short_name or concern.category_ref.department.name,
+            }
         return Response(
             {
                 "submitted": True,
@@ -1057,6 +1281,7 @@ class GuestConcernCreateView(APIView):
                     "name": community.name,
                 },
                 "status": "submitted",
+                "assigned_unit": assigned_unit,
             },
             status=status.HTTP_201_CREATED,
         )

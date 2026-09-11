@@ -6,7 +6,6 @@ import {
   MessageCircleIcon,
   PhoneIcon,
   PlayIcon,
-  RouteIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -410,7 +409,6 @@ function EmergencyTrackingMap({
   const leafletRef = useRef<typeof leaflet | null>(null)
   const responderMarkerRefs = useRef<Map<number, leaflet.Marker>>(new Map())
   const routeRef = useRef<RouteLayers | null>(null)
-  const routePointsRef = useRef<leaflet.LatLngTuple[]>([])
   const routeSigRef = useRef("")
   const fittedRef = useRef(false)
   const [mapReady, setMapReady] = useState(0)
@@ -453,7 +451,7 @@ function EmergencyTrackingMap({
           if (cancelled || !ctx?.boundary?.geometry) return
           drawCoverage(L, coverageGroup, {
             boundary: ctx.boundary.geometry as never,
-            showBoundary: true,
+            showBoundary: false,
             showZone: false,
             boundaryStyle: "quiet",
           })
@@ -587,18 +585,6 @@ function EmergencyTrackingMap({
       connectors,
       live: isLive,
     })
-    routePointsRef.current = [
-      destination,
-      ...(primary
-        ? [
-            [
-              Number(primary.latitude),
-              Number(primary.longitude),
-            ] as leaflet.LatLngTuple,
-          ]
-        : []),
-      ...(routeRef.current?.points ?? []),
-    ]
 
     if (fittedRef.current) return
     fittedRef.current = true
@@ -624,39 +610,9 @@ function EmergencyTrackingMap({
     mapReady,
   ])
 
-  function reroute() {
-    const map = mapRef.current
-    const L = leafletRef.current
-    if (!map || !L) return
-    const points = routePointsRef.current
-    if (points.length > 1) {
-      map.fitBounds(L.latLngBounds(points), {
-        padding: [44, 44],
-        maxZoom: 17,
-        animate: true,
-      })
-    } else {
-      map.setView(
-        [Number(alert.latitude), Number(alert.longitude)],
-        Math.max(map.getZoom(), 16),
-        { animate: true }
-      )
-    }
-  }
-
   return (
     <div className={cn("relative h-full w-full", className)}>
       <div ref={containerRef} className="h-full w-full bg-tint" />
-      <button
-        type="button"
-        onClick={reroute}
-        disabled={!mapReady}
-        aria-label="Reroute"
-        title="Reroute"
-        className="absolute top-3 right-3 z-10 flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 shadow-md transition-colors hover:bg-neutral-50 disabled:opacity-60"
-      >
-        <RouteIcon className="size-5" strokeWidth={1.9} />
-      </button>
     </div>
   )
 }
@@ -1280,7 +1236,7 @@ export function EmergencyTrackingSheet({
   )
 
   return createPortal(
-    <div className="fixed inset-0 z-[400]">
+    <div className="fixed inset-0 z-[400] flex items-end justify-center lg:items-center">
       <button
         type="button"
         aria-label="Close tracking"
@@ -1294,8 +1250,8 @@ export function EmergencyTrackingSheet({
         aria-modal="true"
         aria-label="Emergency tracking"
         className={cn(
-          "relative z-10 flex flex-col overflow-hidden bg-white text-neutral-900 shadow-2xl",
-          "max-lg:fixed max-lg:inset-0 max-lg:h-full max-lg:w-full max-lg:rounded-none",
+          "relative z-10 flex max-h-[92dvh] w-full flex-col overflow-hidden bg-white text-neutral-900 shadow-2xl",
+          "max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[92dvh] max-lg:rounded-t-[28px]",
           "lg:absolute lg:top-1/2 lg:left-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2",
           "lg:h-[min(88dvh,820px)] lg:max-h-[92dvh] lg:w-[min(920px,92vw)] lg:max-w-[94vw]",
           "lg:min-h-[380px] lg:min-w-[420px] lg:rounded-[28px] lg:border lg:border-neutral-200",
@@ -1303,7 +1259,10 @@ export function EmergencyTrackingSheet({
           "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
         )}
       >
-        <div className="flex shrink-0 items-start gap-2 px-5 pt-5 pb-3 max-lg:pt-[max(1.25rem,env(safe-area-inset-top))]">
+        <div className="flex shrink-0 flex-col items-center px-5 pt-2 lg:hidden">
+          <span aria-hidden className="h-1.5 w-11 rounded-full bg-neutral-300" />
+        </div>
+        <div className="flex shrink-0 items-start gap-2 px-5 pt-1 pb-3 lg:pt-5">
           <div className="min-w-0 flex-1 pt-0.5">
             <p
               className={cn(

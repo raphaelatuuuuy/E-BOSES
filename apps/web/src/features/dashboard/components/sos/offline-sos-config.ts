@@ -32,6 +32,7 @@ export type OfflineSosConfig = {
       centerLatitude: number
       centerLongitude: number
       radiusMeters: number
+      geometry?: GeoJSON.Geometry | null
     }
     streets: OfflineStreet[]
   }
@@ -58,7 +59,8 @@ export const BASELINE_OFFLINE_SOS_CONFIG: OfflineSosConfig = {
     acceptance: {
       centerLatitude: 14.6507,
       centerLongitude: 121.1133,
-      radiusMeters: 800,
+      radiusMeters: 1468,
+      geometry: null,
     },
     streets: [
       {

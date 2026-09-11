@@ -15,6 +15,7 @@ import {
   SignalMediumIcon,
   TrafficConeIcon,
 } from "lucide-react"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -177,11 +178,15 @@ const SELECTION_LABEL: Record<"emergency" | "concern", string> = {
 
 function ConcernIcon({
   category,
+  iconKey,
   className,
 }: {
   category: ConcernCategory
+  iconKey?: string
   className?: string
 }) {
+  const Resolved = resolveIconByKey(iconKey)
+  if (Resolved) return <Resolved className={className} strokeWidth={1.9} />
   if (category === "infrastructure")
     return <TrafficConeIcon className={className} strokeWidth={1.9} />
   if (category === "environment")
@@ -283,8 +288,6 @@ export default function AlertsMapPage() {
   const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<LiveMapSnapshot | null>(null)
   const [homeCommunityId, setHomeCommunityId] = useState<string | null>(null)
-  const [communityBoundaryVisible, setCommunityBoundaryVisible] =
-    useState(false)
   const [layers, setLayers] = useState(defaultLayers)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [selected, setSelected] = useState<Selection>(() => {
@@ -367,8 +370,8 @@ export default function AlertsMapPage() {
           nextSnapshot.operational.community_id ??
           null
         setHomeCommunityId((current) => current ?? nextHomeCommunityId)
-        // Open on the signed-in official's community. Switching communities is
-        // explicit through the map control, so foreign pins stay hidden by default.
+        // Open on the signed-in official's community so foreign pins stay
+        // hidden by default.
         setCommunityFilter((current) =>
           current === "all" ? (nextHomeCommunityId ?? "all") : current
         )
@@ -589,15 +592,6 @@ export default function AlertsMapPage() {
     }
   }, [snapshot, visibleConcerns, visibleEmergencies])
 
-  function changeCommunity(id: string) {
-    setCommunityBoundaryVisible((visible) =>
-      id === communityFilter ? !visible : true
-    )
-    setCommunityFilter(id)
-    setSelected(null)
-    if (id !== "all") void load(id)
-  }
-
   const clearSelection = useCallback(() => setSelected(null), [])
 
   const updateEmergency = useCallback((next: LiveMapEmergency) => {
@@ -708,7 +702,7 @@ export default function AlertsMapPage() {
         rows.push({
           key: `concern-${concern.id}`,
           selection: { kind: "concern", id: concern.id },
-          icon: <ConcernIcon category={concern.category} className="size-5" />,
+          icon: <ConcernIcon category={concern.category} iconKey={concern.category_ref?.icon_key} className="size-5" />,
           rank: closed ? 1 : 0,
           priorityRank: concernPriorityRank(
             concern.severity ?? concern.priority
@@ -892,15 +886,6 @@ export default function AlertsMapPage() {
         onResetLayers={resetLayers}
         onMapInteract={collapseSheetForMap}
         counts={mapCounts}
-        communities={snapshot?.communities ?? []}
-        currentCommunityId={
-          homeCommunityId ??
-          snapshot?.home_community_id ??
-          snapshot?.operational.community_id ??
-          null
-        }
-        boundaryVisible={communityBoundaryVisible}
-        onCommunitySelect={changeCommunity}
       />
 
       {/* Desktop: the feed floats over the map instead of cutting a rail. */}

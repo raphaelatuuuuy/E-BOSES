@@ -26,29 +26,73 @@ export interface NominatimSearchRow {
   display_name?: string
 }
 
+const REVERSE_CACHE_TTL_MS = 30 * 60 * 1000
+const REVERSE_FAILURE_CACHE_TTL_MS = 15_000
+const MAX_REVERSE_CACHE_ENTRIES = 256
+const reverseCache = new Map<
+  string,
+  { value: NominatimReverseResult | null; expiresAt: number }
+>()
+const reverseRequests = new Map<
+  string,
+  Promise<NominatimReverseResult | null>
+>()
+
+function reverseKey(lat: number, lng: number, zoom: number) {
+  return `${lat.toFixed(5)},${lng.toFixed(5)},${zoom}`
+}
+
 /** Raw reverse-geocode payload, or null when lookup is unavailable. */
 export async function reverseGeocode(
   lat: number,
   lng: number,
   zoom = 18,
 ): Promise<NominatimReverseResult | null> {
+  const key = reverseKey(lat, lng, zoom)
+  const cached = reverseCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  if (cached) reverseCache.delete(key)
+  const pending = reverseRequests.get(key)
+  if (pending) return pending
+
   const params = new URLSearchParams({
     lat: String(lat),
     lng: String(lng),
     zoom: String(zoom),
   })
-  try {
-    const response = await fetch(`/api/locations/geocode/reverse/?${params}`, {
-      headers: { Accept: "application/json" },
-    })
-    if (!response.ok) return null
-    const envelope = (await response.json()) as {
-      ok?: boolean
-      result?: NominatimReverseResult | null
+  const request = (async () => {
+    try {
+      const response = await fetch(`/api/locations/geocode/reverse/?${params}`, {
+        headers: { Accept: "application/json" },
+      })
+      if (!response.ok) return null
+      const envelope = (await response.json()) as {
+        ok?: boolean
+        result?: NominatimReverseResult | null
+      }
+      return envelope.ok ? (envelope.result ?? null) : null
+    } catch {
+      return null
     }
-    return envelope.ok ? (envelope.result ?? null) : null
-  } catch {
-    return null
+  })()
+
+  reverseRequests.set(key, request)
+  try {
+    const value = await request
+    reverseCache.set(key, {
+      value,
+      expiresAt:
+        Date.now() +
+        (value ? REVERSE_CACHE_TTL_MS : REVERSE_FAILURE_CACHE_TTL_MS),
+    })
+    while (reverseCache.size > MAX_REVERSE_CACHE_ENTRIES) {
+      const oldest = reverseCache.keys().next().value
+      if (oldest) reverseCache.delete(oldest)
+      else break
+    }
+    return value
+  } finally {
+    reverseRequests.delete(key)
   }
 }
 

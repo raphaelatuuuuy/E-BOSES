@@ -17,6 +17,7 @@ from typing import Any
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from apps.community_scope import PRIMARY_COMMUNITY_CODE
 
 logger = logging.getLogger(__name__)
 
@@ -190,11 +191,13 @@ def point_in_geojson_inclusive(
 
 def active_communities_for_point(latitude, longitude):
     from apps.emergencies.models import Community
+    from apps.community_scope import PRIMARY_COMMUNITY_CODE
 
     latitude = float(latitude)
     longitude = float(longitude)
     candidates = Community.objects.filter(
         status=Community.Status.ACTIVE,
+        code=PRIMARY_COMMUNITY_CODE,
         boundary__is_active=True,
         boundary__kind="boundary",
     ).select_related("boundary")
@@ -271,6 +274,7 @@ def get_active_boundary_geometry() -> dict | None:
         community = (
             Community.objects.filter(
                 status=Community.Status.ACTIVE,
+                code=PRIMARY_COMMUNITY_CODE,
                 boundary__is_active=True,
             )
             .select_related("boundary")
@@ -331,10 +335,62 @@ def dispatch_policy_payload(community) -> dict[str, Any]:
         }
 
 
-def acceptance_zone_result(latitude: float, longitude: float) -> dict[str, Any]:
-    communities = active_communities_for_point(latitude, longitude)
+def _point_is_in_acceptance_zone(latitude: float, longitude: float, community) -> bool:
+    """Check the configured radius/shape without requiring boundary membership."""
+    policy = dispatch_policy_payload(community)
+    geometry = policy.get("acceptance_geometry")
+    inside_geometry = point_in_geojson_inclusive(
+        float(longitude), float(latitude), geometry
+    )
+    if inside_geometry is not None:
+        return bool(inside_geometry)
+
+    try:
+        radius = float(policy.get("acceptance_radius_meters") or 0)
+        center_lat = float(policy["acceptance_center_latitude"])
+        center_lng = float(policy["acceptance_center_longitude"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return radius > 0 and haversine_meters(
+        float(latitude), float(longitude), center_lat, center_lng
+    ) <= radius
+
+
+def active_communities_for_coverage_point(latitude: float, longitude: float):
+    """Return communities covered by their boundary OR acceptance zone."""
+    boundary_matches = active_communities_for_point(latitude, longitude)
+    if boundary_matches:
+        # Preserve the existing ambiguity protection when boundaries overlap.
+        return boundary_matches
+
+    from apps.emergencies.models import Community
+
+    candidates = Community.objects.filter(
+        status=Community.Status.ACTIVE,
+        code=PRIMARY_COMMUNITY_CODE,
+    ).select_related("boundary")
+    return [
+        community
+        for community in candidates
+        if _point_is_in_acceptance_zone(latitude, longitude, community)
+    ]
+
+
+def active_community_for_coverage_point(latitude: float, longitude: float):
+    matches = active_communities_for_coverage_point(latitude, longitude)
+    return matches[0] if len(matches) == 1 else None
+
+
+def acceptance_zone_result(
+    latitude: float, longitude: float, community=None
+) -> dict[str, Any]:
+    communities = (
+        [community]
+        if community is not None
+        else active_communities_for_coverage_point(latitude, longitude)
+    )
     if len(communities) != 1:
-        raise ValueError("A location inside one active community is required.")
+        raise ValueError("A location covered by one active community is required.")
     policy = dispatch_policy_payload(communities[0])
     distance = haversine_meters(
         float(latitude),
@@ -345,7 +401,7 @@ def acceptance_zone_result(latitude: float, longitude: float) -> dict[str, Any]:
     radius = int(policy["acceptance_radius_meters"])
     # A drawn zone replaces the circle when one has been saved.
     geometry = policy.get("acceptance_geometry")
-    inside_drawn = point_in_geojson(float(longitude), float(latitude), geometry)
+    inside_drawn = point_in_geojson_inclusive(float(longitude), float(latitude), geometry)
     return {
         "center_latitude": policy["acceptance_center_latitude"],
         "center_longitude": policy["acceptance_center_longitude"],
@@ -384,16 +440,33 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             "distance_meters": None,
         }
 
-    communities = active_communities_for_point(lat, lng)
+    boundary_communities = active_communities_for_point(lat, lng)
+    communities = active_communities_for_coverage_point(lat, lng)
     if len(communities) == 1:
         community = communities[0]
+        inside_boundary = len(boundary_communities) == 1 and boundary_communities[0].pk == community.pk
         result = {
             "status": "inside",
-            "zone": "barangay",
+            "zone": "barangay" if inside_boundary else "acceptance_zone",
             "accepted": True,
             "warning": None,
-            "message": f"Location is inside {community.name}.",
-            "distance_meters": 0,
+            "message": (
+                f"Location is inside {community.name}."
+                if inside_boundary
+                else f"Location is within the official acceptance zone for {community.name}."
+            ),
+            "distance_meters": (
+                0
+                if inside_boundary
+                else round(
+                    haversine_meters(
+                        lat,
+                        lng,
+                        float(community.center_latitude),
+                        float(community.center_longitude),
+                    )
+                )
+            ),
             "community": {
                 "id": str(community.public_id),
                 "code": community.code,
@@ -401,22 +474,11 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             },
         }
         try:
-            zone = acceptance_zone_result(lat, lng)
+            zone = acceptance_zone_result(lat, lng, community=community)
         except ValueError:
             zone = None
         if zone is not None:
             result["acceptance_zone"] = zone
-        if zone is not None and not zone["within"]:
-            if zone["action"] == "block":
-                result.update({
-                    "status": "far",
-                    "zone": "outside_acceptance_zone",
-                    "accepted": False,
-                    "message": "Location is outside the official acceptance zone.",
-                })
-            else:
-                result["warning"] = "Location is inside the barangay but outside the official acceptance zone."
-                result["message"] = "Inside barangay; outside configured acceptance zone."
         return result
 
     from apps.emergencies.models import Community
@@ -425,6 +487,7 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
     nearest_community = None
     candidates = Community.objects.filter(
         status=Community.Status.ACTIVE,
+        code=PRIMARY_COMMUNITY_CODE,
         boundary__is_active=True,
     ).select_related("boundary")
     for candidate in candidates:
@@ -460,7 +523,7 @@ def classify_location(latitude: float, longitude: float) -> dict[str, Any]:
             "distance_meters": round(distance_outside),
         }
         try:
-            zone = acceptance_zone_result(lat, lng)
+            zone = acceptance_zone_result(lat, lng, community=nearest_community)
         except ValueError:
             zone = None
         if zone is not None:
@@ -490,7 +553,10 @@ def score_search_result(lat: float, lng: float) -> float:
     classification = classify_location(lat, lng)
     from apps.emergencies.models import Community
 
-    centers = Community.objects.filter(status=Community.Status.ACTIVE).values_list(
+    centers = Community.objects.filter(
+        status=Community.Status.ACTIVE,
+        code=PRIMARY_COMMUNITY_CODE,
+    ).values_list(
         "center_latitude", "center_longitude"
     )
     distances = [haversine_meters(lat, lng, float(c_lat), float(c_lng)) for c_lat, c_lng in centers if c_lat is not None and c_lng is not None]
@@ -516,7 +582,7 @@ def address_looks_outside_marikina(text: str) -> bool:
 
         active_places = {
             value.casefold()
-            for row in Community.objects.filter(status=Community.Status.ACTIVE).values("name", "boundary__locality")
+            for row in Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).values("name", "boundary__locality")
             for value in (row.get("name") or "", row.get("boundary__locality") or "")
             if value
         }
@@ -577,7 +643,7 @@ def search_location_allowed(lat: float, lng: float, text: str = "") -> bool:
 
     from apps.emergencies.models import Community
 
-    centers = Community.objects.filter(status=Community.Status.ACTIVE).values_list(
+    centers = Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).values_list(
         "center_latitude", "center_longitude"
     )
     dist = min(
@@ -653,7 +719,7 @@ def search_viewbox_with_buffer() -> str:
     half_lng = 0.015
     from apps.emergencies.models import Community
 
-    center = Community.objects.filter(status=Community.Status.ACTIVE).order_by("name").values(
+    center = Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).order_by("name").values(
         "center_latitude", "center_longitude"
     ).first() or {"center_latitude": 14.5995, "center_longitude": 120.9842}
     c_lat = float(center["center_latitude"])
@@ -669,7 +735,7 @@ def _overpass_bbox_pad(pad_deg: float = 0.003) -> tuple[float, float, float, flo
     from apps.emergencies.models import Community
 
     rows = list(
-        Community.objects.filter(status=Community.Status.ACTIVE).values(
+        Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).values(
             "bbox_min_latitude", "bbox_min_longitude", "bbox_max_latitude", "bbox_max_longitude"
         )
     )
@@ -1061,7 +1127,7 @@ def _service_poi_rank(poi: dict[str, Any]) -> tuple:
                     float(lat),
                     float(lng),
                 )
-                for lat, lng in Community.objects.filter(status=Community.Status.ACTIVE).values_list(
+                for lat, lng in Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).values_list(
                     "center_latitude", "center_longitude"
                 )
                 if lat is not None and lng is not None
@@ -1137,20 +1203,20 @@ def validate_barangay_location(latitude, longitude):
 def validate_emergency_location(latitude, longitude):
     if latitude is None or longitude is None:
         raise ValidationError("Latitude and longitude must be provided together.")
-    community = active_community_for_point(latitude, longitude)
+    community = active_community_for_coverage_point(latitude, longitude)
     if not community:
-        raise ValidationError("Emergency location must be inside an active community boundary.")
+        raise ValidationError("Emergency location must be inside an active community boundary or acceptance radius.")
     return community
 
 
 def validate_report_location(latitude, longitude):
     if latitude is None or longitude is None:
         raise ValidationError("Latitude and longitude must be provided together.")
-    community = active_community_for_point(latitude, longitude)
+    community = active_community_for_coverage_point(latitude, longitude)
     if not community:
         from apps.emergencies.models import Community
 
-        active = list(Community.objects.filter(status=Community.Status.ACTIVE))
+        active = list(Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE))
         nearest = min(
             active,
             key=lambda item: haversine_meters(
@@ -1163,9 +1229,9 @@ def validate_report_location(latitude, longitude):
         )
         if nearest:
             raise ValidationError(
-                f"Location is too far from Barangay {nearest.name}. Choose a place inside an active community."
+                f"Location is too far from Barangay {nearest.name}. Choose a place inside the active boundary or acceptance radius."
             )
-        raise ValidationError("Location must be inside an active community boundary.")
+        raise ValidationError("Location must be inside an active community boundary or acceptance radius.")
     return {
         "action": "accept",
         "community_id": community.pk,

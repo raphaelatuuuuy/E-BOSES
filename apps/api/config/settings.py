@@ -539,7 +539,9 @@ REST_FRAMEWORK = {
         "user": "2000/hour",
         "otp": "5/minute",
         "geocode": "90/minute",
+        "registration_geocode": "300/minute",
         "auth": "20/minute",
+        "location_validate": "300/minute",
         # Anonymous registration preflight runs heavy media forensics; it gets
         # an isolated, tighter budget than the shared auth scope.
         "proof_preflight": "20/minute",
@@ -553,6 +555,8 @@ REST_FRAMEWORK = {
         "location_ping": "60/minute",
         "assistant": "20/minute",
         "weather_health": "12/minute",
+        "public_guest_concern": "5/hour",
+        "public_guest_concern_media": "20/hour",
     },
 }
 

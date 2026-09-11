@@ -1,4 +1,5 @@
 import {
+  createElement,
   lazy,
   Suspense,
   useEffect,
@@ -15,13 +16,14 @@ import {
   ChevronLeftIcon,
   CircleAlertIcon,
   CloudSunIcon,
+  LeafIcon,
   LogInIcon,
+  SearchIcon,
   ShieldCheckIcon,
+  TrafficConeIcon,
   UserPlusIcon,
   UserRoundIcon,
 } from "lucide-react"
-import { toast } from "sonner"
-
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
   getPublicReportMap,
@@ -56,6 +58,8 @@ import { timeAgo } from "@/features/dashboard/lib/format"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 import { LandingPageShell } from "../components/landing-page-shell"
+import { SuccessAssignedDialog } from "@/features/dashboard/components/success-assigned-dialog"
+import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 
 const PublicLocationPicker = lazy(
   () => import("@/features/dashboard/components/location-picker")
@@ -82,6 +86,15 @@ function hoverMeta(address: string, communityName: string) {
   return `${a}, ${c}`
 }
 
+function PublicCategoryIcon({ category, iconKey }: { category: string; iconKey?: string }) {
+  const Resolved = resolveIconByKey(iconKey)
+  if (Resolved) return createElement(Resolved, { className: "size-5" })
+  if (category === "infrastructure") return <TrafficConeIcon className="size-5" />
+  if (category === "environment") return <LeafIcon className="size-5" />
+  if (category === "public_safety") return <ShieldCheckIcon className="size-5" />
+  return <SearchIcon className="size-5" />
+}
+
 function publicConcernAsFeedPost(alert: PublicReportMapConcern): Concern {
   const reporterName = alert.reporter_label || "Community resident"
   const initials = reporterName
@@ -105,7 +118,7 @@ function publicConcernAsFeedPost(alert: PublicReportMapConcern): Concern {
     is_cross_community: false,
     access_mode: "foreign_read_only",
     can_interact: false,
-    is_anonymous: reporterName === "Anonymous",
+    is_anonymous: reporterName === "Community Reporter" || reporterName === "Anonymous",
     reporter: {
       id: 0,
       full_name: reporterName,
@@ -215,7 +228,7 @@ function PublicAlertPanel({
     <aside
       ref={panelRef}
       style={panelStyle}
-      className="absolute top-3 right-3 left-3 z-50 flex max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] sm:top-4 sm:right-auto sm:left-4 sm:w-[min(100%,380px)]"
+      className="absolute top-3 right-3 left-3 z-[600] flex min-w-0 max-w-full max-h-[min(72svh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] sm:top-4 sm:right-auto sm:left-4 sm:w-[min(100%,380px)] sm:max-w-none"
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-100 px-3">
         <CircleAlertIcon
@@ -316,7 +329,6 @@ function PublicAlertsPanel({
   panelStyle,
   onResizeStart,
   relatedRows,
-  onClearFilter,
 }: {
   areaName: string
   rows: AlertFeedRow[]
@@ -328,10 +340,8 @@ function PublicAlertsPanel({
   onSelect: (selection: Selection) => void
   onCollapse: () => void
   relatedRows?: AlertFeedRow[]
-  onClearFilter?: () => void
 } & PublicPanelProps) {
-  const isAllAreas = areaName === "all areas"
-  const weatherToggle = !isAllAreas ? (
+  const weatherToggle = (
     <button
       type="button"
       onClick={onWeatherToggle}
@@ -353,13 +363,13 @@ function PublicAlertsPanel({
           : "—"}
       </span>
     </button>
-  ) : null
+   )
 
   return (
     <aside
       ref={panelRef}
       style={panelStyle}
-      className="w-[min(100% - 24px,380px)] absolute top-3 left-3 z-50 flex max-h-[min(72vh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] sm:top-4 sm:left-4 sm:w-[min(100%,380px)]"
+      className="absolute top-3 right-3 left-3 z-[600] flex min-w-0 max-w-full max-h-[min(72svh,620px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] sm:top-4 sm:right-auto sm:left-4 sm:w-[min(100%,380px)] sm:max-w-none"
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-100 px-3">
         <CircleAlertIcon
@@ -386,24 +396,15 @@ function PublicAlertsPanel({
             onFilterChange(value)
             if (weatherOpen) onWeatherToggle()
           }}
-          label="Alert types"
-        />
-        {!isAllAreas && onClearFilter ? (
-          <button
-            type="button"
-            onClick={onClearFilter}
-            className="mt-2 text-[12px] font-medium text-brand-orange hover:underline"
-          >
-            Show all areas
-          </button>
-        ) : null}
+           label="Alert types"
+         />
       </div>
       <AlertsFeed
         areaName={areaName}
         total={rows.length}
         rows={rows}
         onSelect={onSelect}
-        weatherMode={weatherOpen && !isAllAreas}
+        weatherMode={weatherOpen}
         weatherToggle={weatherToggle}
         weather={weather}
         showRealIconWhenClosed
@@ -464,7 +465,7 @@ function IdentityDialog({
           <SheetOptionRow
             leading={<UserRoundIcon className="size-5" strokeWidth={1.8} />}
             title="Continue as guest"
-            description="Anonymous submission. No account required."
+            description="Community Reporter submission. No account required."
             onClick={onGuest}
             showChevron
           />
@@ -500,6 +501,8 @@ export default function ReportIssuePage() {
   const [selected, setSelected] = useState<SelectedAlert | null>(null)
   const [identityOpen, setIdentityOpen] = useState(false)
   const [guestOpen, setGuestOpen] = useState(false)
+  const [guestSuccessUnit, setGuestSuccessUnit] = useState<string | null>(null)
+  const [guestSuccessOpen, setGuestSuccessOpen] = useState(false)
   const [authenticatedComposerOpen, setAuthenticatedComposerOpen] =
     useState(false)
   const [alertFilter, setAlertFilter] = useState("all")
@@ -650,23 +653,12 @@ export default function ReportIssuePage() {
         (alert) => alert.kind === selected.kind && alert.id === selected.id
       ) ?? null)
     : null
-  const [viewedCommunity, setViewedCommunity] = useState<{
-    id: string
-    name: string
-    center: { latitude: number; longitude: number }
-  } | null>(null)
-  const firstCommunity = snapshot?.communities[0] ?? null
-  const activeCommunity = viewedCommunity ?? firstCommunity
-  const communityIdForFilter =
-    selectedAlert?.community.id ?? viewedCommunity?.id ?? null
-  const publicMapArea = selectedAlert
-    ? selectedAlert.community.name
-    : (viewedCommunity?.name ?? "all areas")
-  const publicWeatherCommunity = selectedAlert
-    ? snapshot?.communities.find(
-        (community) => community.id === selectedAlert.community.id
-      ) ?? firstCommunity
-    : activeCommunity
+  const firstCommunity = snapshot?.communities.find(
+    (community) => community.name.trim().toLowerCase() === "marikina heights"
+  ) ?? snapshot?.communities[0] ?? null
+  const communityIdForFilter = firstCommunity?.id ?? null
+  const publicMapArea = firstCommunity?.name ?? "Marikina Heights"
+  const publicWeatherCommunity = firstCommunity
   const publicMapWeather = useMapWeather(
     publicWeatherCommunity?.center.latitude ?? null,
     publicWeatherCommunity?.center.longitude ?? null,
@@ -724,7 +716,7 @@ export default function ReportIssuePage() {
         key: `${alert.kind}-${alert.id}`,
         selection: { kind: alert.kind, id: alert.id },
         icon: isConcern ? (
-          <ShieldCheckIcon className="size-5" />
+          <PublicCategoryIcon category={(alert as PublicReportMapConcern).category} iconKey={(alert as PublicReportMapConcern).icon_key} />
         ) : (
           <AlertTriangleIcon className="size-5" />
         ),
@@ -785,7 +777,7 @@ export default function ReportIssuePage() {
       if (sameCat.length) return sameCat.slice(0, 5)
     }
     return candidates.slice(0, 5)
-  }, [allAlerts, visibleAlerts, communityIdForFilter, alertFilter, selectedAlert, isFiltered])
+  }, [allAlerts, visibleAlerts, communityIdForFilter, selectedAlert, isFiltered])
   const relatedFeedRows = useMemo<AlertFeedRow[]>(() => {
     return (relatedAlerts as PublicReportMapConcern[]).map((alert) => {
       const closed = [
@@ -798,7 +790,7 @@ export default function ReportIssuePage() {
       return {
         key: `related-${alert.kind}-${alert.id}`,
         selection: { kind: alert.kind, id: alert.id },
-        icon: <ShieldCheckIcon className="size-5" />,
+        icon: <PublicCategoryIcon category={alert.category} iconKey={alert.icon_key} />,
         model: {
           kind: "concern" as const,
           id: alert.id,
@@ -831,6 +823,7 @@ export default function ReportIssuePage() {
               title: alert.title,
               category: alert.category,
               categoryLabel: alert.category_label,
+              iconKey: (alert as PublicReportMapConcern).icon_key,
               status: alert.status,
               summary: alert.summary,
               meta: hoverMeta(alert.address, alert.community.name),
@@ -908,18 +901,10 @@ export default function ReportIssuePage() {
                   renderInline
                   signup
                   publicBrowse
-                  publicAlerts={markerAlerts}
-                  selectedAlert={selected}
-                  onAlertSelect={setSelected}
-                  onCommunityView={(community) => {
-                    // Choosing a community is a new browsing context. Clear
-                    // an open alert so its community cannot keep overriding
-                    // the weather panel after the visitor changes areas.
-                    setViewedCommunity(community)
-                    setSelected(null)
-                    setWeatherOpen(false)
-                  }}
-                  onClose={() => undefined}
+                   publicAlerts={markerAlerts}
+                   selectedAlert={selected}
+                   onAlertSelect={setSelected}
+                   onClose={() => undefined}
                   onConfirm={() => undefined}
                   onReportRequest={openIdentity}
                 />
@@ -971,13 +956,9 @@ export default function ReportIssuePage() {
                         }
                       : undefined
                   }
-                  onResizeStart={onAlertsPanelResizeStart}
-                  relatedRows={relatedFeedRows}
-                  onClearFilter={() => {
-                    setViewedCommunity(null)
-                    setAlertFilter("all")
-                  }}
-                />
+                   onResizeStart={onAlertsPanelResizeStart}
+                   relatedRows={relatedFeedRows}
+                 />
               )
             ) : (
               <button
@@ -985,7 +966,7 @@ export default function ReportIssuePage() {
                 onClick={() => setAlertsPanelOpen(true)}
                 aria-label="Open alerts"
                 title="Open alerts"
-                className="absolute top-3 left-3 z-50 flex size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md sm:top-4 sm:left-4"
+                className="absolute top-3 left-3 z-[600] flex size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md sm:top-4 sm:left-4"
               >
                 <CircleAlertIcon
                   className="size-5 shrink-0 text-neutral-800"
@@ -1012,11 +993,15 @@ export default function ReportIssuePage() {
         onOpenChange={setGuestOpen}
         guest
         initialLocation={null}
-        onGuestSubmitted={() =>
-          toast.success(
-            "Your anonymous report is in the community review queue."
-          )
-        }
+        onGuestSubmitted={(assignedUnit) => {
+          setGuestSuccessUnit(assignedUnit?.short_name || assignedUnit?.name || null)
+          setGuestSuccessOpen(true)
+        }}
+      />
+      <SuccessAssignedDialog
+        open={guestSuccessOpen}
+        onClose={() => setGuestSuccessOpen(false)}
+        unitName={guestSuccessUnit}
       />
       <CreateReportDialog
         open={authenticatedComposerOpen}

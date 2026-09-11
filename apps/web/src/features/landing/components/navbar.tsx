@@ -10,14 +10,12 @@ const NAV_LINKS: NavLink[] = [
   { label: "How it works", href: "#how-it-works" },
   { label: "Resident benefits", href: "#impact" },
   { label: "Help Center", to: "/help" },
-  { label: "Active Communities", to: "/communities" },
 ]
 
 const PANEL_LINKS: NavLink[] = [...NAV_LINKS, { label: "Sign in", to: "/sign-in" }]
 
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-const OUTLINE_CTA = "min-h-10 items-center rounded-none border border-white/20 px-5 text-sm font-medium text-white/85 transition-colors hover:border-white/40 hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
 const SOLID_CTA = "min-h-10 items-center gap-2 rounded-none bg-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:px-5"
 const NAV_REPORT_CTA = "min-h-9 items-center rounded-none bg-accent px-4 text-xs font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
 
@@ -167,9 +165,6 @@ export function Navbar() {
               </nav>
 
               <div className="mt-8 flex flex-col gap-3">
-                <Link to="/communities/new" onClick={closeMenu} tabIndex={tab} className={`${OUTLINE_CTA} flex min-h-12 w-full justify-center`}>
-                  Make your Own Community
-                </Link>
                 <Link to="/report-issue" onClick={closeMenu} tabIndex={tab} className={`${SOLID_CTA} flex min-h-12 w-full justify-center`}>
                   Report an Issue <ArrowRightIcon className="size-4" strokeWidth={2} aria-hidden="true" />
                 </Link>

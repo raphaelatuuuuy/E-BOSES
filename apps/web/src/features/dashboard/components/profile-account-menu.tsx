@@ -83,7 +83,17 @@ export function ProfileAccountMenu({
 
   function openSettings() {
     setOpen(false)
-    onOpenSettings?.()
+    if (onOpenSettings) onOpenSettings()
+    else openSettingsDialog()
+  }
+
+  function handleAvatarClick() {
+    if (!isDesktop) {
+      if (onOpenSettings) onOpenSettings()
+      else openSettingsDialog()
+      return
+    }
+    setOpen(true)
   }
 
   useEffect(() => {
@@ -278,7 +288,7 @@ export function ProfileAccountMenu({
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={handleAvatarClick}
         className={cn(
           "relative flex size-9 shrink-0 items-center justify-center rounded-full outline-none",
           "hover:bg-neutral-50 focus-visible:ring-2 focus-visible:ring-neutral-200",

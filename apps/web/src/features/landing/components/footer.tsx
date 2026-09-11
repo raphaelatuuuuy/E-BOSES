@@ -7,7 +7,6 @@ const PLATFORM_LINKS: PlatformLink[] = [
   { label: "How it Works", href: "#how-it-works" },
   { label: "Community", href: "#community" },
   { label: "Resident Benefits", href: "#impact" },
-  { label: "Active Communities", to: "/communities" },
   { label: "Help Center", to: "/help" },
 ]
 
@@ -55,16 +54,6 @@ export function Footer() {
         />
       </div>
 
-      {/* Peeking mascot pinned to the right screen edge (desktop) */}
-      <img
-        src="/contents/footer.webp"
-        alt=""
-        aria-hidden
-        loading="lazy"
-        decoding="async"
-        className="pointer-events-none absolute bottom-24 right-0 z-0 hidden h-40 w-auto object-contain md:block lg:h-48"
-      />
-  
       {/* Matches the navbar / page sections (max-w-7xl + px-5 md:px-10 lg:px-16)
           so the footer's left edge aligns with the page content instead of the
           default `container` padding, which sat at a different x-offset. */}
@@ -107,14 +96,6 @@ export function Footer() {
                   ))}
                 </ul>
               </div>
-              <img
-                src="/contents/footer.webp"
-                alt=""
-                aria-hidden
-                loading="lazy"
-                decoding="async"
-                className="pointer-events-none w-28 shrink-0 self-end sm:w-32 md:hidden"
-              />
             </div>
           </div>
 

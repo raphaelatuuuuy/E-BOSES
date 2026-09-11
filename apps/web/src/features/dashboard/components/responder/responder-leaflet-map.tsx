@@ -29,9 +29,7 @@ import {
   GLYPHS,
   MAP_COLORS,
 } from "@/features/dashboard/components/map/markers"
-import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
-import { useCoverageContext } from "@/features/dashboard/lib/use-coverage"
 import type { Concern } from "@/features/dashboard/api"
 import type {
   EmergencyAlert,
@@ -137,8 +135,6 @@ export function ResponderLeafletMap({
   // why the auto-fit was keyed away from position ticks in the first place.
   // Dragging turns it back off, so it never wins an argument with a thumb.
   const [follow, setFollow] = useState(false)
-  const coverage = useCoverageContext()
-  const coverageRef = useRef<leaflet.LayerGroup | null>(null)
   const resizeRef = useRef<ResizeObserver | null>(null)
 
   useEffect(() => {
@@ -205,8 +201,6 @@ export function ResponderLeafletMap({
       if (containerRef.current) observer.observe(containerRef.current)
       resizeRef.current = observer
       requestAnimationFrame(() => map?.invalidateSize({ animate: false }))
-      // Below the incident layer on purpose: coverage is context, not a record.
-      coverageRef.current = L.layerGroup().addTo(map)
       layerRef.current = L.layerGroup().addTo(map)
       map.on("dragstart", () => setFollow(false))
     }
@@ -221,23 +215,9 @@ export function ResponderLeafletMap({
       mapRef.current = null
       LRef.current = null
       layerRef.current = null
-      coverageRef.current = null
       routeRef.current = null
     }
   }, [])
-
-  // The barangay edge and the acceptance zone, so a crew can see the limit
-  // they are dispatched inside without opening the official's screen.
-  useEffect(() => {
-    const L = LRef.current
-    const group = coverageRef.current
-    if (!L || !group || !coverage) return
-    group.clearLayers()
-    drawCoverage(L, group, {
-      boundary: coverage.boundary?.geometry ?? null,
-      policy: coverage.dispatch_policy,
-    })
-  }, [coverage])
 
   useEffect(() => {
     const L = LRef.current

@@ -115,7 +115,7 @@ export default function AccountOtpVerificationPage({
     <main className="grid min-h-svh w-full bg-white lg:h-svh lg:grid-cols-2 lg:overflow-hidden">
       <AuthSidePanel />
       <section className="relative flex min-h-svh flex-col overflow-y-auto lg:h-full lg:min-h-0">
-        <div className="flex flex-1 flex-col justify-center px-6 py-8 md:px-12 lg:px-16">
+        <div className="flex flex-1 flex-col justify-center px-6 pb-8 pt-[max(2rem,env(safe-area-inset-top))] md:px-12 lg:px-16">
           <div className="mx-auto w-full max-w-[440px]">
             <AuthPageLogo className="py-0 pb-5" />
             <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-foreground md:text-[1.75rem]">

@@ -11,8 +11,12 @@ import L, {
 import "leaflet/dist/leaflet.css"
 import "@/features/dashboard/components/map/location-pin.css"
 import { apiRequest } from "@/lib/api"
+import { validateLocation } from "@/lib/location-validation"
 import type { GeoJsonPolygon } from "@/features/dashboard/api"
-import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
+import {
+  insideCoverage,
+  type CoverageInput,
+} from "@/features/dashboard/components/map/coverage-layer"
 import {
   MapControlStack,
   MapStackButton,
@@ -21,7 +25,6 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
-import { GLYPHS, MAP_COLORS, glyphPinHtml } from "@/features/dashboard/components/map/markers"
 import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
 
 export type SosLocationValue = {
@@ -42,6 +45,7 @@ export type SosLocationCheck = {
   status: string
   zone: string
   message: string
+  warning?: string | null
   acceptance_zone?: {
     within: boolean
     distance_meters?: number
@@ -49,11 +53,16 @@ export type SosLocationCheck = {
   }
 }
 
+function acceptedLocationCheck(check: SosLocationCheck | null | undefined) {
+  return Boolean(check?.accepted && check.status !== "far")
+}
+
 export function friendlyLocationMessage(
   check: SosLocationCheck | null | undefined
 ) {
-  if (!check || (check.accepted && check.acceptance_zone?.within)) return ""
-  return "This location may be outside the service area. Check your pin."
+  if (!check || acceptedLocationCheck(check))
+    return ""
+  return check.message || "This location may be outside the service area. Check your pin."
 }
 
 export function SosLocationStep({
@@ -75,11 +84,14 @@ export function SosLocationStep({
   const watchRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
   const boundaryRef = useRef<LatLngBounds | null>(null)
+  const coverageRef = useRef<CoverageInput>({})
+  const centerFallbackRef = useRef(false)
   const [addressExpanded, setAddressExpanded] = useState(false)
   const [gpsBusy, setGpsBusy] = useState(false)
   const [addressBusy, setAddressBusy] = useState(false)
   const [notice, setNotice] = useState("")
-  const [mapError, setMapError] = useState("")
+  const [outOfScope, setOutOfScope] = useState(false)
+  const framedRef = useRef(false)
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -115,36 +127,68 @@ export function SosLocationStep({
         addressResolved: false,
         locationCheck: null,
       }
+      setOutOfScope(!insideCoverage(lat, lng, coverageRef.current))
       valueRef.current = next
       onChangeRef.current(next)
       setAddressBusy(true)
-      void reverseGeocode(lat, lng).then((data) => {
+      void Promise.all([
+        reverseGeocode(lat, lng),
+        validateLocation(lat, lng).catch(
+          () =>
+              ({
+                accepted: false,
+                status: "unknown",
+                zone: "unknown",
+                message: "Could not validate this location. Try again.",
+              }) as SosLocationCheck
+        ),
+      ]).then(([data, locationCheck]) => {
         if (request !== requestRef.current) return
         setAddressBusy(false)
-        if (
-          !data ||
-          (!data.display_name &&
-            !Object.values(data.address ?? {}).some(Boolean))
+        setOutOfScope(
+          !acceptedLocationCheck(locationCheck)
         )
-          return
-        const address = formatNominatimParts(data)
-        const resolved = {
+        const current = valueRef.current
+        const checked = {
           ...next,
-          address: address.full,
-          addressPrimary: address.primary,
-          addressResolved: true,
+          ...(current && current.lat === lat && current.lng === lng
+            ? current
+            : {}),
+          locationCheck,
         }
-        valueRef.current = resolved
-        onChangeRef.current(resolved)
+        if (
+          data &&
+          (data.display_name ||
+            Object.values(data.address ?? {}).some(Boolean))
+        ) {
+          const address = formatNominatimParts(data)
+          checked.address = address.full
+          checked.addressPrimary = address.primary
+          checked.addressResolved = true
+        }
+        valueRef.current = checked
+        onChangeRef.current(checked)
       })
     },
     []
   )
 
+  const pinBoundaryCenter = useCallback(() => {
+    const bounds = boundaryRef.current
+    const map = mapRef.current
+    if (!bounds || !map || valueRef.current) return false
+    const center = bounds.getCenter()
+    map.setView([center.lat, center.lng], 16)
+    selectLocation(center.lat, center.lng, "manual", null)
+    return true
+  }, [selectLocation])
+
   const locate = useCallback(() => {
     stopGps()
     if (!navigator.geolocation) {
       setNotice("Location is unavailable. Select your location on the map.")
+      centerFallbackRef.current = true
+      pinBoundaryCenter()
       return
     }
     setGpsBusy(true)
@@ -171,41 +215,50 @@ export function SosLocationStep({
             ? "Allow location access in your browser, or select a place on the map."
             : "Could not find your location. Try again or select a place on the map."
         )
+        centerFallbackRef.current = true
+        pinBoundaryCenter()
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 20_000 }
     )
     timerRef.current = window.setTimeout(() => {
       stopGps()
-      if (bestAccuracy > 120)
+      if (bestAccuracy > 120) {
         setNotice(
           "Could not find a precise location. Try again or select a place on the map."
         )
+        centerFallbackRef.current = true
+        pinBoundaryCenter()
+      }
     }, 20_000)
-  }, [selectLocation, stopGps])
+  }, [selectLocation, stopGps, pinBoundaryCenter])
 
   const syncMarker = useCallback(() => {
     const L = leafletRef.current
     const map = mapRef.current
     const pin = valueRef.current
     if (!L || !map || !pin) return
+    const check = pin.locationCheck
+    const inside =
+      check != null
+        ? acceptedLocationCheck(check)
+        : insideCoverage(pin.lat, pin.lng, coverageRef.current)
+    if (!inside) {
+      markerRef.current?.remove()
+      markerRef.current = null
+      return
+    }
     if (markerRef.current) {
       markerRef.current.setLatLng([pin.lat, pin.lng])
       return
     }
-    const pinSize = 30
+    const pinSize = 12
     const marker = L.marker([pin.lat, pin.lng], {
       draggable: true,
       title: "Emergency location. Drag to adjust.",
       alt: "Emergency location",
       icon: L.divIcon({
         className: "",
-        html: glyphPinHtml({
-          paths: GLYPHS.userResident,
-          color: MAP_COLORS.you,
-          size: pinSize,
-          label: "You",
-          className: "is-you",
-        }),
+        html: `<span class="eboses-pin-pulse" style="display:block;width:12px;height:12px;border-radius:9999px;background:#171717;box-shadow:0 1px 4px rgba(0,0,0,0.35)"></span>`,
         iconSize: [pinSize, pinSize],
         iconAnchor: [pinSize / 2, pinSize / 2],
       }),
@@ -225,6 +278,7 @@ export function SosLocationStep({
     let observer: ResizeObserver | undefined
     const contextRequest = apiRequest<{
       boundary: { geometry: GeoJsonPolygon | null }
+      dispatch_policy?: CoverageInput["policy"]
     }>("/locations/map-context/").catch(() => null)
     if (!containerRef.current) return
     {
@@ -235,35 +289,50 @@ export function SosLocationStep({
         attributionControl: false,
       }).setView(pin ? [pin.lat, pin.lng] : [14.5995, 120.9842], pin ? 17 : 11)
       mapRef.current = map
+      const fitBoundaryIfReady = () => {
+        if (valueRef.current || framedRef.current || !boundaryRef.current) return
+        const size = map?.getSize()
+        if (!map || !size || size.x <= 0 || size.y <= 0) return
+        const bounds = boundaryRef.current
+        if (!bounds.isValid()) return
+        map.fitBounds(bounds, { padding: [18, 18], maxZoom: 16 })
+        framedRef.current = true
+      }
       void contextRequest.then((context) => {
         if (cancelled || !context?.boundary.geometry) return
         const boundary = context.boundary.geometry
         const bounds = L.geoJSON(boundary as never).getBounds()
         if (!bounds.isValid()) return
         boundaryRef.current = bounds
-        drawCoverage(L, L.layerGroup().addTo(map), {
+        coverageRef.current = {
           boundary,
-          showBoundary: true,
-          showZone: false,
-          boundaryStyle: "quiet",
-        })
-        if (!valueRef.current)
-          map.fitBounds(bounds, { padding: [18, 18], maxZoom: 16 })
+          policy: context.dispatch_policy ?? null,
+        }
+        const currentPin = valueRef.current
+        if (currentPin) {
+          setOutOfScope(
+            !insideCoverage(currentPin.lat, currentPin.lng, coverageRef.current)
+          )
+        }
+        if (!valueRef.current) {
+          if (centerFallbackRef.current) {
+            centerFallbackRef.current = false
+            pinBoundaryCenter()
+          } else {
+            fitBoundaryIfReady()
+          }
+        }
       })
-      const tiles = addBaseTiles(L, map, "light", { crossOrigin: true })
-      tiles.on("tileerror", () =>
-        setMapError("Map unavailable. Connect to load this area.")
-      )
-      tiles.on("tileload", () => setMapError(""))
+      addBaseTiles(L, map, "light", { crossOrigin: true })
       map.on("click", (event: LeafletMouseEvent) => {
         stopGps()
         setNotice("")
         selectLocation(event.latlng.lat, event.latlng.lng, "manual", null)
       })
-      const reconnect = () => tiles.redraw()
-      map.on("unload", () => window.removeEventListener("online", reconnect))
-      window.addEventListener("online", reconnect)
-      observer = new ResizeObserver(() => map.invalidateSize())
+      observer = new ResizeObserver(() => {
+        map.invalidateSize()
+        fitBoundaryIfReady()
+      })
       observer.observe(containerRef.current)
       syncMarker()
     }
@@ -275,8 +344,10 @@ export function SosLocationStep({
       markerRef.current = null
       leafletRef.current = null
       boundaryRef.current = null
+      coverageRef.current = {}
+      framedRef.current = false
     }
-  }, [selectLocation, stopGps, syncMarker])
+  }, [selectLocation, stopGps, syncMarker, pinBoundaryCenter])
 
   useEffect(() => {
     syncMarker()
@@ -284,17 +355,25 @@ export function SosLocationStep({
 
   useEffect(() => {
     if (!valueRef.current) locate()
+    else if (!valueRef.current.locationCheck) {
+      selectLocation(
+        valueRef.current.lat,
+        valueRef.current.lng,
+        valueRef.current.source,
+        valueRef.current.accuracy ?? null
+      )
+    }
     return () => {
       stopGps()
       requestRef.current += 1
     }
-  }, [locate, stopGps])
+  }, [locate, selectLocation, stopGps])
 
   function recenter() {
     stopGps()
     const bounds = boundaryRef.current
     if (!bounds || !mapRef.current) {
-      setNotice("Barangay boundary is unavailable. Reconnect and try again.")
+      setNotice("Map area is unavailable. Reconnect and try again.")
       return
     }
     setNotice("")
@@ -314,9 +393,20 @@ export function SosLocationStep({
     >
       <div
         ref={containerRef}
-        className="relative z-0 h-full w-full"
+        className={cn(
+          "relative z-0 h-full w-full",
+          outOfScope && "eboses-map-blocked"
+        )}
         aria-label="Emergency location map"
       />
+      {notice ? (
+        <p
+          role="status"
+          className="pointer-events-none absolute top-3 left-3 z-20 max-w-[min(75%,20rem)] rounded-xl border border-amber-200 bg-white/95 px-3 py-2 text-[12px] font-medium text-neutral-700 shadow-md"
+        >
+          {notice}
+        </p>
+      ) : null}
       <div className="pointer-events-none absolute top-3 right-3 z-20">
         <MapControlStack className="pointer-events-auto shrink-0 border-0 bg-white">
           <MapStackButton
@@ -337,37 +427,43 @@ export function SosLocationStep({
           </MapStackButton>
         </MapControlStack>
       </div>
-      {mapError || notice ? (
-        <p
-          role="status"
-          className="absolute top-3 right-16 left-3 z-20 rounded-lg bg-white/95 px-3 py-2 text-xs shadow-sm"
-        >
-          {notice || mapError}
-        </p>
-      ) : null}
       <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex flex-col items-center gap-2 px-4">
-        <button
-          type="button"
-          onClick={() => setAddressExpanded((expanded) => !expanded)}
-          aria-expanded={addressExpanded}
-          className="pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
-        >
-          <span className="text-[16px] leading-none font-semibold text-neutral-900">
-            Nearby location
-          </span>
-          <span
-            aria-live="polite"
-            className={cn(
-              "mt-1.5 text-[14px] leading-snug font-medium text-neutral-500",
-              !addressExpanded && "line-clamp-2"
-            )}
+        {outOfScope ? (
+          <p
+            role="status"
+            className="pointer-events-none flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
           >
-            {addressBusy
-              ? "Finding address…"
-              : (addressExpanded ? value?.address : value?.addressPrimary) ||
-                "Select your location"}
-          </span>
-        </button>
+            <span className="text-[15px] leading-none font-semibold text-neutral-900">
+              This area is outside of our scope
+            </span>
+            <span className="mt-1.5 text-[13px] leading-snug font-medium text-neutral-500">
+              Drag the map back inside the service area.
+            </span>
+          </p>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAddressExpanded((expanded) => !expanded)}
+            aria-expanded={addressExpanded}
+            className="pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
+          >
+            <span className="text-[16px] leading-none font-semibold text-neutral-900">
+              Nearby location
+            </span>
+            <span
+              aria-live="polite"
+              className={cn(
+                "mt-1.5 text-[14px] leading-snug font-medium text-neutral-500",
+                !addressExpanded && "line-clamp-2"
+              )}
+            >
+              {addressBusy
+                ? "Finding address…"
+                : (addressExpanded ? value?.address : value?.addressPrimary) ||
+                  "Select your location"}
+            </span>
+          </button>
+        )}
       </div>
     </div>
   )

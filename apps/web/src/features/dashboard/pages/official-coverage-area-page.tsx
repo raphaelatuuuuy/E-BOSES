@@ -981,10 +981,6 @@ export default function OfficialCoverageAreaPage() {
           value: shape ? "Drawn shape" : `${radius} m radius`,
         },
         { label: "Area", value: barangayName },
-        {
-          label: "Neighbouring communities",
-          value: String(communities.filter((item) => !item.is_home).length),
-        },
       ]}
       action={
         <ConfigHeroAction onClick={() => void save()} icon={Save}>

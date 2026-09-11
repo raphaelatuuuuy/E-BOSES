@@ -429,6 +429,26 @@ export function createEmergency(formData: FormData) {
   })
 }
 
+export interface EmergencyMediaCheckFile {
+  index: number
+  name: string
+  status: "accepted" | "rejected"
+  authenticity_status: "passed" | "review_required" | "blocked"
+  authenticity_verdict: string
+  message: string
+}
+
+export interface EmergencyMediaCheckResult {
+  files: EmergencyMediaCheckFile[]
+}
+
+export function checkEmergencyMedia(formData: FormData) {
+  return apiRequest<EmergencyMediaCheckResult>("/emergencies/media/check/", {
+    method: "POST",
+    body: formData,
+  })
+}
+
 export function listEmergencyCategories() {
   return apiRequest<EmergencyCategory[]>("/emergencies/categories/")
 }

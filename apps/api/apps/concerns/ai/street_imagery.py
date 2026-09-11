@@ -20,6 +20,7 @@ about the report.
 import base64
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from io import BytesIO
 
@@ -31,13 +32,16 @@ logger = logging.getLogger(__name__)
 TILE_TIMEOUT_SECONDS = 10
 TILE_ZOOM = 3
 TILE_SIZE = 512
-OUTPUT_WIDTH = 2048
+OUTPUT_WIDTH = 3072
+TILE_WORKERS = 16
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
 
 _TILE_URL = "https://streetviewpixels-pa.googleapis.com/v1/tile"
+_PANORAMA_SEARCH_ORIGIN = "https://maps.google.com"
+_PANORAMA_SEARCH_TIMEOUT_SECONDS = 20
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,21 @@ def fetch_latest_street_imagery(*, latitude: float, longitude: float, radius_met
         return None
 
 
+def nearest_street_panorama(*, latitude: float, longitude: float, radius_meters: int = 100) -> dict | None:
+    """Return the closest usable panorama location without downloading tiles."""
+    pano = _newest_pano_near(latitude, longitude, radius_meters)
+    if pano is None:
+        return None
+    pano_id, captured_date, pano_lat, pano_lon, distance = pano
+    return {
+        "pano_id": pano_id,
+        "captured_date": captured_date or "unknown",
+        "latitude": pano_lat,
+        "longitude": pano_lon,
+        "distance_meters": round(distance, 1),
+    }
+
+
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     radius = 6371000.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -92,7 +111,7 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def _newest_pano_near(latitude: float, longitude: float, radius_meters: int):
     """(pano_id, date, lat, lon, distance_m) of the latest panorama near the pin."""
     try:
-        from streetview import search_panoramas
+        from streetview.search import extract_panoramas, make_search_url
     except Exception as exc:
         logger.warning("streetview package unavailable: %s", exc.__class__.__name__)
         return None
@@ -100,13 +119,27 @@ def _newest_pano_near(latitude: float, longitude: float, radius_meters: int):
     radius = max(radius_meters, 25)
     candidates = []
     try:
-        # The third-party library issues its HTTP calls with no timeout; bound
-        # the wait so a stalled Google endpoint cannot hang a worker until its
-        # task time limit.
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            panoramas = pool.submit(search_panoramas, lat=latitude, lon=longitude).result(timeout=20)
+        # The package hard-codes maps.googleapis.com, which can be reset by
+        # local networks even though the same no-key endpoint is available on
+        # maps.google.com. Build and send the request here so we can use the
+        # working origin, browser headers, and an actual request timeout.
+        search_url = make_search_url(latitude, longitude).replace(
+            "https://maps.googleapis.com",
+            _PANORAMA_SEARCH_ORIGIN,
+            1,
+        )
+        response = requests.get(
+            search_url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.google.com/maps/",
+            },
+            timeout=_PANORAMA_SEARCH_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        panoramas = extract_panoramas(response.text)
     except Exception as exc:
         logger.warning("Street imagery: panorama search failed: %s", exc.__class__.__name__)
         return None
@@ -135,23 +168,37 @@ def _download_full_pano(pano_id: str) -> str:
 
     Returns raw base64 JPEG, or "" when the tiles could not be fetched.
     """
-    width_tiles, height_tiles = 2**TILE_ZOOM, 2 ** (TILE_ZOOM - 1)
-    session = requests.Session()
-    session.headers.update({"User-Agent": USER_AGENT})
+    width_tiles = 2**TILE_ZOOM
+    # The final image keeps only the middle half of the panorama. At zoom 3,
+    # that is exactly tile rows 1 and 2, so do not download the sky/ground
+    # rows that would be discarded after stitching.
+    source_height_tiles = 2 ** (TILE_ZOOM - 1)
+    source_top = source_height_tiles // 4
+    source_bottom = source_height_tiles - source_top
+    kept_height_tiles = source_bottom - source_top
+    panorama = Image.new("RGB", (width_tiles * TILE_SIZE, kept_height_tiles * TILE_SIZE))
+    positions = [(x, y) for x in range(width_tiles) for y in range(source_top, source_bottom)]
 
-    panorama = Image.new("RGB", (width_tiles * TILE_SIZE, height_tiles * TILE_SIZE))
-    for x in range(width_tiles):
-        for y in range(height_tiles):
-            response = session.get(_tile_url(pano_id, x, y, TILE_ZOOM), timeout=TILE_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            with Image.open(BytesIO(response.content)) as tile:
-                panorama.paste(tile.convert("RGB"), (x * TILE_SIZE, y * TILE_SIZE))
+    def fetch_tile(position):
+        x, y = position
+        response = requests.get(
+            _tile_url(pano_id, x, y, TILE_ZOOM),
+            headers={"User-Agent": USER_AGENT},
+            timeout=TILE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        with Image.open(BytesIO(response.content)) as tile:
+            return x, y, tile.convert("RGB").copy()
 
-    # Full 360° width kept; trim only sky and ground, then downscale so the
-    # base64 payload stays practical for review and the vision model.
-    top, bottom = int(panorama.height * 0.25), int(panorama.height * 0.75)
-    band = panorama.crop((0, top, panorama.width, bottom))
-    band = band.resize((OUTPUT_WIDTH, round(band.height * OUTPUT_WIDTH / band.width)), Image.LANCZOS)
+    with ThreadPoolExecutor(max_workers=TILE_WORKERS) as pool:
+        for x, y, tile in pool.map(fetch_tile, positions):
+            panorama.paste(tile, (x * TILE_SIZE, (y - source_top) * TILE_SIZE))
+            tile.close()
+
+    # Full 360° width kept; the sky/ground rows were omitted above, then
+    # downscale so the base64 payload stays practical for review and the
+    # vision model.
+    band = panorama.resize((OUTPUT_WIDTH, round(panorama.height * OUTPUT_WIDTH / panorama.width)), Image.LANCZOS)
 
     output = BytesIO()
     band.save(output, "JPEG", quality=85, optimize=True)

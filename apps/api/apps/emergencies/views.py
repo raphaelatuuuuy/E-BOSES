@@ -51,6 +51,7 @@ from apps.concerns.units import (
     active_departments_by_codes,
     assigned_legacy_unit,
     department_ids_for_code,
+    departments_declaring_emergency_type,
 )
 from apps.geo_services import active_community_for_point, search_boundaries_online
 
@@ -390,9 +391,14 @@ def distance_meters(latitude_a, longitude_a, latitude_b, longitude_b):
     return 2 * earth_radius * asin(sqrt(value))
 
 def active_role_maps_for(alert_type, community=None):
-    filters = {"emergency_type": alert_type, "is_active": True}
+    filters = {
+        "emergency_type": alert_type,
+        "is_active": True,
+        "department__is_active": True,
+    }
     if community is not None:
         filters["community"] = community
+        filters["department__community"] = community
     return list(
         EmergencyTypeRoleMap.objects.filter(**filters)
         .select_related("department")
@@ -412,6 +418,12 @@ def preferred_departments_for(alert_type, community=None):
     departments = [item.department for item in active_role_maps_for(alert_type, community) if item.department_id]
     if departments:
         return departments
+
+    declared = departments_declaring_emergency_type(alert_type)
+    if community is not None:
+        declared = [item for item in declared if item.community_id == community.pk]
+    if declared:
+        return declared
 
     fallback = set()
     if alert_type in LEGACY_EMERGENCY_TYPE_CODES:
@@ -1007,9 +1019,9 @@ def create_witness_notifications(alert):
     User = get_user_model()
     fresh_after = timezone.now() - timedelta(minutes=WITNESS_LOCATION_FRESH_MINUTES)
     try:
-        radius_meters = int(MapDispatchPolicy.current(alert.community).witness_radius_meters)
+        radius_meters = int(MapDispatchPolicy.current(alert.community).acceptance_radius_meters)
     except Exception:
-        radius_meters = int(getattr(settings, "EMERGENCY_WITNESS_RADIUS_METERS", 250))
+        radius_meters = int(getattr(settings, "EMERGENCY_ACCEPTANCE_RADIUS_METERS", 800))
     witnesses = (
         User.objects
         .filter(
@@ -1290,6 +1302,68 @@ class EmergencyChatAttachmentView(APIView):
             request_meta=request_meta(request),
         )
         return FileResponse(attachment.file.open("rb"), content_type=attachment.mime_type)
+
+
+class EmergencyMediaCheckView(APIView):
+    """Run attachment checks before an SOS alert is submitted.
+
+    Mirrors the concern media check: byte validation, exact-hash duplicate
+    gate, then forensics plus AI authenticity verdicts per file. Nothing is
+    persisted. The final submit endpoint repeats the checks before saving.
+    """
+
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        from apps.concerns.views import (
+            _attachment_authenticity_results,
+            _media_check_configuration,
+        )
+
+        media_files = request.FILES.getlist("media")
+        if not media_files:
+            return Response({"media": ["Choose a photo to check."]}, status=status.HTTP_400_BAD_REQUEST)
+        if len(media_files) > 5:
+            return Response({"media": ["Attach at most 5 photos per alert."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        current_hashes = set()
+        for uploaded_file in media_files:
+            try:
+                validated_file = validate_emergency_media_file(uploaded_file)
+            except ValidationError as exc:
+                messages = []
+                if hasattr(exc, "messages") and exc.messages:
+                    messages = [str(m) for m in exc.messages]
+                else:
+                    messages = [str(exc)]
+                cleaned = []
+                for msg in messages:
+                    text = str(msg).strip()
+                    if text.startswith("[") and text.endswith("]"):
+                        text = text[1:-1].strip().strip("'\"")
+                    if text:
+                        cleaned.append(text)
+                return Response(
+                    {"media": cleaned or ["This photo could not be validated."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            media_hash = sha256_file(validated_file)
+            validated_file.seek(0)
+            if media_hash in current_hashes or EmergencyMedia.objects.filter(sha256_hash=media_hash).exists():
+                return Response(
+                    {"media": ["This photo was already uploaded before."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            current_hashes.add(media_hash)
+        return Response(
+            {
+                "files": _attachment_authenticity_results(
+                    media_files,
+                    config=_media_check_configuration(request),
+                )
+            }
+        )
 
 
 class EmergencyCreateView(APIView):
@@ -3760,9 +3834,9 @@ class EmergencyLocationPingView(APIView):
             )
         else:
             try:
-                nearby_distance = int(MapDispatchPolicy.current(alert.community).responder_nearby_radius_meters)
+                nearby_distance = int(MapDispatchPolicy.current(alert.community).acceptance_radius_meters)
             except Exception:
-                nearby_distance = int(getattr(settings, "EMERGENCY_NEARBY_DISTANCE_METERS", 100))
+                nearby_distance = int(getattr(settings, "EMERGENCY_ACCEPTANCE_RADIUS_METERS", 800))
             # With no incident pin there is no "nearby" to detect; the ping is
             # still recorded and broadcast, the status just does not advance.
             distance = (

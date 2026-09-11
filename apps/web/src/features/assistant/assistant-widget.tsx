@@ -112,6 +112,7 @@ const MOTION_CSS = `
   animation: eb-assistant-panel-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
   transform-origin: bottom right;
 }
+.eb-assistant-scrim { display: none; }
 .eb-assistant-bubble { animation: eb-assistant-bubble-in 200ms ease-out both; }
 .eb-assistant-dot { animation: eb-assistant-dot 1.2s ease-in-out infinite; }
 .eb-assistant-scroll { scrollbar-width: thin; scrollbar-color: #d4d4d8 transparent; }
@@ -123,6 +124,32 @@ const MOTION_CSS = `
   border-radius: 999px;
 }
 .eb-assistant-scroll::-webkit-scrollbar-thumb:hover { background-color: #a1a1aa; }
+@media (max-width: 767px) {
+  .eb-assistant-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 89;
+    border: 0;
+    background: rgba(0, 0, 0, 0.4);
+  }
+  .eb-assistant-panel {
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: min(38rem, 86dvh) !important;
+    max-height: calc(100dvh - env(safe-area-inset-top));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 28px 28px 0 0;
+    transform-origin: bottom center;
+  }
+  .eb-assistant-sheet-handle { display: block; }
+}
+@media (min-width: 768px) {
+  .eb-assistant-sheet-handle { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .eb-assistant-panel, .eb-assistant-bubble { animation: none; }
   .eb-assistant-dot { animation: none; opacity: 0.4; }
@@ -162,6 +189,15 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
       .catch(() => undefined)
     return () => {
       cancelled = true
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open || !window.matchMedia("(max-width: 767px)").matches) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    return () => {
+      document.body.style.overflow = previousOverflow
     }
   }, [open])
 
@@ -271,9 +307,8 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Open the E-Boses Assistant"
-          style={{ position: "fixed", right: "1.5rem", bottom: "1.5rem" }}
           className={cn(
-            "group z-[1000] flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            "group fixed right-6 bottom-6 z-[90] flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             onDark
               ? "bg-white text-brand-navy shadow-[0_8px_28px_rgba(0,0,0,0.5)] hover:bg-neutral-100"
               : "bg-nav-bg text-white shadow-[0_8px_28px_rgba(5,13,51,0.4)] ring-1 ring-white/15 hover:bg-brand-navy",
@@ -295,12 +330,19 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
   return (
     <>
       <style>{MOTION_CSS}</style>
+      <button
+        type="button"
+        aria-label="Close the assistant"
+        onClick={() => setOpen(false)}
+        className="eb-assistant-scrim"
+      />
       <section
         role="dialog"
+        aria-modal="true"
         aria-label="E-Boses Assistant"
-        style={{ position: "fixed", right: "1.5rem", bottom: "1.5rem" }}
-        className="eb-assistant-panel z-[1000] flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
+        className="eb-assistant-panel fixed right-6 bottom-6 z-[90] flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
       >
+        <div className="eb-assistant-sheet-handle mx-auto mt-2 h-1.5 w-11 shrink-0 rounded-full bg-neutral-300" aria-hidden />
         <header className="flex items-center justify-end gap-2 bg-white px-4 pb-1 pt-3">
           <button
             type="button"
@@ -390,7 +432,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
           ) : null}
         </div>
 
-        <div className="px-4 pb-4 pt-1">
+        <div className="px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-1">
           <div className="flex items-center gap-2 rounded-full border border-neutral-200 bg-white py-1.5 pl-5 pr-1.5 transition-colors focus-within:border-brand-navy/30">
             <input
               ref={inputRef}

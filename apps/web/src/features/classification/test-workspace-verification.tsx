@@ -367,11 +367,9 @@ export function VerificationTestWorkspace() {
                     onExpand={() => setLightbox(templatePreview)}
                   />
                 ) : (
-                  <div className="flex w-56 items-center justify-center rounded-[14px] border border-dashed border-neutral-200 bg-neutral-50 px-4 py-12 text-center sm:w-72">
-                    <p className="text-[13px] leading-relaxed text-neutral-400">
-                      {templateLoading ? "Loading configured sample…" : templateError ? "Configured sample could not be opened." : "No configured sample available."}
-                    </p>
-                  </div>
+                  <p className="mt-2 text-[13px] leading-relaxed text-neutral-400">
+                    {templateLoading ? "Loading configured sample…" : templateError ? "Configured sample could not be opened." : "No configured sample available."}
+                  </p>
                 )}
               </div>
             </div>
@@ -403,13 +401,13 @@ export function VerificationTestWorkspace() {
 
 function VerificationPhotoTile({ src, label, onExpand }: { src: string; label: string; onExpand: () => void }) {
   return (
-    <div className="w-56 sm:w-72">
+    <div className="w-full max-w-[30rem]">
       <button
         type="button"
         onClick={onExpand}
-        className="group relative block aspect-[4/3] w-full overflow-hidden rounded-[14px] border border-neutral-200 bg-neutral-50"
+        className="group relative block w-full overflow-hidden rounded-[14px]"
       >
-        <img src={src} alt={label} className="size-full object-contain p-2 transition-opacity group-hover:opacity-80" />
+        <img src={src} alt={label} className="block h-auto w-full rounded-[14px] transition-opacity group-hover:opacity-80" />
       </button>
       <p className="mt-1.5 truncate text-center text-[11px] font-semibold uppercase tracking-wide text-neutral-400" title={label}>
         {label}

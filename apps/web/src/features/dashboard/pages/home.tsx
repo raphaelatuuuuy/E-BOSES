@@ -53,7 +53,6 @@ const FEED_TABS = [
   { id: "nearby", label: "Nearby" },
   { id: "trending", label: "Trending" },
   { id: "resolved", label: "Resolved" },
-  { id: "other", label: "Other communities" },
 ] as const
 
 type FeedTab = (typeof FEED_TABS)[number]["id"]
@@ -76,7 +75,6 @@ export default function HomePage() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [events, setEvents] = useState<BarangayEvent[]>([])
   const [concerns, setConcerns] = useState<Concern[]>([])
-  const [foreignConcerns, setForeignConcerns] = useState<Concern[]>([])
   const [expandedComments, setExpandedComments] = useState<Set<number>>(
     new Set()
   )
@@ -93,8 +91,7 @@ export default function HomePage() {
       "Nothing in the feed yet" onboarding card instead of a filter miss. */
   const feedTotallyEmpty =
     announcements.length === 0 &&
-    concerns.length === 0 &&
-    foreignConcerns.length === 0
+    concerns.length === 0
 
   const streetLabel = streetLabelFromAddress(user?.address)
 
@@ -145,7 +142,6 @@ export default function HomePage() {
       const [
         nextAnnouncements,
         nextConcerns,
-        nextForeignConcerns,
         nextEvents,
         summary,
         mapSnapshot,
@@ -156,15 +152,7 @@ export default function HomePage() {
           undefined,
           undefined,
           undefined,
-          "home",
-          origin
-        ),
-        listFeedConcerns(
           "all",
-          undefined,
-          undefined,
-          undefined,
-          "other",
           origin
         ),
         listBarangayEventCalendar(),
@@ -173,7 +161,6 @@ export default function HomePage() {
       ])
       setAnnouncements(nextAnnouncements)
       setConcerns(nextConcerns)
-      setForeignConcerns(nextForeignConcerns)
       setEvents(nextEvents)
       if (mapSnapshot) {
         setRailMap({
@@ -346,13 +333,8 @@ export default function HomePage() {
   }, [feedTab, origin, streetLabel, communityName])
 
   const sortedConcerns = useMemo(
-    () =>
-      rankFeed(
-        feedTab === "other" ? foreignConcerns : concerns,
-        feedTab === "other" ? "recent" : feedTab,
-        origin
-      ),
-    [concerns, foreignConcerns, feedTab, origin]
+    () => rankFeed(concerns, feedTab, origin),
+    [concerns, feedTab, origin]
   )
 
   if (!loaded) {
@@ -638,9 +620,7 @@ export default function HomePage() {
                     ? nearbyUnavailable
                       ? "Location unavailable — allow location access to see posts near you."
                       : "Nothing reported within 1.5 km of you."
-                    : feedTab === "other"
-                      ? "No concerns from other communities yet."
-                      : "No posts match this filter."}
+                    : "No posts match this filter."}
                 </p>
                 <button
                   type="button"

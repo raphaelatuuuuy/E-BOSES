@@ -290,6 +290,7 @@ def _street_imagery_check(config, *, concern: Concern, prepared_images: list[Pre
             "reason": "verification_unavailable",
             "pano_id": imagery.pano_id,
             "captured_date": imagery.captured_date,
+            "image_b64": imagery.image_b64,
         }
     return {
         "status": "checked",
@@ -300,6 +301,7 @@ def _street_imagery_check(config, *, concern: Concern, prepared_images: list[Pre
         "distance_meters": imagery.distance_meters,
         "latitude": imagery.latitude,
         "longitude": imagery.longitude,
+        "image_b64": imagery.image_b64,
     }
 
 

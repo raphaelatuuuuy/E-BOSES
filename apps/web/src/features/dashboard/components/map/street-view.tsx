@@ -3,6 +3,8 @@ import { ExpandIcon, ShrinkIcon, XIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
+import { getStreetViewImage } from "@/features/dashboard/api"
+
 import { MapControlButton, MapControlStack } from "./map-chrome"
 import { insideCoverage, type CoverageInput } from "./coverage-layer"
 import { glyphPinHtml, MAP_COLORS } from "./markers"
@@ -31,6 +33,12 @@ const FOOTPRINT_PATHS = [
   "M4 13h4",
 ]
 
+type StreetViewCoverageState = {
+  key: string
+  status: "loading" | "available" | "no_coverage" | "error"
+  image?: string
+}
+
 function esc(text: string) {
   return text
     .replace(/&/g, "&amp;")
@@ -46,24 +54,76 @@ function popupHtml(point: StreetViewMapPoint) {
   return `<div class="eboses-sv-pop__body">${image}<p class="eboses-sv-pop__title">${esc(point.title)}</p><p class="eboses-sv-pop__desc">${esc(point.excerpt ?? point.meta ?? "")}</p></div>`
 }
 
-const EMBED_KEY = (
-  import.meta.env.VITE_GOOGLE_MAPS_EMBED_KEY as string | undefined
-)?.trim()
+function StreetViewPanorama({ src }: { src: string }) {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const imageRef = useRef<HTMLImageElement>(null)
+  const dragRef = useRef<{ pointerId: number; x: number; offset: number } | null>(null)
+  const [offset, setOffset] = useState(0)
+
+  useEffect(() => {
+    setOffset(0)
+  }, [src])
+
+  function clampOffset(value: number) {
+    const viewport = viewportRef.current
+    const image = imageRef.current
+    if (!viewport || !image) return value
+    const overflow = Math.max(0, image.getBoundingClientRect().width - viewport.clientWidth)
+    return Math.max(-overflow / 2, Math.min(overflow / 2, value))
+  }
+
+  function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, offset }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    setOffset(clampOffset(drag.offset + event.clientX - drag.x))
+  }
+
+  function onPointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    dragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  return (
+    <div
+      ref={viewportRef}
+      className="absolute inset-0 min-h-0 min-w-0 max-w-full cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerEnd}
+      onPointerCancel={onPointerEnd}
+    >
+      <img
+        ref={imageRef}
+        src={src}
+        alt="Street View panorama"
+        draggable={false}
+        className="absolute top-0 left-1/2 h-full max-w-none"
+        style={{ transform: `translate3d(calc(-50% + ${offset}px), 0, 0)` }}
+      />
+    </div>
+  )
+}
 
 export function streetViewEmbedUrl(coord: StreetViewCoord, heading = 0) {
   const lat = coord.lat.toFixed(6)
   const lng = coord.lng.toFixed(6)
-  if (EMBED_KEY) {
-    const params = new URLSearchParams({
-      key: EMBED_KEY,
-      location: `${lat},${lng}`,
-      heading: String(Math.round(heading)),
-      pitch: "0",
-      fov: "90",
-    })
-    return `https://www.google.com/maps/embed/v1/streetview?${params.toString()}`
-  }
-  return `https://maps.google.com/maps?layer=c&cbll=${lat},${lng}&cbp=11,${heading},0,0,0&output=svembed`
+  const params = new URLSearchParams({
+    q: "",
+    layer: "c",
+    cbll: `${lat},${lng}`,
+    cbp: `11,${Math.round(heading)},0,0,0`,
+    source: "embed",
+    output: "svembed",
+  })
+  return `https://maps.google.com/maps?${params.toString()}`
 }
 
 function StreetViewMiniMap({
@@ -219,6 +279,7 @@ export function StreetViewModal({
   onMove,
   mode = "browse",
   coverage = null,
+  embedded = false,
 }: {
   coord: StreetViewCoord
   onClose: () => void
@@ -228,10 +289,17 @@ export function StreetViewModal({
   /** Pick mode tints the view red outside coverage. */
   mode?: "browse" | "pick"
   coverage?: CoverageInput | null
+  /** Render as a normal sheet panel instead of an absolute map overlay. */
+  embedded?: boolean
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [miniOpen, setMiniOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  const coordKey = `${coord.lat.toFixed(6)},${coord.lng.toFixed(6)}`
+  const [streetCoverage, setStreetCoverage] = useState<StreetViewCoverageState>({
+    key: "",
+    status: "loading",
+  })
   const pickMode = mode === "pick"
   const outOfScope = useMemo(
     () => Boolean(coverage && !insideCoverage(coord.lat, coord.lng, coverage)),
@@ -285,12 +353,41 @@ export function StreetViewModal({
       if (event.key === "Escape") onClose()
     }
     document.addEventListener("keydown", onKey)
+    const previousBodyOverflow = document.body.style.overflow
+    const previousBodyOverflowX = document.body.style.overflowX
+    document.body.style.overflow = "hidden"
+    document.body.style.overflowX = "hidden"
     document.body.classList.add("eboses-sv-open")
     return () => {
       document.removeEventListener("keydown", onKey)
+      document.body.style.overflow = previousBodyOverflow
+      document.body.style.overflowX = previousBodyOverflowX
       document.body.classList.remove("eboses-sv-open")
     }
   }, [onClose])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setStreetCoverage({ key: coordKey, status: "loading" })
+    void getStreetViewImage(coord, controller.signal)
+      .then((result) => {
+        if (result.status === "available" && result.image) {
+          setStreetCoverage({
+            key: coordKey,
+            status: "available",
+            image: result.image,
+          })
+        } else {
+          setStreetCoverage({ key: coordKey, status: "no_coverage" })
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setStreetCoverage({ key: coordKey, status: "error" })
+        }
+      })
+    return () => controller.abort()
+  }, [coordKey, coord.lat, coord.lng])
 
   useEffect(() => {
     const host = hostRef.current
@@ -314,41 +411,51 @@ export function StreetViewModal({
     }
   }
 
+  const currentCoverage = streetCoverage.key === coordKey
+    ? streetCoverage
+    : { key: coordKey, status: "loading" as const }
+  const coverageUnavailable = currentCoverage.status === "no_coverage" || currentCoverage.status === "error"
+
   return (
     <div
       ref={hostRef}
-      className="absolute inset-0 z-[1000] overflow-hidden bg-neutral-900"
+      className={cn(
+        "z-[1000] min-h-0 min-w-0 max-w-full overflow-hidden bg-neutral-900",
+        embedded
+          ? "relative h-full w-full"
+          : "absolute inset-0"
+      )}
       role="dialog"
       aria-modal="true"
       aria-label="Street View"
     >
       <div
         className={cn(
-          "absolute inset-0",
+          "absolute inset-0 min-h-0 min-w-0 max-w-full overflow-hidden",
           pickMode && outOfScope && "eboses-map-blocked"
         )}
       >
-        <iframe
-          key={`${coord.lat},${coord.lng}`}
-          src={streetViewEmbedUrl(coord)}
-          title="Street View"
-          loading="eager"
-          referrerPolicy="no-referrer-when-downgrade"
-          allowFullScreen
-          className="absolute inset-0 size-full border-0"
-        />
+        {currentCoverage.status === "available" && currentCoverage.image ? (
+          <StreetViewPanorama src={currentCoverage.image} />
+        ) : coverageUnavailable ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-neutral-900 px-6 text-center text-white">
+            <div className="max-w-sm">
+              <p className="text-base font-semibold">
+                {currentCoverage.status === "no_coverage"
+                  ? "Street View is unavailable at this location."
+                  : "Street View could not be loaded at this location."}
+              </p>
+              <p className="mt-2 text-sm text-white/65">
+                Open the nearby map and double-click a road to try another spot.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-neutral-900 px-6 text-center text-white">
+            <p className="text-sm font-medium text-white/75">Loading Street View…</p>
+          </div>
+        )}
       </div>
-
-      {!EMBED_KEY && (
-        <a
-          href={`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${coord.lat},${coord.lng}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="absolute top-2 left-2 z-20 max-w-[calc(100%-5rem)] rounded-lg bg-white px-3 py-2 text-sm font-medium text-neutral-900 shadow-md"
-        >
-          Open in Google Maps to swipe around
-        </a>
-      )}
 
       <div className="absolute top-2 right-2 z-20">
         <MapControlStack tone="light">

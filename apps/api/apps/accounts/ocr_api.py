@@ -1082,7 +1082,7 @@ class OCRTestRunView(APIView):
         community = _official_community(request)
         if not community:
             return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
-        runs = OCRTestRun.objects.select_related("document_type", "configuration").filter(configuration__community=community).order_by("-created_at")[:50]
+        runs = OCRTestRun.objects.select_related("document_type", "configuration", "requested_by").filter(configuration__community=community).order_by("-created_at")[:50]
         return Response({"results": [_test_payload(run) for run in runs]})
 
     def post(self, request):
@@ -1241,6 +1241,9 @@ def _test_payload(run):
                 extraction_json[key] = item
     overall = float(run.ocr_confidence) if run.ocr_confidence is not None else None
     metadata = run.metadata or {}
+    requested_by_name = ""
+    if run.requested_by_id:
+        requested_by_name = run.requested_by.get_full_name().strip() or run.requested_by.email
     reference_images = [
         {
             "side": sample.get("side", "single"),
@@ -1256,6 +1259,7 @@ def _test_payload(run):
         "status": run.status,
         "document_type": run.document_type.code,
         "document_type_name": run.document_type.name,
+        "requested_by_name": requested_by_name,
         "configuration_version": run.configuration.version,
         "original_filename": run.original_filename,
         "filename": run.original_filename,
@@ -1308,16 +1312,23 @@ class OCRDocumentSampleView(APIView):
         return "single"
 
     def _open_sample_file(self, document, side: str):
+        def available(file_field):
+            return bool(file_field and file_field.name and file_field.storage.exists(file_field.name))
+
         sample = (
             document.samples.filter(is_active=True, name=side)
             .exclude(file="")
             .order_by("-updated_at", "-id")
             .first()
         )
-        if sample and sample.file:
+        if sample and available(sample.file):
             return sample.file, sample.original_filename or sample.name or "sample"
-        # Legacy fallbacks
-        if side in {"front", "single"} and getattr(document, "sample_file", None) and document.sample_file:
+        if side in {"front", "single"}:
+            alternatives = document.samples.filter(is_active=True).exclude(file="").order_by("name", "-updated_at", "-id")
+            for alternative in alternatives:
+                if available(alternative.file):
+                    return alternative.file, alternative.original_filename or alternative.name or "sample"
+        if side in {"front", "single"} and available(getattr(document, "sample_file", None)):
             return document.sample_file, document.sample_original_filename or "sample"
         if side == "back":
             # Do not fall back to front when requesting back

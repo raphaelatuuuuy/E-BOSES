@@ -36,6 +36,33 @@ def photo_bytes():
     return output.getvalue()
 
 
+def detailed_photo_bytes():
+    """A photo with visible detail, so the soft quality gate passes."""
+    import random
+
+    from PIL import ImageDraw
+
+    random.seed(20260911)
+    image = Image.new("RGB", (640, 480), (90, 110, 130))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([40, 60, 300, 220], fill=(200, 80, 60))
+    draw.ellipse([330, 120, 560, 380], fill=(60, 170, 90))
+    draw.line([0, 400, 640, 320], fill=(240, 230, 200), width=9)
+    pixels = image.load()
+    for x in range(0, 640, 4):
+        for y in range(0, 480, 4):
+            jitter = random.randint(-14, 14)
+            r, g, b = pixels[x, y]
+            pixels[x, y] = (
+                max(0, min(255, r + jitter)),
+                max(0, min(255, g + jitter)),
+                max(0, min(255, b + jitter)),
+            )
+    output = BytesIO()
+    image.save(output, "JPEG", quality=88)
+    return output.getvalue()
+
+
 def prepared():
     from apps.concerns.ai.image_prep import PreparedImage
 
@@ -166,3 +193,114 @@ class EmergencyDispatchOrderTests(TestCase):
 
         source = inspect.getsource(enqueue_emergency_media_integrity)
         self.assertNotIn(".run(", source)
+
+
+CLASSIFY = "apps.concerns.ai.classification.classification_payload"
+INTEGRITY_PREVIEW = "apps.concerns.classification_api._media_integrity_preview"
+
+
+class EmergencyMediaCheckViewTests(TestCase):
+    """Immediate upload-time checks for SOS attachments.
+
+    The composer check must mirror the submit gate (byte validation, exact
+    duplicate) and add the forensics plus AI authenticity verdicts per file,
+    without persisting anything.
+    """
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+
+        self.resident = User.objects.create_user(
+            email="sos-check-resident@example.com",
+            phone_number="+639181113332",
+            password="pass",
+            role=User.Role.RESIDENT,
+            status=User.Status.VERIFIED,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.resident)
+
+    def _upload(self, content=None):
+        return SimpleUploadedFile(
+            "sos-check.jpg",
+            content or detailed_photo_bytes(),
+            content_type="image/jpeg",
+        )
+
+    def _check(self, upload):
+        with (
+            patch(CLASSIFY, return_value={"details": {}}),
+            patch(
+                INTEGRITY_PREVIEW,
+                return_value={"status": "checked", "findings": []},
+            ),
+        ):
+            return self.client.post(
+                "/api/emergencies/media/check/",
+                {"media": upload},
+                format="multipart",
+            )
+
+    def test_clean_photo_is_accepted_with_per_file_verdict(self):
+        response = self._check(self._upload())
+        self.assertEqual(response.status_code, 200)
+        files = response.data["files"]
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["status"], "accepted")
+        self.assertEqual(files[0]["index"], 0)
+        self.assertFalse(
+            EmergencyMedia.objects.exists(),
+            "The check endpoint must not persist uploads.",
+        )
+
+    def test_duplicate_photo_is_rejected_immediately(self):
+        from apps.accounts.services import validate_emergency_media_file
+        from apps.media_utils import sha256_file
+        from django.core.files.base import ContentFile
+
+        content = detailed_photo_bytes()
+        # Validation re-encodes uploads, so the stored hash must come from the
+        # normalized bytes — exactly what the endpoint hashes.
+        normalized = validate_emergency_media_file(
+            SimpleUploadedFile("sos-check.jpg", content, content_type="image/jpeg")
+        )
+        stored_hash = sha256_file(normalized)
+        alert = EmergencyAlert.objects.create(
+            reporter=self.resident,
+            type="fire",
+            note="May sunog.",
+            status=EmergencyAlert.Status.SUBMITTED,
+        )
+        EmergencyMedia.objects.create(
+            alert=alert,
+            file=ContentFile(content, name="sos-check.jpg"),
+            original_filename="sos-check.jpg",
+            mime_type="image/jpeg",
+            file_size=len(content),
+            sha256_hash=stored_hash,
+        )
+        response = self._check(self._upload(content))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("already uploaded", str(response.data["media"]))
+
+    def test_empty_request_is_rejected(self):
+        response = self.client.post(
+            "/api/emergencies/media/check/", {}, format="multipart"
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_unauthenticated_request_is_rejected(self):
+        self.client.force_authenticate(user=None)
+        with (
+            patch(CLASSIFY, return_value={"details": {}}),
+            patch(
+                INTEGRITY_PREVIEW,
+                return_value={"status": "checked", "findings": []},
+            ),
+        ):
+            response = self.client.post(
+                "/api/emergencies/media/check/",
+                {"media": self._upload()},
+                format="multipart",
+            )
+        self.assertIn(response.status_code, (401, 403))

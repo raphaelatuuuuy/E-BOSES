@@ -30,8 +30,7 @@ CATEGORIES = (
     ("accounts", "Accounts", ("account.", "profile.", "admin.")),
     ("signin", "Sign-in", ("auth.", "password_reset.")),
     ("idchecks", "ID checks", ("ocr.",)),
-    ("concerns", "Concerns", ("concern.",)),
-    ("emergencies", "Emergencies", ("emergency.", "responder.")),
+    ("concerns", "Concerns", ("concern.", "emergency.", "responder.")),
     ("content", "Community content", ("announcement.", "event.", "content.")),
     ("settings", "Configuration", ("settings.", "map_dispatch_policy.")),
 )

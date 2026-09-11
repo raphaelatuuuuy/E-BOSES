@@ -240,7 +240,7 @@ export function ResidentReportsWorkspace({
 
   const queuePane = (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="scrollbar-hide flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pt-4 pb-4">
+      <div className="scrollbar-hide flex min-h-0 flex-1 flex-col gap-3 px-4 pt-4 pb-4 lg:overflow-y-auto lg:overscroll-contain max-lg:overflow-visible max-lg:overscroll-auto">
         {error ? (
           <p className="rounded-[16px] border border-severity-critical/40 bg-severity-critical-surface px-3 py-2 text-label text-severity-critical-ink">
             {error}

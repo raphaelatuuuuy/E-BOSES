@@ -330,7 +330,7 @@ def _map_data():
     count = MapGeometry.objects.filter(is_active=True).count()
     if not count:
         return DEGRADED, "no geometry imported"
-    communities = Community.objects.filter(status=Community.Status.ACTIVE).select_related("boundary")
+    communities = Community.objects.filter(status=Community.Status.ACTIVE, code="marikina-heights").select_related("boundary")
     if not communities.exists():
         return DOWN, "no active community"
     for community in communities:

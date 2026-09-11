@@ -156,28 +156,32 @@ export function Pager({
   pageSize = PAGE_SIZE,
   onChange,
   noun = "entries",
+  className,
 }: {
   offset: number
   total: number
   pageSize?: number
   onChange: (next: number) => void
   noun?: string
+  className?: string
 }) {
   if (total === 0) return null
-  const first = offset + 1
-  const last = Math.min(offset + pageSize, total)
-  const atStart = offset === 0
-  const atEnd = offset + pageSize >= total
+  const maxOffset = Math.floor((total - 1) / pageSize) * pageSize
+  const safeOffset = Math.min(Math.max(offset, 0), maxOffset)
+  const first = safeOffset + 1
+  const last = Math.min(safeOffset + pageSize, total)
+  const atStart = safeOffset === 0
+  const atEnd = safeOffset + pageSize >= total
 
   return (
-    <div className="mt-8 flex items-center justify-between gap-4 border-t border-neutral-200 pt-5">
+    <div className={cn("mt-8 flex items-center justify-between gap-4 border-t border-neutral-200 pt-5", className)}>
       <p className="text-meta text-neutral-500 tabular-nums">
         {first}–{last} of {total.toLocaleString()} {noun}
       </p>
       <div className="flex items-center gap-1">
         <button
           type="button"
-          onClick={() => onChange(Math.max(0, offset - pageSize))}
+          onClick={() => onChange(Math.max(0, safeOffset - pageSize))}
           disabled={atStart}
           aria-label="Previous page"
           className={cn(
@@ -191,7 +195,7 @@ export function Pager({
         </button>
         <button
           type="button"
-          onClick={() => onChange(offset + pageSize)}
+          onClick={() => onChange(Math.min(maxOffset, safeOffset + pageSize))}
           disabled={atEnd}
           aria-label="Next page"
           className={cn(

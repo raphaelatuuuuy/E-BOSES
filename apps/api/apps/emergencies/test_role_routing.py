@@ -11,12 +11,15 @@ from apps.concerns.test_helpers import grant_position
 from apps.concerns.units import sync_responder_designation
 
 from .models import (
+    EmergencyCategory,
     EmergencyAlert,
     EmergencyAssignmentLog,
     EmergencyResponderAssignment,
     EmergencyTypeRoleMap,
     ResponderShift,
 )
+from .serializers import emergency_category_is_covered
+from .views import preferred_departments_for
 
 
 TEST_CHANNEL_LAYERS = {
@@ -141,6 +144,54 @@ class RoleBasedResponderRoutingTests(APITestCase):
         self.assertEqual(assignment.source, EmergencyResponderAssignment.Source.AUTO)
         self.assertEqual(assignment.role_map_id, created.data["id"])
         self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="auto_assigned", responder=self.tanod).exists())
+
+    def test_declared_unit_is_recognized_without_a_role_map(self):
+        """Unit configuration alone must expose and route its emergency types."""
+        department = self.tanod.designations.filter(is_active=True).first().department
+        for other in department.__class__.objects.filter(community=self.community):
+            other.emergency_types = [
+                value for value in (other.emergency_types or [])
+                if value != EmergencyAlert.Type.CRIME
+            ]
+            other.save(update_fields=["emergency_types", "updated_at"])
+        department.responds_to_emergencies = True
+        department.emergency_types = [EmergencyAlert.Type.CRIME]
+        department.save(update_fields=["responds_to_emergencies", "emergency_types", "updated_at"])
+        EmergencyTypeRoleMap.objects.filter(
+            community=self.community,
+            emergency_type=EmergencyAlert.Type.CRIME,
+        ).delete()
+        EmergencyCategory.objects.update_or_create(
+            community=self.community,
+            code=EmergencyAlert.Type.CRIME,
+            defaults={"label": "Crime", "is_active": True, "visible_to_residents": True},
+        )
+
+        self.assertTrue(emergency_category_is_covered(EmergencyAlert.Type.CRIME, self.community))
+        self.assertEqual(
+            preferred_departments_for(EmergencyAlert.Type.CRIME, self.community),
+            [department],
+        )
+
+    def test_inactive_declared_unit_does_not_cover_an_emergency_type(self):
+        department = self.tanod.designations.filter(is_active=True).first().department
+        for other in department.__class__.objects.filter(community=self.community):
+            other.emergency_types = [
+                value for value in (other.emergency_types or [])
+                if value != EmergencyAlert.Type.CRIME
+            ]
+            other.save(update_fields=["emergency_types", "updated_at"])
+        department.responds_to_emergencies = True
+        department.emergency_types = [EmergencyAlert.Type.CRIME]
+        department.is_active = False
+        department.save(update_fields=["responds_to_emergencies", "emergency_types", "is_active", "updated_at"])
+        EmergencyTypeRoleMap.objects.filter(
+            community=self.community,
+            emergency_type=EmergencyAlert.Type.CRIME,
+        ).delete()
+
+        self.assertFalse(emergency_category_is_covered(EmergencyAlert.Type.CRIME, self.community))
+        self.assertEqual(preferred_departments_for(EmergencyAlert.Type.CRIME, self.community), [])
 
     def test_manual_assignment_and_status_changes_are_logged_and_rbac_guarded(self):
         alert = self.alert()

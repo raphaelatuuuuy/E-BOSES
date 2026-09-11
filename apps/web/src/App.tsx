@@ -867,9 +867,15 @@ function AssistantMount() {
   const enabled =
     ASSISTANT_PATHS.includes(pathname) || pathname.startsWith("/help")
   if (!enabled) return null
+  const onDark =
+    pathname === "/" ||
+    pathname === "/report-issue" ||
+    pathname === "/book-demo" ||
+    pathname === "/communities" ||
+    pathname === "/communities/new"
   return (
     <Suspense fallback={null}>
-      <AssistantWidget onDark={pathname === "/"} />
+      <AssistantWidget onDark={onDark} />
     </Suspense>
   )
 }

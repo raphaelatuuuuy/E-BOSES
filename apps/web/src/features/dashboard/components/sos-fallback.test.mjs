@@ -189,10 +189,11 @@ test("offline street matching measures the road segment and rejects weak GPS", (
   assert.equal(estimateOfflineStreet(14.65005, 121.11, 5000, config), null)
 })
 
-test("offline maps draw saved boundaries or bounds instead of a grey panel", () => {
+test("offline maps keep saved streets without coverage overlays or label stacks", () => {
   const source = readFileSync(TILE_LAYER_PATH, "utf8")
-  assert.match(source, /community\.boundaryGeometry/)
-  assert.match(source, /L\.rectangle/)
   assert.match(source, /community\.streets/)
   assert.match(source, /tileerror/)
+  assert.doesNotMatch(source, /community\.boundaryGeometry/)
+  assert.doesNotMatch(source, /L\.rectangle/)
+  assert.doesNotMatch(source, /permanent:\s*true/)
 })

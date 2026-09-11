@@ -447,7 +447,7 @@ export function ReportChatPanel({
         </div>
       ) : null}
 
-      {showHistory ? <div className={cn("scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3", plain && "max-h-none")}>
+      {showHistory ? <div className={cn("scrollbar-hide min-h-0 flex-1 space-y-3 px-3 py-3 lg:overflow-y-auto lg:overscroll-contain max-lg:overflow-visible", plain && "max-h-none")}>
         {hasOlder ? (
           <div className="flex justify-center">
             <button

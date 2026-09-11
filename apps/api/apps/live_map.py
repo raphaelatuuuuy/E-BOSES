@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.services import validate_location_pair
 from apps.accounts.views import touch_last_seen
+from apps.community_scope import PRIMARY_COMMUNITY_CODE
 from apps.concerns.models import Announcement, Concern
 from apps.emergencies.models import (
     EmergencyAlert,
@@ -159,9 +160,9 @@ def static_map_payload(community=None):
     from apps.emergencies.models import Community
 
     if community is not None and not isinstance(community, Community):
-        community = Community.objects.filter(pk=community, status=Community.Status.ACTIVE).select_related("boundary").first()
+        community = Community.objects.filter(pk=community, status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).select_related("boundary").first()
     if community is None:
-        community = Community.objects.filter(status=Community.Status.ACTIVE).select_related("boundary").order_by("name").first()
+        community = Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).select_related("boundary").order_by("name").first()
     map_version = cache.get(f"community-map-cache-version:{community.pk}", 1) if community else 1
     cache_key = f"{STATIC_MAP_CACHE_KEY}:{community.pk}:{community.boundary_revision}:{map_version}" if community else f"{STATIC_MAP_CACHE_KEY}:none"
     cached = cache.get(cache_key)
@@ -230,6 +231,7 @@ def active_community_map_payloads():
     rows = []
     for community in Community.objects.filter(
         status=Community.Status.ACTIVE,
+        code=PRIMARY_COMMUNITY_CODE,
         boundary__isnull=False,
         boundary__is_active=True,
     ).select_related("boundary").order_by("name"):
@@ -289,6 +291,7 @@ def registration_street_matches(query, limit=8):
     communities = (
         Community.objects.filter(
             status=Community.Status.ACTIVE,
+            code=PRIMARY_COMMUNITY_CODE,
             boundary__isnull=False,
             boundary__is_active=True,
         )
@@ -449,7 +452,7 @@ def person_payload(user):
     if getattr(user, "is_anonymous_intake", False) or str(getattr(user, "email", "")).endswith("@eboses.invalid"):
         return {
             "id": 0,
-            "full_name": "Anonymous",
+            "full_name": "Community Reporter",
             "role": "resident",
             "barangay": "",
             "address": "",
@@ -957,7 +960,7 @@ def live_map_snapshot(request=None):
     requested_community = request.query_params.get("community_id") if request else None
     community = selected_community(user, requested_community)
     if not community and community_ids:
-        community = Community.objects.filter(pk__in=community_ids, status=Community.Status.ACTIVE).order_by("name").first()
+        community = Community.objects.filter(pk__in=community_ids, status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).order_by("name").first()
     if community:
         community_ids = {community.pk}
         from apps.concerns.models import Department
@@ -1167,7 +1170,7 @@ class OfficialLiveMapView(APIView):
 def public_reporter_payload(user):
     """Community-safe reporter identity (no home address / live GPS)."""
     if str(getattr(user, "email", "")).endswith("@eboses.invalid"):
-        return {"id": 0, "full_name": "Anonymous", "role": "resident", "barangay": ""}
+        return {"id": 0, "full_name": "Community Reporter", "role": "resident", "barangay": ""}
     profile = getattr(user, "resident_profile", None)
     if profile:
         first_name = (profile.first_name or "").strip()
@@ -1311,12 +1314,12 @@ def resident_alerts_map_snapshot(request=None):
         profile = getattr(user, "resident_profile", None)
         community = getattr(profile, "community", None)
     if not community:
-        community = Community.objects.filter(status=Community.Status.ACTIVE).order_by("name").first()
+        community = Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).order_by("name").first()
     static_map = static_map_payload(community)
 
     communities = active_community_map_payloads()
     active_ids = [
-        row.pk for row in Community.objects.filter(status=Community.Status.ACTIVE)
+        row.pk for row in Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE)
     ]
     concerns_qs = (
         Concern.objects.filter(
@@ -1501,7 +1504,16 @@ class LocationMapContextView(APIView):
 class LocationValidateView(APIView):
     """Classify a pin as inside / edge buffer / too far."""
 
-    permission_classes = [IsAuthenticated]
+    # The same classifier is used by authenticated SOS/report pickers and by
+    # the anonymous sign-up and guest-report maps. It returns only public
+    # coverage metadata, so requiring a session here made those maps fall back
+    # to an optimistic client state instead of validating the pin.
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    # Use one client-scoped limit instead of stacking the broad anonymous
+    # hourly limit on this deterministic, low-cost classifier.
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "location_validate"
 
     def post(self, request):
         from apps.geo_services import classify_location
@@ -1533,6 +1545,7 @@ class GeocodeReverseView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
     throttle_scope = "geocode"
 
     def get(self, request):
@@ -1596,6 +1609,7 @@ class GeocodeSearchView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
     throttle_scope = "geocode"
 
     def get(self, request):
@@ -1632,7 +1646,7 @@ class LocationSearchView(APIView):
         community = selected_community(request.user, request.query_params.get("community_id"))
         if not community:
             community = Community.objects.filter(
-                pk__in=community_ids_for_user(request.user), status=Community.Status.ACTIVE
+                pk__in=community_ids_for_user(request.user), status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE
             ).order_by("name").first()
         if not community:
             return Response({"results": []})

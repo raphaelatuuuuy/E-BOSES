@@ -705,12 +705,36 @@ export function precheckConcern(formData: FormData) {
 }
 
 export function checkConcernMedia(formData: FormData) {
-  return apiRequest<{ files: Array<{ name: string; status: "accepted" }> }>(
+  return apiRequest<ConcernMediaCheckResult>(
     "/concerns/media/check/",
     {
       method: "POST",
       body: formData,
     }
+  )
+}
+
+export interface ConcernMediaCheckFile {
+  index: number
+  name: string
+  status: "accepted" | "rejected"
+  authenticity_status: "passed" | "review_required" | "blocked"
+  authenticity_verdict: string
+  message: string
+}
+
+export interface ConcernMediaCheckResult {
+  files: ConcernMediaCheckFile[]
+}
+
+export function checkGuestConcernMedia(formData: FormData) {
+  return apiRequest<ConcernMediaCheckResult>(
+    "/public/concerns/guest/media-check/",
+    {
+      method: "POST",
+      body: formData,
+    },
+    { auth: false, csrf: true, refreshOnUnauthorized: false }
   )
 }
 
@@ -1779,6 +1803,7 @@ export interface PublicReportMapConcern {
   summary: string
   category: string
   category_label: string
+  icon_key: string
   status: string
   address: string
   latitude: number
@@ -1837,11 +1862,57 @@ export function getPublicReportMap() {
   )
 }
 
+export interface StreetViewCoverageResult {
+  status: "available" | "no_coverage"
+  latitude?: number
+  longitude?: number
+  distance_meters?: number
+}
+
+export function getStreetViewCoverage(
+  coord: { lat: number; lng: number },
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({
+    latitude: coord.lat.toFixed(6),
+    longitude: coord.lng.toFixed(6),
+  })
+  return apiRequest<StreetViewCoverageResult>(
+    `/public/street-view/coverage/?${query.toString()}`,
+    { signal },
+    { auth: false, refreshOnUnauthorized: false },
+  )
+}
+
+export interface StreetViewImageResult {
+  status: "available" | "no_coverage"
+  latitude?: number
+  longitude?: number
+  distance_meters?: number
+  image?: string
+}
+
+export function getStreetViewImage(
+  coord: { lat: number; lng: number },
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({
+    latitude: coord.lat.toFixed(5),
+    longitude: coord.lng.toFixed(5),
+  })
+  return apiRequest<StreetViewImageResult>(
+    `/public/street-view/image/?${query.toString()}`,
+    { signal },
+    { auth: false, refreshOnUnauthorized: false, timeoutMs: 60000 },
+  )
+}
+
 export function submitGuestConcern(formData: FormData) {
   return apiRequest<{
     submitted: true
     community: { public_id: string; code: string; name: string }
     status: "submitted"
+    assigned_unit: { name: string; short_name: string } | null
   }>(
     "/public/concerns/guest/",
     { method: "POST", body: formData },

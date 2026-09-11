@@ -94,7 +94,7 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
             >
               <span className="mb-1 h-1.5 w-11 rounded-full bg-neutral-300" />
             </div>
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {children}
             </div>
           </div>

@@ -133,13 +133,35 @@ export interface RegistrationPinAddress {
   label: string
 }
 
+const registrationPinAddressCache = new Map<string, RegistrationPinAddress>()
+const registrationPinAddressRequests = new Map<
+  string,
+  Promise<RegistrationPinAddress>
+>()
+
 export function lookupRegistrationPinAddress(latitude: number, longitude: number) {
+  const key = `${latitude.toFixed(5)},${longitude.toFixed(5)}`
+  const cached = registrationPinAddressCache.get(key)
+  if (cached) return Promise.resolve(cached)
+  const pending = registrationPinAddressRequests.get(key)
+  if (pending) return pending
   const params = new URLSearchParams({ lat: String(latitude), lng: String(longitude) })
-  return apiRequest<RegistrationPinAddress>(
+  const request = apiRequest<RegistrationPinAddress>(
     `/auth/register/pin-address/?${params.toString()}`,
     { method: "GET" },
     { auth: false },
   )
+    .then((result) => {
+      registrationPinAddressCache.set(key, result)
+      if (registrationPinAddressCache.size > 128) {
+        const oldest = registrationPinAddressCache.keys().next().value
+        if (oldest) registrationPinAddressCache.delete(oldest)
+      }
+      return result
+    })
+    .finally(() => registrationPinAddressRequests.delete(key))
+  registrationPinAddressRequests.set(key, request)
+  return request
 }
 
 export interface RegistrationCommunityArea {

@@ -64,8 +64,8 @@ export function drawCoverage(
     boundary,
     policy,
     tone = "light",
-    showBoundary = true,
-    showZone = true,
+    showBoundary = false,
+    showZone = false,
     boundaryStyle = "outline",
   }: DrawCoverageOptions
 ) {
@@ -120,11 +120,33 @@ export function drawCoverage(
   }).addTo(group)
 }
 
+function pointOnSegment(
+  first: [number, number],
+  second: [number, number],
+  lat: number,
+  lng: number
+) {
+  const epsilon = 1e-8
+  const cross =
+    (lat - first[0]) * (second[1] - first[1]) -
+    (lng - first[1]) * (second[0] - first[0])
+  if (Math.abs(cross) > epsilon) return false
+  return (
+    lat >= Math.min(first[0], second[0]) - epsilon &&
+    lat <= Math.max(first[0], second[0]) + epsilon &&
+    lng >= Math.min(first[1], second[1]) - epsilon &&
+    lng <= Math.max(first[1], second[1]) + epsilon
+  )
+}
+
 function pointInRing(ring: [number, number][], lat: number, lng: number) {
   let inside = false
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [latI, lngI] = ring[i]!
-    const [latJ, lngJ] = ring[j]!
+    const pointI = ring[i]!
+    const pointJ = ring[j]!
+    if (pointOnSegment(pointI, pointJ, lat, lng)) return true
+    const [latI, lngI] = pointI
+    const [latJ, lngJ] = pointJ
     if (lngI > lng !== lngJ > lng) {
       const crossing = ((latJ - latI) * (lng - lngI)) / (lngJ - lngI) + latI
       if (lat < crossing) inside = !inside
@@ -154,11 +176,17 @@ export function insideCoverage(
   lng: number,
   { boundary, policy }: CoverageInput
 ): boolean {
+  const boundaryRings = rings(boundary)
+  const hasBoundary = boundaryRings.length > 0
+  const insideBoundary =
+    hasBoundary && boundaryRings.some((ring) => pointInRing(ring, lat, lng))
+
   const zoneRings = rings(policy?.acceptance_geometry)
+  let hasAcceptanceZone = zoneRings.length > 0
+  let insideAcceptance = false
   if (zoneRings.length > 0) {
-    return zoneRings.some((ring) => pointInRing(ring, lat, lng))
-  }
-  if (policy) {
+    insideAcceptance = zoneRings.some((ring) => pointInRing(ring, lat, lng))
+  } else if (policy) {
     const radius = number(policy.acceptance_radius_meters, 0)
     const centerLat = number(policy.acceptance_center_latitude, NaN)
     const centerLng = number(policy.acceptance_center_longitude, NaN)
@@ -167,12 +195,19 @@ export function insideCoverage(
       Number.isFinite(centerLat) &&
       Number.isFinite(centerLng)
     ) {
-      return metersBetween(centerLat, centerLng, lat, lng) <= radius
+      hasAcceptanceZone = true
+      insideAcceptance = metersBetween(centerLat, centerLng, lat, lng) <= radius
     }
   }
-  const edges = rings(boundary)
-  if (edges.length === 0) return true
-  return edges.some((ring) => pointInRing(ring, lat, lng))
+
+  // Boundary and acceptance radius/shape are alternative coverage definitions.
+  // A pin is valid when either configured area contains it. If neither area is
+  // configured, keep the map usable and let the server make the final call.
+  return (
+    insideBoundary ||
+    insideAcceptance ||
+    (!hasBoundary && !hasAcceptanceZone)
+  )
 }
 
 export const OUT_OF_SCOPE_MESSAGE = "This area is outside of our scope"

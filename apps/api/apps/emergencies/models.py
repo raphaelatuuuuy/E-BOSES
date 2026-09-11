@@ -202,7 +202,12 @@ class MapDispatchPolicy(models.Model):
     @classmethod
     def current(cls, community=None):
         if community is None:
-            communities = list(Community.objects.filter(status=Community.Status.ACTIVE)[:2])
+            communities = list(
+                Community.objects.filter(
+                    status=Community.Status.ACTIVE,
+                    code="marikina-heights",
+                )[:2]
+            )
             if len(communities) != 1:
                 raise ValueError("An active community is required for dispatch policy lookup.")
             community = communities[0]

@@ -3,6 +3,9 @@ import { loadOfflineSosConfig } from "@/features/dashboard/components/sos/offlin
 
 export const CARTO_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://carto.com/attributions">CARTO</a>'
+export const OSM_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+export const OSM_TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
 
 export const CARTO_TILE_URLS = {
   light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
@@ -15,7 +18,11 @@ export type MapBaseTone = keyof typeof CARTO_TILE_URLS
 export function cartoTileUrl(tone: MapBaseTone): string {
   const key = import.meta.env.VITE_CARTO_BASEMAP_KEY?.trim()
   const url = CARTO_TILE_URLS[tone]
-  return key ? `${url}?key=${encodeURIComponent(key)}` : url
+  return key ? `${url}?key=${encodeURIComponent(key)}` : OSM_TILE_URL
+}
+
+function hasCartoBasemapKey() {
+  return Boolean(import.meta.env.VITE_CARTO_BASEMAP_KEY?.trim())
 }
 
 export function addBaseTiles(
@@ -24,18 +31,30 @@ export function addBaseTiles(
   tone: MapBaseTone,
   overrides: Partial<leaflet.TileLayerOptions> = {},
 ): leaflet.TileLayer {
+  const usingCarto = hasCartoBasemapKey()
   const tiles = L.tileLayer(cartoTileUrl(tone), {
-    attribution: CARTO_ATTRIBUTION,
+    attribution: usingCarto ? CARTO_ATTRIBUTION : OSM_ATTRIBUTION,
     maxZoom: 20,
-    subdomains: "abcd",
+    subdomains: usingCarto ? "abcd" : "abc",
     keepBuffer: 2,
     updateWhenIdle: true,
     crossOrigin: true,
     ...overrides,
   }).addTo(map)
   let fallback: leaflet.LayerGroup | null = null
+  let fallbackTimer: number | null = null
+  let tileHasLoaded = false
+  const offlineAttribution = "Offline street map · saved service-area data"
+  const removeFallback = () => {
+    if (!fallback) return
+    fallback.remove()
+    fallback = null
+    map.attributionControl?.removeAttribution(offlineAttribution)
+  }
   const showFallback = () => {
-    if (fallback) return
+    // A single transient tile error is normal while Leaflet pans or zooms.
+    // Only draw the offline reference map when no tile has loaded at all.
+    if (fallback || tileHasLoaded) return
     const config = loadOfflineSosConfig()
     const communities = config.communities ?? [config.community]
     if (!communities.length) return
@@ -46,33 +65,38 @@ export function addBaseTiles(
     }
     fallback = L.layerGroup().addTo(map)
     for (const community of communities) {
-      if (community.boundaryGeometry) {
-        L.geoJSON(community.boundaryGeometry as GeoJSON.GeoJsonObject, {
-          pane: "offlineStreets", interactive: false,
-          style: { color: "#abb7ac", weight: 1, fillColor: "#f3f1e9", fillOpacity: 1 },
-        }).addTo(fallback)
-      } else {
-        L.rectangle([
-          [community.bounds.minLatitude, community.bounds.minLongitude],
-          [community.bounds.maxLatitude, community.bounds.maxLongitude],
-        ], {
-          pane: "offlineStreets", interactive: false,
-          color: "#abb7ac", weight: 1, fillColor: "#f3f1e9", fillOpacity: 1,
-        }).addTo(fallback)
-      }
       for (const street of community.streets) {
         for (const path of street.paths?.length ? street.paths : [street.points]) {
           if (path.length < 2) continue
-          const road = L.polyline(path, { pane: "offlineStreets", color: "#ffffff", weight: 5, interactive: false }).addTo(fallback)
-          const label = document.createElement("span")
-          label.textContent = street.name
-          road.bindTooltip(label, { permanent: true, direction: "center", className: "offline-street-label" })
+          // Keep the saved roads as a quiet fallback reference. Permanent
+          // labels are intentionally omitted: several segmented roads can
+          // share the same center and would pile up into cards over the pin.
+          L.polyline(path, { pane: "offlineStreets", color: "#ffffff", weight: 5, interactive: false }).addTo(fallback)
         }
       }
     }
-    map.attributionControl?.addAttribution("Offline street map · saved service-area data")
+    map.attributionControl?.addAttribution(offlineAttribution)
   }
-  tiles.on("tileerror", showFallback)
+  tiles.on("tileload", () => {
+    tileHasLoaded = true
+    if (fallbackTimer != null) window.clearTimeout(fallbackTimer)
+    fallbackTimer = null
+    removeFallback()
+  })
+  tiles.on("tileerror", () => {
+    if (!navigator.onLine) {
+      showFallback()
+      return
+    }
+    if (tileHasLoaded || fallbackTimer != null) return
+    // Give the normal layer time to load another tile before declaring the map
+    // unavailable. This is what prevents one flaky request from creating a
+    // stack of permanent street labels over an otherwise healthy map.
+    fallbackTimer = window.setTimeout(() => {
+      fallbackTimer = null
+      showFallback()
+    }, 1800)
+  })
   if (!navigator.onLine) showFallback()
   const refresh = () => tiles.redraw()
   window.addEventListener("online", refresh)
@@ -80,6 +104,9 @@ export function addBaseTiles(
   observer.observe(map.getContainer())
   map.once("unload", () => {
     window.removeEventListener("online", refresh)
+    if (fallbackTimer != null) window.clearTimeout(fallbackTimer)
+    fallbackTimer = null
+    removeFallback()
     observer.disconnect()
   })
   return tiles

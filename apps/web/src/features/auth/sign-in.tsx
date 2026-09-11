@@ -1,3 +1,6 @@
+import { Link } from "react-router-dom"
+import { CircleQuestionMarkIcon } from "lucide-react"
+
 import type { AuthUser } from "@/features/auth/api"
 import { AuthPageLogo } from "@/features/auth/components/auth-page-logo"
 import { AuthSidePanel } from "@/features/auth/components/auth-side-panel"
@@ -19,7 +22,7 @@ export default function LoginPage({ onForgotPassword, onSignUp, onSuccess }: Log
       <AuthSidePanel />
 
       <section className="relative flex min-h-svh flex-col overflow-y-auto lg:h-full lg:min-h-0">
-        <div className="flex flex-1 flex-col justify-center px-6 py-8 md:px-12 lg:px-16">
+        <div className="flex flex-1 flex-col justify-center px-6 pb-8 pt-[max(2rem,env(safe-area-inset-top))] md:px-12 lg:px-16">
           <div className="mx-auto w-full max-w-[400px]">
             <AuthPageLogo className="py-0 pb-5" />
             <h1 className="text-[1.5rem] font-medium leading-tight tracking-tight text-foreground md:text-[1.75rem]">
@@ -34,6 +37,15 @@ export default function LoginPage({ onForgotPassword, onSignUp, onSuccess }: Log
               />
             </div>
           </div>
+        </div>
+        <div className="shrink-0 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2 text-center">
+          <Link
+            to="/help"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground transition-colors hover:text-primary"
+          >
+            <CircleQuestionMarkIcon className="size-4" strokeWidth={2} aria-hidden="true" />
+            Need help?
+          </Link>
         </div>
       </section>
     </main>

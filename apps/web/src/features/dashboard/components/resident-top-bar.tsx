@@ -100,8 +100,8 @@ export function ResidentMobileHeader({ homeTo = "/dashboard/home" }: { homeTo?: 
         <ResidentNotificationsButton />
         <button
           type="button"
-          onClick={() => setProfileOpen(true)}
-          aria-label="Open profile"
+          onClick={() => openSettingsDialog()}
+          aria-label="Open settings"
           className="flex size-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-50"
         >
           <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">

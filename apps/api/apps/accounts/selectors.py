@@ -55,10 +55,12 @@ def latest_active_otp_challenge(user, channel, purpose):
 def served_community_areas():
     """Active communities with a drawn outline, for the public sign-up map."""
     from apps.emergencies.models import Community
+    from apps.community_scope import PRIMARY_COMMUNITY_CODE
 
     communities = (
         Community.objects.filter(
             status=Community.Status.ACTIVE,
+            code=PRIMARY_COMMUNITY_CODE,
             boundary__isnull=False,
             boundary__is_active=True,
         )

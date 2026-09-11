@@ -81,7 +81,7 @@ export function AccountPanel({
           description={
             pendingDeletion
               ? "An official is reviewing your request."
-              : "Your reports stay, your sign-in stops."
+              : "Sign-in pauses, reports stay."
           }
           tone={pendingDeletion ? "default" : "danger"}
           onClick={pendingDeletion ? undefined : onOpenLifecycle}

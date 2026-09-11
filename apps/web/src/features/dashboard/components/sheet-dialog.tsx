@@ -92,14 +92,14 @@ export function SheetDialog({
         {/* Back arrow, title, then every icon action seated together on the
             right. The title's left edge lines up with the body when there is
             no back arrow, and with the arrow's label position when there is. */}
-        <div className="flex shrink-0 items-start gap-2 px-5 pb-3 pt-5">
+        <div className="flex shrink-0 items-center gap-2 px-5 pb-3 pt-5">
           {onBack ? (
             <SheetIconButton label="Back" onClick={onBack} className="-ml-2">
               <ArrowLeftIcon className="size-6" strokeWidth={2} />
             </SheetIconButton>
           ) : null}
 
-          <div className="min-w-0 flex-1 pt-1.5">
+          <div className="min-w-0 flex-1">
             <h2
               id={titleId}
               className="text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900"
