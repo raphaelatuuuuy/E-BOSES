@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.response import Response
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
@@ -118,9 +119,23 @@ class AnnouncementCommentListCreateView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return super().get_permissions()
+
     def get(self, request, announcement_id):
-        announcement = get_object_or_404(Announcement, pk=announcement_id)
-        if not community_content_allowed(request.user, announcement.community_id):
+        if request.user and request.user.is_authenticated:
+            announcement = get_object_or_404(Announcement, pk=announcement_id)
+        else:
+            announcement = get_object_or_404(
+                Announcement.objects.filter(
+                    is_published=True,
+                    audience__in={Announcement.Audience.ALL, Announcement.Audience.RESIDENTS},
+                ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())),
+                pk=announcement_id,
+            )
+        if request.user.is_authenticated and not community_content_allowed(request.user, announcement.community_id):
             return Response({"detail": "This announcement belongs to another community."}, status=status.HTTP_404_NOT_FOUND)
         comments = (
             announcement.comments.filter(

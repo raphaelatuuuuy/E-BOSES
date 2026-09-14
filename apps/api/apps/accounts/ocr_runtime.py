@@ -78,6 +78,24 @@ TERMINAL_CASE_STATUSES = {
 }
 
 
+def _record_signup_verification_audit(case, action, *, detail=""):
+    """Leave one readable ID-check event for every production signup outcome."""
+    from .services import create_audit_log
+
+    document_type = case.document_type
+    create_audit_log(
+        action,
+        actor=None,
+        target_user=case.user,
+        metadata={
+            "document_type": getattr(document_type, "name", "") or getattr(document_type, "code", "") or "ID document",
+            "status": case.status,
+            "reason": detail or case.decision_reason,
+            "case_id": case.pk,
+        },
+    )
+
+
 def _identity_identifier_candidates(case, extracted_fields):
     if case.document_type_id is None or not isinstance(extracted_fields, dict):
         return []
@@ -1157,6 +1175,7 @@ def reject_case_before_ocr(case_id, attempts, gate):
         from .email_services import send_account_email_after_commit
 
         send_account_email_after_commit(case.user, "verification_rejected")
+    _record_signup_verification_audit(case, "ocr.verification_rejected", detail=gate.get("message", ""))
     return case
 
 
@@ -1187,6 +1206,8 @@ def fail_case_attempts(case_id, attempts, error):
         decision_reason="Automatic OCR is temporarily unavailable. An official can review this case.",
         retry_eligible=retryable,
     )
+    case.refresh_from_db()
+    _record_signup_verification_audit(case, "ocr.verification_review_required", detail=str(error))
     return case
 
 
@@ -1284,6 +1305,8 @@ def finalize_case_attempts(case_id, attempts, responses, engine, *, integrity=No
             ),
             retry_eligible=False,
         )
+        case.refresh_from_db()
+        _record_signup_verification_audit(case, "ocr.verification_review_required")
     elif engine.outcome == "passed":
         case.status = ResidenceVerificationCase.Status.APPROVED
         case.review_reason = ""
@@ -1300,6 +1323,7 @@ def finalize_case_attempts(case_id, attempts, responses, engine, *, integrity=No
             case.user.save(update_fields=["status", "updated_at"])
             from .email_services import send_account_email_after_commit
             send_account_email_after_commit(case.user, "welcome")
+        _record_signup_verification_audit(case, "ocr.verification_accepted")
     elif engine.outcome == "reject":
         case.status = ResidenceVerificationCase.Status.REJECTED
         case.review_reason = ""
@@ -1320,6 +1344,7 @@ def finalize_case_attempts(case_id, attempts, responses, engine, *, integrity=No
             case.user.save(update_fields=["status", "updated_at"])
             from .email_services import send_account_email_after_commit
             send_account_email_after_commit(case.user, "verification_rejected")
+        _record_signup_verification_audit(case, "ocr.verification_rejected")
     else:
         review_reason = (
             ResidenceVerificationCase.ReviewReason.RESUBMISSION_REQUIRED
@@ -1336,6 +1361,8 @@ def finalize_case_attempts(case_id, attempts, responses, engine, *, integrity=No
             ),
             retry_eligible=engine.outcome in {"manual_review", "request_resubmission"},
         )
+        case.refresh_from_db()
+        _record_signup_verification_audit(case, "ocr.verification_review_required")
     return case
 
 

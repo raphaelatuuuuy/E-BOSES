@@ -131,6 +131,7 @@ export function mergeFeedWithMapCoords(
       latitude: string
       longitude: string
       address?: string
+      title?: string
       summary?: string
       notification_subject?: string
       severity?: Concern["severity"]
@@ -144,6 +145,7 @@ export function mergeFeedWithMapCoords(
       latitude: String(c.latitude),
       longitude: String(c.longitude),
       address: c.address,
+      title: c.title,
       summary: c.summary,
       notification_subject: c.notification_subject,
       severity: c.severity,
@@ -161,6 +163,8 @@ export function mergeFeedWithMapCoords(
       longitude: coords.longitude,
 
       address: coords.address || post.address,
+      title: coords.title || post.title,
+      official_title: coords.title || post.official_title,
       summary: coords.summary || post.summary,
       notification_subject:
         coords.notification_subject || post.notification_subject,
@@ -244,7 +248,7 @@ export function mapConcernToFeedPost(
     barangay: c.barangay,
     update_text: "",
     visibility: "community",
-    official_title: "",
+    official_title: c.title,
     archived_at: null,
     reopened_at: null,
     reopen_count: 0,

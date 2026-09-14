@@ -11,8 +11,8 @@ from rest_framework.views import APIView
 from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.emergencies.services import mark_witness_notifications_read
 
-from .models import BrowserPushSubscription, Notification
-from .serializers import BrowserPushSubscriptionSerializer, NotificationSerializer
+from .models import BrowserPushSubscription, NativePushDevice, Notification
+from .serializers import BrowserPushSubscriptionSerializer, NativePushDeviceSerializer, NotificationSerializer
 from .services import web_push_config_health
 from .tickets import issue_websocket_ticket
 
@@ -186,4 +186,20 @@ class BrowserPushSubscriptionView(APIView):
         if not endpoint:
             return Response({"endpoint": ["This field is required."]}, status=status.HTTP_400_BAD_REQUEST)
         BrowserPushSubscription.objects.filter(user=request.user, endpoint=endpoint).update(is_active=False)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class NativePushDeviceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = NativePushDeviceSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        device = serializer.save()
+        return Response({"id": device.pk, "is_active": device.is_active}, status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        token = request.data.get("token", "")
+        if not token:
+            return Response({"token": ["This field is required."]}, status=status.HTTP_400_BAD_REQUEST)
+        NativePushDevice.objects.filter(user=request.user, token=token).update(is_active=False)
         return Response(status=status.HTTP_204_NO_CONTENT)

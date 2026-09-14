@@ -25,6 +25,16 @@ export type MediaPreviewItem = {
   src: string
   filename: string
   kind: "image" | "video" | "file"
+  /** Street line shown above the preview header. */
+  eyebrow?: string | null
+  /** Date line shown as "Posted on …" above the preview header. */
+  postedLabel?: string | null
+  /** Preview title shown beside the badge. */
+  heading?: string | null
+  /** Status pill shown below the photo, such as "Reported issue". */
+  badge?: string | null
+  /** Short description shown under the title. */
+  blurb?: string | null
   /** Full media record when available — lets the lightbox offer blur editing. */
   media?: import("@/features/dashboard/api").ConcernMedia
 }
@@ -38,11 +48,13 @@ export function toMediaPreviewItem(
   src: string,
   filename: string,
   mimeOrKind?: string | null,
-  media?: import("@/features/dashboard/api").ConcernMedia,
+  media?: import("@/features/dashboard/api").ConcernMedia
 ): MediaPreviewItem {
   const value = mimeOrKind || ""
-  if (value.startsWith("video/") || value === "video") return { src, filename, kind: "video", media }
-  if (value.startsWith("image/") || value === "image" || !value) return { src, filename, kind: "image", media }
+  if (value.startsWith("video/") || value === "video")
+    return { src, filename, kind: "video", media }
+  if (value.startsWith("image/") || value === "image" || !value)
+    return { src, filename, kind: "image", media }
   return { src, filename, kind: "file", media }
 }
 
@@ -51,7 +63,9 @@ export function toMediaPreviewItem(
  * after a blur edit changes what the preview endpoint returns.
  */
 export function invalidateAuthenticatedMedia(src: string) {
-  window.dispatchEvent(new CustomEvent("eboses:media-invalidate", { detail: { src } }))
+  window.dispatchEvent(
+    new CustomEvent("eboses:media-invalidate", { detail: { src } })
+  )
 }
 
 export function mediaDisplaySource(media: {

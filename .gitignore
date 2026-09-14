@@ -12,6 +12,9 @@ venv/
 dist/
 build/
 
+# Generated/local Capacitor Android project
+apps/web/android/
+
 # Old references
 old frontend reference/
 
@@ -19,6 +22,7 @@ old frontend reference/
 .env
 .env.*
 !.env.example
+!.env.capacitor.example
 
 # Logs
 *.log

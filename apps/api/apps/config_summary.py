@@ -142,21 +142,18 @@ def _classification(community):
 
 
 def _dispatch(community):
+    # Keep the Configuration hub on the same coverage rule used by the SOS
+    # category endpoint and dispatch itself. Units configured in the Units
+    # screen are valid responders even when there is no legacy role-map row.
+    from apps.emergencies.serializers import emergency_category_is_covered
+
     categories = list(EmergencyCategory.objects.filter(is_active=True, community=community).values_list("code", "label"))
-    types = [code for code, _ in categories]
-    mapped = set(
-        EmergencyTypeRoleMap.objects.filter(
-            community=community,
-            is_active=True,
-            department__isnull=False,
-            department__is_active=True,
-            department__responds_to_emergencies=True,
-        ).values_list("emergency_type", flat=True)
-    )
-    covered = mapped
-    covered_count = sum(1 for item in types if item in covered)
     labels = dict(categories)
-    missing = [t for t in types if t not in covered]
+    missing = [
+        code
+        for code, _label in categories
+        if not emergency_category_is_covered(code, community)
+    ]
     
     if not missing:
         status = "All emergency types covered"

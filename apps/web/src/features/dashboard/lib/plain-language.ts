@@ -28,7 +28,10 @@ export function humanizeEnum(value: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase()
 }
 
-function lookup(map: Record<string, PlainTerm>, value: string | null | undefined): PlainTerm {
+function lookup(
+  map: Record<string, PlainTerm>,
+  value: string | null | undefined
+): PlainTerm {
   if (!value) return { label: "—" }
   return map[value] ?? { label: humanizeEnum(value) }
 }
@@ -41,13 +44,31 @@ function lookup(map: Record<string, PlainTerm>, value: string | null | undefined
  * labels, and filter chips); these are the canonical words.
  */
 export const CONCERN_STATUS: Record<string, PlainTerm> = {
-  submitted: { label: "Received", help: "Logged and waiting for an officer. Not yet routed to a unit." },
-  under_review: { label: "Being handled", help: "An officer is reviewing the report and coordinating the next step." },
-  assigned: { label: "Assigned to a unit", help: "Routed to a barangay unit that now owns it." },
-  in_progress: { label: "Being handled", help: "The assigned unit is working on the concern." },
+  submitted: {
+    label: "Received",
+    help: "Logged and waiting for an officer. Not yet routed to a unit.",
+  },
+  under_review: {
+    label: "Being handled",
+    help: "An officer is reviewing the report and coordinating the next step.",
+  },
+  assigned: {
+    label: "Assigned to a unit",
+    help: "Routed to a barangay unit that now owns it.",
+  },
+  in_progress: {
+    label: "Being handled",
+    help: "The assigned unit is working on the concern.",
+  },
   resolved: { label: "Resolved", help: "Finished, with proof attached." },
-  rejected: { label: "Denied appeal", help: "Declined. The resident was given a reason." },
-  appealed: { label: "Under appeal", help: "The resident objected. It is back with an officer." },
+  rejected: {
+    label: "Denied appeal",
+    help: "Declined. The resident was given a reason.",
+  },
+  appealed: {
+    label: "Under appeal",
+    help: "The resident objected. It is back with an officer.",
+  },
 }
 
 export function concernStatus(value: string | null | undefined): PlainTerm {
@@ -55,9 +76,18 @@ export function concernStatus(value: string | null | undefined): PlainTerm {
 }
 
 export const CONCERN_VALIDATION: Record<string, PlainTerm> = {
-  pending: { label: "Not yet checked", help: "Waiting for an official to confirm the details." },
-  accepted: { label: "Checked and valid", help: "Confirmed as a genuine barangay concern." },
-  rejected: { label: "Not valid", help: "Found to be a duplicate, false, or out of scope." },
+  pending: {
+    label: "Not yet checked",
+    help: "Waiting for an official to confirm the details.",
+  },
+  accepted: {
+    label: "Checked and valid",
+    help: "Confirmed as a genuine barangay concern.",
+  },
+  rejected: {
+    label: "Not valid",
+    help: "Found to be a duplicate, false, or out of scope.",
+  },
 }
 
 export function concernValidation(value: string | null | undefined): PlainTerm {
@@ -105,11 +135,7 @@ export const FLAG_REASON: Record<string, PlainTerm> = {
   },
   irrelevant_text: {
     label: "Description doesn't match",
-    help: "The written description does not seem to describe the chosen category.",
-  },
-  category_mismatch: {
-    label: "Category may be wrong",
-    help: "The report does not look like the category the resident picked. Change it if you agree.",
+    help: "The written description does not seem to describe a valid community issue.",
   },
   possible_duplicate: {
     label: "Possibly already reported",
@@ -159,7 +185,9 @@ export const MEDIA_INTEGRITY_VERDICT: Record<string, PlainTerm> = {
   },
 }
 
-export function mediaIntegrityVerdict(value: string | null | undefined): PlainTerm {
+export function mediaIntegrityVerdict(
+  value: string | null | undefined
+): PlainTerm {
   return lookup(MEDIA_INTEGRITY_VERDICT, value)
 }
 
@@ -228,10 +256,12 @@ export const PHOTO_STATE: Record<PhotoState, PlainTerm> = {
   none: { label: "No photo was submitted." },
   pending: { label: "Photo review is in progress." },
   review_failed: {
-    label: "A photo was uploaded, but automatic review was unavailable. Please review it manually.",
+    label:
+      "A photo was uploaded, but automatic review was unavailable. Please review it manually.",
   },
   inconclusive: {
-    label: "The photo does not provide enough visible evidence to confirm the report.",
+    label:
+      "The photo does not provide enough visible evidence to confirm the report.",
   },
   supports: { label: "The photo supports the report." },
   partially_supports: { label: "The photo supports part of the report." },
@@ -263,7 +293,11 @@ export function photoStateOf(input: {
 }): PhotoState {
   if (!input.hasPhoto) return "none"
   if (input.imageReviewSucceeded === false) return "review_failed"
-  if (input.assessmentStatus === "pending" || input.imageReviewSucceeded == null) return "pending"
+  if (
+    input.assessmentStatus === "pending" ||
+    input.imageReviewSucceeded == null
+  )
+    return "pending"
   switch (input.evidenceRelationship) {
     case "supports_report":
       return "supports"
@@ -287,25 +321,35 @@ export function photoStateOf(input: {
  */
 export const PRIVACY_STATE: Record<string, PlainTerm> = {
   not_required: {
-    label: "No sensitive details requiring automatic protection were identified during the initial review.",
+    label:
+      "No sensitive details requiring automatic protection were identified during the initial review.",
     help: "The photo can be shown publicly. Blur anything else you notice.",
   },
-  queued: { label: "Privacy check is queued.", help: "The photo is not public until this finishes." },
-  processing: { label: "Privacy check is in progress.", help: "The photo is not public until this finishes." },
+  queued: {
+    label: "Privacy check is queued.",
+    help: "The photo is not public until this finishes.",
+  },
+  processing: {
+    label: "Privacy check is in progress.",
+    help: "The photo is not public until this finishes.",
+  },
   protected: {
     label: "Sensitive details were protected before public display.",
     help: "The public sees the blurred copy. You can still open the original.",
   },
   sensitive_review_required: {
-    label: "Possible sensitive visual content was found. The image should remain restricted until an authorized official reviews it.",
+    label:
+      "Possible sensitive visual content was found. The image should remain restricted until an authorized official reviews it.",
     help: "Not shown publicly. Open it yourself and decide.",
   },
   no_match_found: {
-    label: "No matching sensitive region was confirmed. Manual review may still be required.",
+    label:
+      "No matching sensitive region was confirmed. Manual review may still be required.",
     help: "Not shown publicly yet. Blur anything you can see, or release it.",
   },
   failed_restricted: {
-    label: "Automatic privacy protection could not be completed. The original image remains restricted pending review.",
+    label:
+      "Automatic privacy protection could not be completed. The original image remains restricted pending review.",
     help: "Not shown publicly. Blur it yourself or try the check again.",
   },
 }
@@ -346,29 +390,73 @@ export function observedObjectLabel(value: string): string {
  * Turn a raw 0-1 confidence into words. Officials should never see a bare
  * percentage they cannot calibrate — "78% confident" means nothing to them.
  */
-export function certaintyWord(confidence: number | null | undefined): PlainTerm {
+export function certaintyWord(
+  confidence: number | null | undefined
+): PlainTerm {
   if (confidence == null || !Number.isFinite(confidence)) {
-    return { label: "Not checked", help: "The system did not produce a result for this." }
+    return {
+      label: "Not checked",
+      help: "The system did not produce a result for this.",
+    }
   }
   const pct = confidence <= 1 ? confidence * 100 : confidence
-  if (pct >= 85) return { label: "Very sure", help: "The system is highly confident about this." }
-  if (pct >= 65) return { label: "Fairly sure", help: "The system is reasonably confident about this." }
-  if (pct >= 40) return { label: "Not sure", help: "Treat this as a hint only — check it yourself." }
-  return { label: "Unsure", help: "The system could not tell. Rely on your own review." }
+  if (pct >= 85)
+    return {
+      label: "Very sure",
+      help: "The system is highly confident about this.",
+    }
+  if (pct >= 65)
+    return {
+      label: "Fairly sure",
+      help: "The system is reasonably confident about this.",
+    }
+  if (pct >= 40)
+    return {
+      label: "Not sure",
+      help: "Treat this as a hint only — check it yourself.",
+    }
+  return {
+    label: "Unsure",
+    help: "The system could not tell. Rely on your own review.",
+  }
 }
 
 /* ── Emergencies ───────────────────────────────────────────────────────── */
 
 export const EMERGENCY_STATUS: Record<string, PlainTerm> = {
-  submitted: { label: "Just sent", help: "The resident sent this. No responder assigned yet." },
-  routed: { label: "Sent to responder", help: "A responder was picked and notified." },
-  acknowledged: { label: "Responder preparing", help: "The assigned responder is preparing to travel." },
-  en_route: { label: "On the way", help: "The responder is travelling to the location." },
-  nearby: { label: "Almost there", help: "The responder is close to the location." },
-  arrived: { label: "On scene", help: "The responder has reached the location." },
+  submitted: {
+    label: "Just sent",
+    help: "The resident sent this. No responder assigned yet.",
+  },
+  routed: {
+    label: "Sent to responder",
+    help: "A responder was picked and notified.",
+  },
+  acknowledged: {
+    label: "Responder preparing",
+    help: "The assigned responder is preparing to travel.",
+  },
+  en_route: {
+    label: "On the way",
+    help: "The responder is travelling to the location.",
+  },
+  nearby: {
+    label: "Almost there",
+    help: "The responder is close to the location.",
+  },
+  arrived: {
+    label: "On scene",
+    help: "The responder has reached the location.",
+  },
   resolved: { label: "Finished", help: "The incident was handled and closed." },
-  false_alarm: { label: "False alarm", help: "The alert was reviewed and flagged as not a real emergency." },
-  invalid: { label: "Invalid", help: "The alert could not be accepted after review." },
+  false_alarm: {
+    label: "False alarm",
+    help: "The alert was reviewed and flagged as not a real emergency.",
+  },
+  invalid: {
+    label: "Invalid",
+    help: "The alert could not be accepted after review.",
+  },
   cancelled: { label: "Cancelled", help: "The alert was called off." },
 }
 
@@ -391,11 +479,23 @@ export function emergencyType(value: string | null | undefined): PlainTerm {
 
 /** Responder units, spelled out — never bare acronyms in a button. */
 export const RESPONDER_UNIT: Record<string, PlainTerm> = {
-  tanod: { label: "Barangay Tanod", help: "Peace and order, patrols, crime response." },
-  bhw: { label: "Health Worker", help: "Barangay Health Worker — medical response and first aid." },
-  bdrrmo: { label: "Disaster Response", help: "BDRRMO — fire, flood, and disaster response." },
+  tanod: {
+    label: "Barangay Tanod",
+    help: "Peace and order, patrols, crime response.",
+  },
+  bhw: {
+    label: "Health Worker",
+    help: "Barangay Health Worker — medical response and first aid.",
+  },
+  bdrrmo: {
+    label: "Disaster Response",
+    help: "BDRRMO — fire, flood, and disaster response.",
+  },
   other: { label: "Other responder" },
-  "": { label: "No unit yet", help: "This responder has not been given a unit." },
+  "": {
+    label: "No unit yet",
+    help: "This responder has not been given a unit.",
+  },
 }
 
 export function responderUnit(value: string | null | undefined): PlainTerm {
@@ -406,12 +506,27 @@ export function responderUnit(value: string | null | undefined): PlainTerm {
 /* ── Accounts ──────────────────────────────────────────────────────────── */
 
 export const ACCOUNT_STATUS: Record<string, PlainTerm> = {
-  pending_otp: { label: "Signing up", help: "Has not confirmed their phone or email yet." },
-  pending_profile: { label: "Signing up", help: "Has not finished filling in their details." },
-  pending_verification: { label: "Waiting for approval", help: "Submitted an ID — needs your review." },
+  pending_otp: {
+    label: "Signing up",
+    help: "Has not confirmed their phone or email yet.",
+  },
+  pending_profile: {
+    label: "Signing up",
+    help: "Has not finished filling in their details.",
+  },
+  pending_verification: {
+    label: "Waiting for approval",
+    help: "Submitted an ID — needs your review.",
+  },
   verified: { label: "Active", help: "Can use the system normally." },
-  rejected: { label: "Not approved", help: "Their ID was turned down. They cannot file reports." },
-  suspended: { label: "Suspended", help: "Access is blocked. They cannot sign in." },
+  rejected: {
+    label: "Not approved",
+    help: "Their ID was turned down. They cannot file reports.",
+  },
+  suspended: {
+    label: "Suspended",
+    help: "Access is blocked. They cannot sign in.",
+  },
 }
 
 export function accountStatus(value: string | null | undefined): PlainTerm {
@@ -419,9 +534,18 @@ export function accountStatus(value: string | null | undefined): PlainTerm {
 }
 
 export const ACCOUNT_ROLE: Record<string, PlainTerm> = {
-  resident: { label: "Resident", help: "Can file concerns and send emergency alerts." },
-  barangay_official: { label: "Barangay Official", help: "Can review concerns and manage the barangay." },
-  first_responder: { label: "Responder", help: "Receives emergency alerts and responds on the ground." },
+  resident: {
+    label: "Resident",
+    help: "Can file concerns and send emergency alerts.",
+  },
+  barangay_official: {
+    label: "Barangay Official",
+    help: "Can review concerns and manage the barangay.",
+  },
+  first_responder: {
+    label: "Responder",
+    help: "Receives emergency alerts and responds on the ground.",
+  },
 }
 
 export function accountRole(value: string | null | undefined): PlainTerm {
@@ -452,24 +576,45 @@ export const CONTENT_FLAG_REASON: Record<string, PlainTerm> = {
 }
 
 export const CONTENT_FLAG_STATUS: Record<string, PlainTerm> = {
-  submitted: { label: "Needs review", help: "A resident reported this. Nobody has decided yet." },
+  submitted: {
+    label: "Needs review",
+    help: "A resident reported this. Nobody has decided yet.",
+  },
   reviewed: { label: "Reviewed", help: "Looked at, no action needed." },
   dismissed: { label: "Dismissed", help: "Checked and found to be fine." },
-  action_taken: { label: "Action taken", help: "The content was removed or the author warned." },
+  action_taken: {
+    label: "Action taken",
+    help: "The content was removed or the author warned.",
+  },
 }
 
 /* ── Privacy requests ──────────────────────────────────────────────────── */
 
 export const PRIVACY_REQUEST_TYPE: Record<string, PlainTerm> = {
-  data_export: { label: "Copy of their data", help: "The resident asked for a copy of their records." },
-  deletion: { label: "Delete their account", help: "The resident asked to have their account removed." },
+  data_export: {
+    label: "Copy of their data",
+    help: "The resident asked for a copy of their records.",
+  },
+  deletion: {
+    label: "Delete their account",
+    help: "The resident asked to have their account removed.",
+  },
 }
 
 export const PRIVACY_REQUEST_STATUS: Record<string, PlainTerm> = {
-  submitted: { label: "New request", help: "Waiting for an official to start." },
-  reviewed: { label: "Being handled", help: "An official has started working on it." },
+  submitted: {
+    label: "New request",
+    help: "Waiting for an official to start.",
+  },
+  reviewed: {
+    label: "Being handled",
+    help: "An official has started working on it.",
+  },
   completed: { label: "Done", help: "The request was carried out." },
-  rejected: { label: "Declined", help: "The request was turned down, with a reason recorded." },
+  rejected: {
+    label: "Declined",
+    help: "The request was turned down, with a reason recorded.",
+  },
 }
 
 /* ── ID checking (formerly OCR) ────────────────────────────────────────── */
@@ -479,18 +624,39 @@ export const PRIVACY_REQUEST_STATUS: Record<string, PlainTerm> = {
  * why a submitted ID landed in the review queue.
  */
 export const ID_CHECK_REASON: Record<string, PlainTerm> = {
-  low_confidence: { label: "Hard to read", help: "The photo was blurry or the text was unclear." },
-  manual_review: { label: "Needs a person to check", help: "The system wants a human decision on this one." },
-  unavailable: { label: "Could not be read", help: "The ID reader was unavailable. Check it yourself." },
-  duplicate_identity: { label: "Matches another account", help: "This ID number is already used by a verified account." },
-  mismatch: { label: "Doesn't match their form", help: "The ID details differ from what the resident typed." },
-  expired: { label: "Expired ID", help: "The ID appears to be past its expiry date." },
+  low_confidence: {
+    label: "Hard to read",
+    help: "The photo was blurry or the text was unclear.",
+  },
+  manual_review: {
+    label: "Needs a person to check",
+    help: "The system wants a human decision on this one.",
+  },
+  unavailable: {
+    label: "Could not be read",
+    help: "The ID reader was unavailable. Check it yourself.",
+  },
+  duplicate_identity: {
+    label: "Matches another account",
+    help: "This ID number is already used by a verified account.",
+  },
+  mismatch: {
+    label: "Doesn't match their form",
+    help: "The ID details differ from what the resident typed.",
+  },
+  expired: {
+    label: "Expired ID",
+    help: "The ID appears to be past its expiry date.",
+  },
 }
 
 export const ID_CHECK_STATUS: Record<string, PlainTerm> = {
   queued: { label: "Waiting", help: "In line to be read." },
   processing: { label: "Reading now", help: "The system is reading the ID." },
-  manual_review: { label: "Needs your decision", help: "Open this and approve or reject it." },
+  manual_review: {
+    label: "Needs your decision",
+    help: "Open this and approve or reject it.",
+  },
   approved: { label: "Approved", help: "The resident was verified." },
   rejected: { label: "Rejected", help: "The proof was turned down." },
 }
@@ -520,10 +686,17 @@ export function plainTimeAgo(value: string | null | undefined): string {
   if (days < 7) return `${days} days ago`
   const weeks = Math.floor(days / 7)
   if (weeks < 5) return `${weeks} wk ago`
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(value))
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value))
 }
 
 /** "3 concerns" / "1 concern" without a bare number colliding with the noun. */
-export function pluralize(count: number, singular: string, plural?: string): string {
+export function pluralize(
+  count: number,
+  singular: string,
+  plural?: string
+): string {
   return `${count} ${count === 1 ? singular : (plural ?? `${singular}s`)}`
 }

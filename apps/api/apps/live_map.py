@@ -11,7 +11,7 @@ from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from apps.throttling import LocalScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.services import validate_location_pair
@@ -510,6 +510,7 @@ def category_ref_payload(concern, request=None):
 
 def concern_payload(concern, request=None):
     media = list(concern.media.all()) if hasattr(concern, "media") else []
+    evidence = [item for item in concern.resolution_evidence.all() if item.mime_type.startswith("image/")]
     # Keep the map's readable copy and severity in lockstep with the Concerns
     # feed. The previous payload only carried the submitted description and a
     # category-based high/normal flag, so the map looked stale after the LLM
@@ -521,8 +522,15 @@ def concern_payload(concern, request=None):
         "id": concern.pk,
         "preview_url": concern_media_preview_url(media[0].pk) if media else None,
         "media_count": len(media),
+        "resolution_preview_url": (
+            f"/api/concerns/resolution-evidence/{evidence[0].pk}/preview/" if evidence else None
+        ),
+        "resolution_photo_count": len(evidence),
         "tracking_id": f"RPT-{concern.created_at.year}-{concern.pk:06d}" if concern.created_at else f"RPT-0-{concern.pk:06d}",
-        "title": concern.title,
+        # Keep resident alerts aligned with the public Report Issue map. The
+        # official title is the generated, location-aware heading; the raw
+        # resident title remains the fallback for older reports.
+        "title": (concern.official_title or concern.title or "").strip(),
         "notification_subject": (getattr(concern, "notification_subject", "") or "").strip(),
         "description": concern.description,
         "summary": (concern.summary or "").strip(),
@@ -934,6 +942,7 @@ def advisory_payload(announcement, street_index):
         "id": announcement.pk,
         "title": announcement.title,
         "body": announcement.body,
+        "llm_summary": announcement.llm_summary,
         "tag": announcement.tag,
         "urgency": announcement.urgency,
         "is_pinned": announcement.is_pinned,
@@ -1011,7 +1020,7 @@ def live_map_snapshot(request=None):
                 else models.Q(reporter=user) | models.Q(category_ref__department_id__in=department_ids)
             )
             .select_related("reporter", "reporter__resident_profile", "category_ref", "ai_assessment")
-            .prefetch_related("media")
+            .prefetch_related("media", "resolution_evidence")
             .order_by("-created_at")[:limit]
         )
 
@@ -1193,6 +1202,11 @@ def resident_concern_payload(concern, request=None):
     if media:
         path = concern_media_preview_url(media[0].pk)
         preview_url = request.build_absolute_uri(path) if request else path
+    evidence = [item for item in concern.resolution_evidence.all() if item.mime_type.startswith("image/")]
+    resolution_preview_url = None
+    if evidence:
+        path = f"/api/concerns/resolution-evidence/{evidence[0].pk}/preview/"
+        resolution_preview_url = request.build_absolute_uri(path) if request else path
     from apps.concerns.severity import severity_label, severity_level
 
     _severity_level, severity_assessed = severity_level(concern)
@@ -1202,7 +1216,9 @@ def resident_concern_payload(concern, request=None):
             "apps.community_access", fromlist=["community_summary"]
         ).community_summary(concern.community),
         "tracking_id": "" if concern.is_anonymous else concern.tracking_id,
-        "title": concern.title,
+        # Use the same generated, location-aware heading shown by the public
+        # Report Issue map; older records fall back to the submitted title.
+        "title": (concern.official_title or concern.title or "").strip(),
         "notification_subject": (getattr(concern, "notification_subject", "") or "").strip(),
         "description": concern.description,
         "summary": (concern.summary or "").strip(),
@@ -1214,6 +1230,8 @@ def resident_concern_payload(concern, request=None):
         "latitude": decimal_string(concern.latitude),
         "longitude": decimal_string(concern.longitude),
         "preview_url": preview_url,
+        "resolution_preview_url": resolution_preview_url,
+        "resolution_photo_count": len(evidence),
         "reporter": public_reporter_payload(concern.reporter),
         "created_at": concern.created_at,
         "updated_at": concern.updated_at,
@@ -1337,7 +1355,7 @@ def resident_alerts_map_snapshot(request=None):
             longitude__isnull=False,
         )
         .select_related("community", "reporter", "reporter__resident_profile", "category_ref", "ai_assessment")
-        .prefetch_related("media")
+            .prefetch_related("media", "resolution_evidence")
         .order_by("-created_at")[:200]
     )
     concerns = [resident_concern_payload(c, request=request) for c in concerns_qs]
@@ -1437,7 +1455,7 @@ class ResidentAlertsMapView(APIView):
 
 class LocationPingView(APIView):
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [LocalScopedRateThrottle]
     throttle_scope = "location_ping"
 
     def post(self, request):
@@ -1512,7 +1530,7 @@ class LocationValidateView(APIView):
     authentication_classes = []
     # Use one client-scoped limit instead of stacking the broad anonymous
     # hourly limit on this deterministic, low-cost classifier.
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [LocalScopedRateThrottle]
     throttle_scope = "location_validate"
 
     def post(self, request):
@@ -1545,7 +1563,7 @@ class GeocodeReverseView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [LocalScopedRateThrottle]
     throttle_scope = "geocode"
 
     def get(self, request):
@@ -1609,7 +1627,7 @@ class GeocodeSearchView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [LocalScopedRateThrottle]
     throttle_scope = "geocode"
 
     def get(self, request):

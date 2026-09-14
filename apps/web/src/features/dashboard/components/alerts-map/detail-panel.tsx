@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react"
 import {
-  AlertTriangleIcon,
   LoaderCircleIcon,
   MapPinIcon,
   PlayIcon,
+  TriangleAlertIcon,
   UserIcon,
 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
@@ -47,9 +47,17 @@ import type {
   RecordSection,
 } from "@/features/dashboard/components/record/types"
 import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
+import { ConcernDescriptionBlock } from "@/features/dashboard/components/concerns/concern-description-block"
+import { concernTitleText } from "@/features/dashboard/components/feed-post-text"
 import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
 import { PanelShell, InfoRow } from "./panel-shell"
-import { formatDistance, formatEta, formatTime, isResolvedRecord, type Selection } from "./lib"
+import {
+  formatDistance,
+  formatEta,
+  formatTime,
+  isResolvedRecord,
+  type Selection,
+} from "./lib"
 
 /**
  * A location that reads as an incident location, not a bare place name.
@@ -190,11 +198,36 @@ export function DetailPanel({
   if (!selected) return null
   if (selected.kind === "concern") {
     if (foreignConcern && !operationalConcern) {
+      const critical =
+        (
+          foreignConcern.severity ??
+          foreignConcern.priority ??
+          ""
+        ).toLowerCase() === "critical"
+      const iconClass = critical
+        ? "size-4 text-severity-critical-map-ink"
+        : "size-4"
       return (
         <PanelShell title={foreignConcern.title}>
+          <InfoRow
+            icon={<MapPinIcon className={iconClass} />}
+            label="Location"
+            value={locationLabel(
+              foreignConcern.address,
+              foreignConcern.barangay
+            )}
+          />
+          <ConcernDescriptionBlock
+            title={concernTitleText(foreignConcern)}
+            description={foreignConcern.description}
+            summary={foreignConcern.summary}
+            descriptionClassName="text-xs font-semibold text-foreground"
+            summaryClassName="text-xs"
+            summaryTone={critical ? "critical" : "default"}
+          />
           <Button
             type="button"
-            onClick={() => navigate(`/dashboard/reports/${foreignConcern.id}`)}
+            onClick={() => navigate(`/dashboard/overview?report=${foreignConcern.id}`)}
             className="w-full border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50"
           >
             Open full report
@@ -204,13 +237,18 @@ export function DetailPanel({
     }
     const concern = snapshot.concerns.find((item) => item.id === selected.id)
     if (!concern) return null
+    const critical =
+      (concern.severity ?? concern.priority ?? "").toLowerCase() === "critical"
+    const iconClass = critical
+      ? "size-4 text-severity-critical-map-ink"
+      : "size-4"
     // Labels, not raw enums: the resident-facing status word and the category
     // name, so this panel says the same thing as the Concerns console for the
     // same report rather than showing "public_safety" / "in_progress".
     return (
       <PanelShell title={concern.title}>
         <InfoRow
-          icon={<UserIcon className="size-4" />}
+          icon={<UserIcon className={iconClass} />}
           label="Reported by"
           value={reporterLabel(
             concern.reporter.full_name,
@@ -218,12 +256,12 @@ export function DetailPanel({
           )}
         />
         <InfoRow
-          icon={<AlertTriangleIcon className="size-4" />}
+          icon={<TriangleAlertIcon className={iconClass} />}
           label="Category"
           value={concernCategoryLabel(concern)}
         />
         <InfoRow
-          icon={<AlertTriangleIcon className="size-4" />}
+          icon={<TriangleAlertIcon className={iconClass} />}
           label="Priority"
           value={
             concern.severity_assessed
@@ -232,17 +270,18 @@ export function DetailPanel({
           }
         />
         <InfoRow
-          icon={<MapPinIcon className="size-4" />}
+          icon={<MapPinIcon className={iconClass} />}
           label="Location"
           value={locationLabel(concern.address, concern.barangay)}
         />
-        <div>
-          <p className="text-xs leading-5 font-semibold text-foreground">
-            {concern.summary ||
-              concern.description ||
-              "No description provided."}
-          </p>
-        </div>
+        <ConcernDescriptionBlock
+          title={concernTitleText(concern)}
+          description={concern.description}
+          summary={concern.summary}
+          descriptionClassName="text-xs font-semibold text-foreground"
+          summaryClassName="text-xs"
+          summaryTone={critical ? "critical" : "default"}
+        />
         {concern.preview_url ? (
           <button
             type="button"
@@ -269,7 +308,7 @@ export function DetailPanel({
         ) : null}
         <Button
           type="button"
-          onClick={() => navigate(`/dashboard/reports/${concern.id}`)}
+          onClick={() => navigate(`/dashboard/overview?report=${concern.id}`)}
           className="w-full border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50"
         >
           Open full report
@@ -281,12 +320,12 @@ export function DetailPanel({
     return (
       <PanelShell title={`${foreignEmergency.type_label} emergency`}>
         <InfoRow
-          icon={<AlertTriangleIcon className="size-4" />}
+          icon={<TriangleAlertIcon className="size-4" />}
           label="Community"
           value={foreignEmergency.community.name}
         />
         <InfoRow
-          icon={<AlertTriangleIcon className="size-4" />}
+          icon={<TriangleAlertIcon className="size-4" />}
           label="Status"
           value={foreignEmergency.status.replace(/_/g, " ")}
         />
@@ -563,7 +602,7 @@ export function DetailPanel({
         {
           key: "open-report",
           label: "Open full report",
-          onSelect: () => navigate(`/dashboard/reports?alert=${emergency.id}`),
+          onSelect: () => navigate(`/dashboard/overview?alert=${emergency.id}`),
         },
       ]
     : [
@@ -588,7 +627,7 @@ export function DetailPanel({
         {
           key: "open-report",
           label: "Open full report",
-          onSelect: () => navigate(`/dashboard/reports?alert=${emergency.id}`),
+          onSelect: () => navigate(`/dashboard/overview?alert=${emergency.id}`),
         },
         {
           key: "copy",

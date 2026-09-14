@@ -29,4 +29,3 @@ export {
   type CommentAuthor,
   type UnifiedComment,
 } from "./comment-types"
-export { ResolutionBanner } from "./resolution-banner"

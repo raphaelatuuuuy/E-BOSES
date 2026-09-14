@@ -1,102 +1,146 @@
 import { useEffect, useRef, useState } from "react"
-import { CheckIcon, WifiOffIcon } from "lucide-react"
+import { ArrowRightIcon, CheckIcon, InfoIcon, WifiOffIcon } from "lucide-react"
 
 import { SOSButton } from "@/features/dashboard/components/sos-button"
 import { refreshOfflineSosConfig } from "@/features/dashboard/components/sos/offline-sos-config"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { probeApiReachability, useApiReachability } from "@/lib/api-reachability"
 
 export function GlobalSosCoordinator() {
   const { refreshUser } = useAuthSession()
-  const [online, setOnline] = useState(() => navigator.onLine)
+  const online = useApiReachability()
   const [showReconnected, setShowReconnected] = useState(false)
-  const [mounted, setMounted] = useState(() => !navigator.onLine)
+  const [mounted, setMounted] = useState(() => !online)
   const [hiding, setHiding] = useState(false)
-  const wasOfflineRef = useRef(!navigator.onLine)
-  const wasReconnectedRef = useRef(false)
+  const [wasReconnected, setWasReconnected] = useState(false)
+  const wasOfflineRef = useRef(!online)
   const hideTimerRef = useRef<number | undefined>(undefined)
   const reconnectTimerRef = useRef<number | undefined>(undefined)
 
   useEffect(() => {
-    if (showReconnected) wasReconnectedRef.current = true
     const shouldShow = !online || showReconnected
     if (shouldShow) {
       window.clearTimeout(hideTimerRef.current)
-      setHiding(false)
-      setMounted(true)
+      queueMicrotask(() => {
+        setHiding(false)
+        setMounted(true)
+      })
       return
     }
-    setHiding(true)
+    queueMicrotask(() => setHiding(true))
     hideTimerRef.current = window.setTimeout(() => {
       setMounted(false)
       setHiding(false)
-      wasReconnectedRef.current = false
+      setWasReconnected(false)
     }, 200)
     return () => window.clearTimeout(hideTimerRef.current)
   }, [online, showReconnected])
 
   useEffect(() => {
-    const handleOnline = () => {
+    if (online) {
       if (!wasOfflineRef.current) return
       wasOfflineRef.current = false
-      setOnline(true)
       void refreshOfflineSosConfig()
       void refreshUser().catch(() => {})
       window.clearTimeout(reconnectTimerRef.current)
       setShowReconnected(true)
-      reconnectTimerRef.current = window.setTimeout(() => setShowReconnected(false), 2800)
-    }
-    const handleOffline = () => {
+      setWasReconnected(true)
+      reconnectTimerRef.current = window.setTimeout(
+        () => setShowReconnected(false),
+        2800
+      )
+    } else {
       wasOfflineRef.current = true
       window.clearTimeout(reconnectTimerRef.current)
-      setShowReconnected(false)
-      setOnline(false)
+      queueMicrotask(() => setShowReconnected(false))
     }
-    window.addEventListener("online", handleOnline)
-    window.addEventListener("offline", handleOffline)
-    if (navigator.onLine) void refreshOfflineSosConfig()
-    return () => {
-      window.removeEventListener("online", handleOnline)
-      window.removeEventListener("offline", handleOffline)
-      window.clearTimeout(hideTimerRef.current)
-      window.clearTimeout(reconnectTimerRef.current)
-    }
-  }, [refreshUser])
+    return () => window.clearTimeout(reconnectTimerRef.current)
+  }, [online, refreshUser])
+
+  useEffect(() => { void probeApiReachability() }, [])
 
   return (
     <>
       <SOSButton />
       {mounted ? (
-        <aside
-          aria-label={showReconnected || (hiding && wasReconnectedRef.current) ? "Back online" : "Offline emergency access"}
-          aria-hidden={hiding ? true : undefined}
-          className={`fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[250] mx-auto max-w-sm rounded-2xl border bg-white p-4 text-neutral-900 shadow-[0_18px_55px_rgba(15,23,42,0.22)] transition-all duration-200 ease-out ${hiding ? "translate-y-2 opacity-0 pointer-events-none" : "translate-y-0 opacity-100"} ${showReconnected || (hiding && wasReconnectedRef.current) ? "border-emerald-200" : "border-neutral-200"}`}
-        >
-          {showReconnected || (hiding && wasReconnectedRef.current) ? (
-            <div className="flex flex-col items-center py-1 text-center motion-safe:animate-in motion-safe:zoom-in-95 motion-safe:duration-200">
-              <span className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-200">
-                <CheckIcon className="size-6" strokeWidth={2.7} aria-hidden="true" />
-              </span>
-              <p className="mt-3 text-[17px] font-bold tracking-tight">You’re back online</p>
-              <p className="mt-1 text-[14px] leading-5 text-neutral-600">Connection restored. You can continue online.</p>
-            </div>
-          ) : (
-            <>
-              <p className="flex items-center gap-2 text-[11px] font-extrabold tracking-[0.12em] text-sos">
-                <WifiOffIcon className="size-4" aria-hidden="true" /> OFFLINE
-              </p>
-              <p className="mt-3 text-[17px] font-bold">You’re offline</p>
-              <p className="mt-1 text-[14px] leading-5 text-neutral-600">You can still request emergency help using your phone’s SMS app.</p>
-              <button
-                type="button"
-                onClick={() => window.dispatchEvent(new CustomEvent("eboses:open-sos"))}
-                className="mt-4 min-h-[52px] w-full rounded-full bg-sos px-4 text-[15px] font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sos focus-visible:ring-offset-2"
-              >
-                Open Emergency SOS
-              </button>
-            </>
-          )}
-        </aside>
+        <OfflineSheetContent
+          reconnected={showReconnected || (hiding && wasReconnected)}
+          hiding={hiding}
+        />
       ) : null}
     </>
+  )
+}
+
+function OfflineSheetContent({
+  reconnected,
+  hiding,
+}: {
+  reconnected: boolean
+  hiding: boolean
+}) {
+  return (
+    <aside
+      aria-label={reconnected ? "Back online" : "Offline emergency access"}
+      aria-hidden={hiding ? true : undefined}
+      className={`fixed inset-x-0 bottom-0 z-[250] mx-auto flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-[28px] border-t px-5 pt-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-10px_36px_rgba(15,23,42,.18)] transition-all duration-200 ease-out sm:inset-x-3 sm:bottom-[max(0.75rem,env(safe-area-inset-bottom))] sm:max-w-sm sm:rounded-2xl sm:border sm:p-4 sm:shadow-[0_18px_55px_rgba(15,23,42,0.22)] ${hiding ? "pointer-events-none translate-y-2 opacity-0" : "translate-y-0 opacity-100"} ${reconnected ? "border-emerald-200 bg-white text-neutral-900" : "border-transparent bg-brand-navy text-white"}`}
+    >
+      <div
+        aria-hidden
+        className={`mx-auto mb-2 h-1 w-10 shrink-0 rounded-full ${reconnected ? "bg-neutral-200" : "bg-white/25"}`}
+      />
+      {reconnected ? (
+        <div className="motion-safe:animate-in motion-safe:zoom-in-95 flex min-h-[200px] flex-col items-center justify-center py-1 text-center motion-safe:duration-200">
+          <span className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-200">
+            <CheckIcon
+              className="size-6"
+              strokeWidth={2.7}
+              aria-hidden="true"
+            />
+          </span>
+          <p className="mt-3 text-[17px] font-bold tracking-tight">
+            You’re back online
+          </p>
+          <p className="mt-1 text-[14px] leading-5 text-neutral-600">
+            Connection restored. You can continue online.
+          </p>
+        </div>
+      ) : (
+        <div className="motion-safe:animate-in motion-safe:zoom-in-95 flex min-h-[200px] flex-col items-center justify-center py-1 text-center motion-safe:duration-200">
+          <span className="flex items-center justify-center text-sos drop-shadow-[0_0_14px_rgba(242,59,53,0.55)]">
+            <WifiOffIcon
+              className="size-12"
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
+          </span>
+          <p className="mt-3 text-[19px] font-bold tracking-tighter">
+            You’re offline
+          </p>
+          <button
+            type="button"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent("eboses:open-sos"))
+            }
+            className="mt-4 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-full bg-sos px-4 text-[15px] font-bold text-white focus-visible:ring-2 focus-visible:ring-sos focus-visible:ring-offset-2 focus-visible:outline-none"
+          >
+            Open Emergency SOS
+            <ArrowRightIcon
+              className="size-5"
+              strokeWidth={2.25}
+              aria-hidden="true"
+            />
+          </button>
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-[13px] leading-5 text-white/60">
+            <InfoIcon
+              className="size-3.5 shrink-0"
+              strokeWidth={2}
+              aria-hidden="true"
+            />
+            Use your phone’s SMS app to get help.
+          </p>
+        </div>
+      )}
+    </aside>
   )
 }

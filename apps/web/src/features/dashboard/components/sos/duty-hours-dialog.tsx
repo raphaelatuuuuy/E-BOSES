@@ -41,27 +41,27 @@ export function DutyHoursDialog({
       : "Barangay responders are off duty right now."
 
   return createPortal(
-    <div className="fixed inset-0 z-[400] flex items-end justify-center sm:items-center sm:p-4">
+    <div className="fixed inset-0 z-[400]">
       <button
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/50 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
+        className="motion-safe:animate-in motion-safe:fade-in absolute inset-0 bg-black/50 motion-safe:duration-200"
       />
       <div
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="duty-hours-title"
-        className="relative z-10 w-full overflow-hidden rounded-t-[28px] border border-white/10 bg-brand-navy text-white shadow-[0_16px_48px_rgba(0,0,0,0.45)] sm:max-w-[420px] sm:rounded-[28px] motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
+        className="motion-safe:animate-in motion-safe:fade-in relative z-10 flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden border-0 bg-brand-navy text-white shadow-none motion-safe:duration-200"
       >
-        <div className="flex items-start gap-2 px-5 pb-1 pt-5 max-sm:pt-[max(1.25rem,env(safe-area-inset-top))]">
+        <div className="flex shrink-0 items-start gap-2 px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-1">
           <div className="min-w-0 flex-1 pt-0.5">
-            <p className="text-[11px] font-bold uppercase tracking-wide text-brand-orange">
+            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
               Emergency SOS
             </p>
             <h2
               id="duty-hours-title"
-              className="mt-0.5 text-[22px] font-bold leading-[1.2] tracking-tight text-white"
+              className="mt-0.5 text-[22px] leading-[1.2] font-bold tracking-tight text-white"
             >
               Outside barangay duty hours
             </h2>
@@ -78,25 +78,32 @@ export function DutyHoursDialog({
           </div>
         </div>
 
-        <p className="mt-1 px-5 pb-4 text-[15px] leading-snug text-white/65">
-          {window_} For the fastest help right now, please call one of these
-          directly.
-        </p>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <p className="mt-1 px-5 pb-4 text-[15px] leading-snug text-white/65">
+            {window_} For the fastest help right now, please call one of these
+            directly.
+          </p>
 
-        <div className="mx-5 mb-5 overflow-hidden rounded-[18px] border border-white/15">
-          {hotlines.map((hotline) => (
-            <a
-              key={`${hotline.label}-${hotline.number}`}
-              href={`tel:${hotline.number.replace(/[^\d+]/g, "")}`}
-              className="flex min-h-[3.25rem] items-center justify-between gap-3 border-b border-white/10 px-5 py-3 transition-colors last:border-b-0 hover:bg-white/10"
-            >
-              <span className="text-[15px] font-medium text-white">{hotline.label}</span>
-              <span className="flex items-center gap-2 text-[16px] font-bold tabular-nums text-white">
-                <PhoneCallIcon className="size-4 text-brand-orange" aria-hidden="true" />
-                {hotline.number}
-              </span>
-            </a>
-          ))}
+          <div className="mx-5 mb-5 overflow-hidden rounded-[18px] border border-white/15">
+            {hotlines.map((hotline) => (
+              <a
+                key={`${hotline.label}-${hotline.number}`}
+                href={`tel:${hotline.number.replace(/[^\d+]/g, "")}`}
+                className="flex min-h-[3.25rem] items-center justify-between gap-3 border-b border-white/10 px-5 py-3 transition-colors last:border-b-0 hover:bg-white/10"
+              >
+                <span className="text-[15px] font-medium text-white">
+                  {hotline.label}
+                </span>
+                <span className="flex items-center gap-2 text-[16px] font-bold text-white tabular-nums">
+                  <PhoneCallIcon
+                    className="size-4 text-brand-orange"
+                    aria-hidden="true"
+                  />
+                  {hotline.number}
+                </span>
+              </a>
+            ))}
+          </div>
         </div>
 
         <div className="px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))]">

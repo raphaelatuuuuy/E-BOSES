@@ -1,17 +1,15 @@
 import { useCallback, useState } from "react"
 import { toast } from "sonner"
 import {
-  CircleCheck,
-  CircleX,
+  Check,
   ClockIcon,
   MapPinIcon,
   MessageCircleIcon,
-  ScaleIcon,
   ShieldUserIcon,
   SignalHighIcon,
-  SignalIcon,
   SignalLowIcon,
   SignalMediumIcon,
+  TriangleAlertIcon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -19,16 +17,19 @@ import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { ResolvedPhoto } from "@/features/dashboard/components/concerns/resolved-photo"
 import {
   categoryLabels,
+  formatDate,
+  formatTime,
   truncateDescription,
   unitShortTag,
 } from "@/features/dashboard/components/concerns/concern-display"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import type { RankedConcern } from "@/features/dashboard/components/record/concern-adapter"
 import {
-  SEVERITY_LABEL,
   priorityReasons,
+  SEVERITY_LABEL,
 } from "@/features/dashboard/components/record/severity"
 import {
   commentOnConcern,
@@ -42,12 +43,11 @@ import {
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
 import { streetOnly } from "@/features/dashboard/lib/location-text"
-import { statusLabelOf } from "@/features/dashboard/lib/status-vocabulary"
 import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
+import { concernSummaryText } from "@/features/dashboard/components/feed-post-text"
 import {
   CommentAttachment,
   CommentComposer,
-  ResolutionBanner,
 } from "@/features/dashboard/components/comments"
 
 export const avatarTone = "bg-slate-soft text-navy-muted"
@@ -65,30 +65,25 @@ export function categoryTone(category: string) {
 }
 
 const SEVERITY_TINT: Record<string, string> = {
-  critical: "#fbdedd",
+  critical: "var(--color-severity-critical-map-surface)",
   high: "#fae2e0",
   moderate: "var(--color-severity-moderate-surface)",
   low: "#f4f4f5",
 }
 
 export const SEVERITY_TONE: Record<string, string> = {
-  critical: "text-[#d62018]",
+  critical: "text-severity-critical-map-ink",
   high: "text-[#cf4a40]",
   moderate: "text-severity-moderate",
   low: "text-neutral-600",
 }
 
 export const SEVERITY_ICON: Record<string, typeof ClockIcon> = {
-  critical: SignalIcon,
+  critical: SignalHighIcon,
   high: SignalHighIcon,
   moderate: SignalMediumIcon,
   low: SignalLowIcon,
 }
-
-const RESIDENT_ROW_TINT = {
-  backgroundImage:
-    "radial-gradient(115% 130% at 100% 0%, var(--color-brand-orange-soft), #ffffff 68%)",
-} as const
 
 const STATUS_TINT: Record<string, string> = {
   resolved: "var(--color-status-closed-surface)",
@@ -364,13 +359,11 @@ export function ConcernQueueItem({
   active,
   onSelect,
   variant = "staff",
-  tintBy = "Priority",
 }: {
   entry: RankedConcern
   active: boolean
   onSelect: () => void
   variant?: "staff" | "resident"
-  tintBy?: "Status" | "Priority"
 }) {
   const { user } = useAuthSession()
   const { concern } = entry
@@ -385,23 +378,16 @@ export function ConcernQueueItem({
   const titleText = concern.title?.trim() || ""
   const summaryText = concern.summary?.trim() || ""
   const descriptionText = concern.description?.trim() || ""
+  const generatedSummary = concernSummaryText({
+    title: titleText,
+    description: descriptionText,
+    summary: summaryText,
+  })
   const displayTitle = titleText || truncateDescription(descriptionText, 60)
-  const showBody = resident
-    ? Boolean(descriptionText)
-    : Boolean(summaryText) || (Boolean(titleText) && Boolean(descriptionText))
+  const showBody = Boolean(descriptionText || generatedSummary)
   const full = concernReporterName(concern)
   const initials = (concern.reporter?.initials || initialsOf(full)).charAt(0)
-  const statusLabel = statusLabelOf(concern.status)
   const othersCount = concern.also_reported_count ?? 0
-  const statusGlyph = isResolvedRecord(concern)
-      ? { Icon: CircleCheck, cls: "text-status-closed/90" }
-      : concern.status === "rejected"
-        ? { Icon: CircleX, cls: "text-status-open/80" }
-        : concern.status === "appealed"
-          ? { Icon: ScaleIcon, cls: "text-severity-high/80" }
-          : { Icon: ClockIcon, cls: "text-[#f97316]" }
-  const StatusGlyph = statusGlyph.Icon
-  const statusCls = statusGlyph.cls
 
   const isPublic = concern.visibility === "community"
   // A machine address ("Pinned location") must not hide the location row —
@@ -435,7 +421,6 @@ export function ConcernQueueItem({
           concern.category_ref?.name || categoryLabels[concern.category],
       })[0]
     : "the review model has not scored this report yet"
-
   const PriorityIcon = assessed
     ? (SEVERITY_ICON[severity] ?? ClockIcon)
     : ClockIcon
@@ -443,7 +428,6 @@ export function ConcernQueueItem({
     ? (SEVERITY_TONE[severity] ?? "text-neutral-500")
     : "text-neutral-500"
 
-  const [showRaw, setShowRaw] = useState(false)
   const [showComments, setShowComments] = useState(false)
   const [detail, setDetail] = useState<Concern | null>(null)
   const [comments, setComments] = useState<ConcernComment[] | null>(() => {
@@ -462,34 +446,67 @@ export function ConcernQueueItem({
   )
   const [previewLoading, setPreviewLoading] = useState(false)
 
-  const commentCount =
-    (comments ? commentRows(comments).length : (concern.comment_count ?? 0)) +
-    (concernResolved ? 1 : 0)
+  const commentCount = comments
+    ? commentRows(comments).length
+    : (concern.comment_count ?? 0)
 
   async function openPreview() {
     if (previewLoading) return
     setPreviewLoading(true)
     try {
       const detail = await getConcern(concern.public_id)
+      const proof = (detail.resolution_evidence ?? []).filter((media) =>
+        media.mime_type.startsWith("image/")
+      )
       const images = (detail.media ?? []).filter((media) =>
         media.mime_type.startsWith("image/")
       )
-      const items = images.length
-        ? images.map((media) =>
-            toMediaPreviewItem(
-              mediaDisplaySource(media),
-              media.original_filename,
-              media.mime_type,
-              media
-            )
-          )
-        : [
-            {
-              src: concern.first_photo ?? "",
-              filename: concern.title,
-              kind: "image" as const,
-            },
-          ]
+      const items =
+        proof.length || images.length
+          ? [
+              ...images.map((media) => ({
+                ...toMediaPreviewItem(
+                  mediaDisplaySource(media),
+                  media.original_filename,
+                  media.mime_type,
+                  media
+                ),
+                eyebrow:
+                  streetOnly(
+                    detail.community_incident?.address || detail.address
+                  ) || undefined,
+                postedLabel: `${formatDate(detail.created_at)} at ${formatTime(detail.created_at)}`,
+                heading:
+                  (detail.notification_subject || detail.title || "").trim() ||
+                  undefined,
+                badge: "Reported issue",
+                blurb: (detail.description || "").trim() || undefined,
+              })),
+              ...proof.map((media) => ({
+                ...toMediaPreviewItem(
+                  media.preview_url || media.raw_url,
+                  media.original_filename,
+                  media.mime_type
+                ),
+                eyebrow:
+                  streetOnly(
+                    detail.community_incident?.address || detail.address
+                  ) || undefined,
+                postedLabel: `${formatDate(detail.created_at)} at ${formatTime(detail.created_at)}`,
+                heading:
+                  (detail.notification_subject || detail.title || "").trim() ||
+                  undefined,
+                badge: "Resolved case",
+                blurb: (detail.description || "").trim() || undefined,
+              })),
+            ]
+          : [
+              {
+                src: concern.first_photo ?? "",
+                filename: concern.title,
+                kind: "image" as const,
+              },
+            ]
       setPreview({ items })
     } catch {
       setPreview({
@@ -603,15 +620,6 @@ export function ConcernQueueItem({
           : "ring-neutral-200 hover:ring-neutral-300 focus-visible:ring-neutral-400",
         "focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:outline-none"
       )}
-      style={
-        concernResolved
-          ? statusTintStyle("resolved")
-          : resident
-            ? RESIDENT_ROW_TINT
-            : tintBy === "Status"
-              ? statusTintStyle(concern.status)
-              : severityTintStyle(severity, assessed)
-      }
     >
       {resident ? (
         <div className="flex items-center gap-2.5">
@@ -632,6 +640,14 @@ export function ConcernQueueItem({
               )}
             >
               {(() => {
+                if (concernResolved) {
+                  return (
+                    <Check
+                      className="size-[17px] shrink-0 text-emerald-600"
+                      strokeWidth={2.5}
+                    />
+                  )
+                }
                 const Icon = resolveIconByKey(concern.category_ref?.icon_key)
                 return Icon ? (
                   <Icon className="size-[17px] shrink-0" strokeWidth={1.8} />
@@ -646,9 +662,6 @@ export function ConcernQueueItem({
             <span className="mt-0.5 block truncate text-[11px] leading-tight font-medium text-neutral-500">
               {concern.category_ref?.name || categoryLabels[concern.category]}
             </span>
-          </span>
-          <span className="mr-1.5 shrink-0" title={statusLabel}>
-            <StatusGlyph className={cn("size-5", statusCls)} />
           </span>
         </div>
       ) : (
@@ -671,11 +684,7 @@ export function ConcernQueueItem({
               </span>
             </span>
             {concernResolved ? (
-              <span
-                className="mr-1.5 flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-700"
-                title="Resolved"
-              >
-                <CircleCheck className="size-5 shrink-0" strokeWidth={1.9} />
+              <span className="mr-1.5 shrink-0 text-[11px] font-medium text-emerald-700">
                 Resolved
               </span>
             ) : (
@@ -689,9 +698,6 @@ export function ConcernQueueItem({
                 >
                   <PriorityIcon className="size-3.5 shrink-0" strokeWidth={2} />
                   {priorityLabel}
-                </span>
-                <span className="mr-1.5 shrink-0" title={statusLabel}>
-                  <StatusGlyph className={cn("size-5", statusCls)} />
                 </span>
               </>
             )}
@@ -714,35 +720,32 @@ export function ConcernQueueItem({
       {showBody ? (
         <>
           <div className="mt-1.5 border-t border-neutral-100" />
-          <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-700">
-            {resident
-              ? descriptionText || "No description provided."
-              : summaryText || descriptionText || "No description provided."}
-            {!resident && priorityWhy
-              ? ` ${priorityWhy.replace(/\.*$/, ".")}`
-              : null}
-          </p>
-          {!resident &&
-          summaryText &&
-          descriptionText &&
-          summaryText !== descriptionText ? (
-            <>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setShowRaw((value) => !value)
-                }}
-                className="mt-1 self-start text-[11px] font-medium text-neutral-600 transition-colors hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-1 focus-visible:outline-none"
-              >
-                {showRaw ? "Hide original" : "Show original"}
-              </button>
-              {showRaw ? (
-                <p className="mt-1 border-l-2 border-neutral-300 pl-2.5 text-[12px] leading-relaxed text-neutral-600">
-                  {descriptionText}
-                </p>
-              ) : null}
-            </>
+          {descriptionText ? (
+            <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-700">
+              {descriptionText}
+            </p>
+          ) : null}
+          {generatedSummary ? (
+            <div
+              className={cn(
+                "mt-1.5 flex w-full items-start gap-2 rounded-lg px-3 py-2.5",
+                severity === "critical"
+                  ? "bg-severity-critical-surface text-severity-critical-ink"
+                  : "bg-brand-orange-soft text-orange-800"
+              )}
+            >
+              <TriangleAlertIcon
+                className="mt-[2px] size-5 shrink-0"
+                strokeWidth={1.9}
+                aria-hidden
+              />
+              <p className="min-w-0 flex-1 text-[12px] leading-relaxed whitespace-pre-wrap">
+                {generatedSummary}
+                {!resident && priorityWhy
+                  ? ` ${priorityWhy.replace(/\.*$/, ".")}`
+                  : null}
+              </p>
+            </div>
           ) : null}
         </>
       ) : null}
@@ -761,32 +764,46 @@ export function ConcernQueueItem({
             active && "flex min-h-0 flex-1 flex-col"
           )}
         >
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation()
-              void openPreview()
-            }}
-            className={cn(
-              "block w-full cursor-zoom-in overflow-hidden rounded-[16px] bg-card-raised",
-              active && "flex min-h-36 flex-1"
-            )}
-            aria-label="Open photo preview"
-          >
-            <AuthenticatedMediaImage
-              src={concern.first_photo}
-              alt={concern.title}
+          {concernResolved ? (
+            <div onClick={(event) => event.stopPropagation()}>
+              <ResolvedPhoto
+                originalSrc={concern.first_photo}
+                resolutionSrc={concern.resolution_photo}
+                resolutionCount={concern.resolution_photo_count}
+                alt={concern.title}
+                className="rounded-[16px]"
+                imageClassName={active ? "min-h-0 flex-1" : "h-36"}
+                onOpen={() => void openPreview()}
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void openPreview()
+              }}
               className={cn(
-                "w-full object-cover",
-                active ? "min-h-0 flex-1" : "h-36"
+                "block w-full cursor-zoom-in overflow-hidden rounded-[16px] bg-card-raised",
+                active && "flex min-h-36 flex-1"
               )}
-            />
-            {(concern.photo_count ?? 1) > 1 ? (
-              <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-bold text-white">
-                +{(concern.photo_count ?? 1) - 1}
-              </span>
-            ) : null}
-          </button>
+              aria-label="Open photo preview"
+            >
+              <AuthenticatedMediaImage
+                src={concern.first_photo}
+                alt={concern.title}
+                className={cn(
+                  "w-full object-cover",
+                  active ? "min-h-0 flex-1" : "h-36"
+                )}
+              />
+              {(concern.photo_count ?? 1) > 1 ? (
+                <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-bold text-white">
+                  +{(concern.photo_count ?? 1) - 1}
+                </span>
+              ) : null}
+            </button>
+          )}
         </div>
       ) : null}
 
@@ -803,14 +820,11 @@ export function ConcernQueueItem({
               className="mt-3 space-y-3"
               onClick={(event) => event.stopPropagation()}
             >
-              {concernResolved ? (
-                <ResolutionBanner post={detail ?? concern} sessionUser={null} />
-              ) : null}
               {commentsLoading ? (
                 <p className="text-[11px] text-neutral-500">
                   Loading comments…
                 </p>
-              ) : (comments?.length ?? 0) === 0 && !concernResolved ? (
+              ) : (comments?.length ?? 0) === 0 ? (
                 <p className="text-[11px] text-neutral-500">No comments yet.</p>
               ) : (
                 comments?.map((comment) => (

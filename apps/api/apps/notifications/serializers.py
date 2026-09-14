@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import BrowserPushSubscription, Notification
+from .models import BrowserPushSubscription, NativePushDevice, Notification
 
 
 class NotificationSerializer(serializers.ModelSerializer):
@@ -199,3 +199,15 @@ class BrowserPushSubscriptionSerializer(serializers.Serializer):
             },
         )
         return subscription
+
+class NativePushDeviceSerializer(serializers.Serializer):
+    token = serializers.CharField(max_length=512)
+    platform = serializers.ChoiceField(choices=["android"], default="android")
+
+    def save(self, **kwargs):
+        request = self.context["request"]
+        device, _ = NativePushDevice.objects.update_or_create(
+            token=self.validated_data["token"],
+            defaults={"user": request.user, "platform": self.validated_data["platform"], "is_active": True},
+        )
+        return device

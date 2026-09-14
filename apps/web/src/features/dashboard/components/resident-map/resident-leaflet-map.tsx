@@ -12,7 +12,9 @@ import {
   validCoord,
 } from "@/features/dashboard/lib/resident-map-utils"
 import {
-  advisoryMeta,
+  ANNOUNCEMENT_ACCENT,
+  advisoryGlyphHtml,
+  advisoryLabel,
   advisoryMarkerHtml,
   advisoryMarkerSize,
 } from "@/features/dashboard/components/community-content/advisory-tags"
@@ -21,6 +23,7 @@ import {
   concernMarkerSize,
 } from "@/features/dashboard/components/map/concern-marker"
 import {
+  dotPinHtml,
   glyphPinHtml,
   glyphPinSize,
   GLYPHS,
@@ -40,7 +43,15 @@ import {
   advisoryDoneColor,
   geoJsonToLines,
   isActiveEmergency,
+  joinLineRuns,
 } from "@/features/dashboard/components/alerts-map/lib"
+import {
+  announcementSummary,
+  announcementTitle,
+} from "@/features/dashboard/lib/announcement-summary"
+import { concernTitleText } from "@/features/dashboard/components/feed-post-text"
+import { statusGroupOf } from "@/features/dashboard/lib/status-vocabulary"
+import { streetSegment } from "@/features/dashboard/lib/location-text"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
   StreetViewModal,
@@ -60,6 +71,7 @@ export type MapApi = {
   zoomIn: () => void
   zoomOut: () => void
   toggleStreetViewPick: () => void
+  openStreetViewAtPin: () => void
 }
 
 const EMERGENCY_PIN = 28
@@ -148,7 +160,7 @@ export function ResidentLeafletMap({
     Map<
       number,
       {
-        roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }>
+        roads: Array<{ flow: leaflet.Polyline }>
         wide: string | null
       }
     >
@@ -158,7 +170,6 @@ export function ResidentLeafletMap({
   )
   const highlightGroupRef = useRef<leaflet.LayerGroup | null>(null)
   const coverageGroupRef = useRef<leaflet.LayerGroup | null>(null)
-  const hoverIdRef = useRef<number | null>(null)
   const focusIdRef = useRef<number | null>(null)
   const onMapInteractRef = useRef(onMapInteract)
   useEffect(() => {
@@ -167,10 +178,63 @@ export function ResidentLeafletMap({
   const [mapReady, setMapReady] = useState(false)
   const [svPick, setSvPick] = useState(false)
   const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
+  const streetViewWasOpenRef = useRef(false)
+
+  useEffect(() => {
+    if (svCoord) {
+      streetViewWasOpenRef.current = true
+      return
+    }
+    if (!streetViewWasOpenRef.current) return
+    streetViewWasOpenRef.current = false
+
+    let firstFrame = 0
+    let secondFrame = 0
+    const repaintMap = () => {
+      const map = mapRef.current
+      if (!map) return
+      map.invalidateSize({ animate: false })
+      map.setZoom(map.getZoom(), { animate: false })
+    }
+    firstFrame = requestAnimationFrame(() => {
+      repaintMap()
+      secondFrame = requestAnimationFrame(repaintMap)
+    })
+    return () => {
+      cancelAnimationFrame(firstFrame)
+      cancelAnimationFrame(secondFrame)
+    }
+  }, [svCoord])
+
   const onStreetViewPickChangeRef = useRef(onStreetViewPickChange)
   useEffect(() => {
     onStreetViewPickChangeRef.current = onStreetViewPickChange
   }, [onStreetViewPickChange])
+  const svPinSourceRef = useRef({
+    posts,
+    emergencies,
+    announcements,
+    selectedId,
+    selectedEmergencyId,
+    selectedAnnouncementId,
+  })
+  useEffect(() => {
+    svPinSourceRef.current = {
+      posts,
+      emergencies,
+      announcements,
+      selectedId,
+      selectedEmergencyId,
+      selectedAnnouncementId,
+    }
+  }, [
+    posts,
+    emergencies,
+    announcements,
+    selectedId,
+    selectedEmergencyId,
+    selectedAnnouncementId,
+  ])
 
   const svPoints = useMemo<StreetViewMapPoint[]>(() => {
     const points: StreetViewMapPoint[] = []
@@ -187,6 +251,8 @@ export function ResidentLeafletMap({
     for (const post of posts) {
       const pos = validCoord(post.latitude, post.longitude)
       if (!pos) continue
+      const severity =
+        post.severity ?? (post.priority_score >= 3000 ? "critical" : null)
       points.push({
         id: `c${post.id}`,
         lat: pos[0],
@@ -197,10 +263,11 @@ export function ResidentLeafletMap({
           imageUrl: post.category_ref?.icon_image_url,
           customLabel: post.category_ref?.custom_icon_label,
           status: post.status,
+          severity,
           selected: false,
         }),
         size: concernMarkerSize(false),
-        title: post.title,
+        title: concernTitleText(post),
         excerpt: post.summary || post.description,
         image: post.media?.[0]?.preview_url ?? null,
       })
@@ -216,7 +283,7 @@ export function ResidentLeafletMap({
         lng: pos[1],
         html: advisoryMarkerHtml(announcement.tag, 26, "light", false),
         size: advisoryMarkerSize(26, false),
-        title: announcement.title,
+        title: announcementTitle(announcement),
         meta: announcement.place_label || "Barangay advisory",
         excerpt: announcement.body,
         image: announcement.image_url,
@@ -256,6 +323,52 @@ export function ResidentLeafletMap({
     })
   }
 
+  function openStreetViewAtPin() {
+    const map = mapRef.current
+    if (!map) return
+    const {
+      posts: currentPosts,
+      emergencies: currentEmergencies,
+      announcements: currentAnnouncements,
+      selectedId: currentSelectedId,
+      selectedEmergencyId: currentSelectedEmergencyId,
+      selectedAnnouncementId: currentSelectedAnnouncementId,
+    } = svPinSourceRef.current
+    const center = map.getCenter()
+    let lat = center.lat
+    let lng = center.lng
+    const selectedPost =
+      currentSelectedId != null
+        ? currentPosts.find((p) => p.id === currentSelectedId)
+        : null
+    const selectedPostCoord = selectedPost
+      ? validCoord(selectedPost.latitude, selectedPost.longitude)
+      : null
+    const selectedEmergency =
+      currentSelectedEmergencyId != null
+        ? currentEmergencies?.find((e) => e.id === currentSelectedEmergencyId)
+        : null
+    const selectedEmergencyCoord = selectedEmergency
+      ? validCoord(selectedEmergency.latitude, selectedEmergency.longitude)
+      : null
+    const selectedAnnouncement =
+      currentSelectedAnnouncementId != null
+        ? currentAnnouncements?.find(
+            (a) => a.id === currentSelectedAnnouncementId
+          )
+        : null
+    const selectedAnnouncementCoord = selectedAnnouncement
+      ? validCoord(
+          selectedAnnouncement.latitude,
+          selectedAnnouncement.longitude
+        )
+      : null
+    const coord =
+      selectedPostCoord ?? selectedEmergencyCoord ?? selectedAnnouncementCoord
+    if (coord) [lat, lng] = coord
+    setSvCoord({ lat, lng })
+  }
+
   useEffect(() => {
     if (!svPick || !mapReady) return
     const map = mapRef.current
@@ -279,8 +392,8 @@ export function ResidentLeafletMap({
     : ""
   const fittedGeomKeyRef = useRef("")
 
-  // Advisory pin hover/focus: dimmed roads at rest; on focus the advisory's
-  // roads go full-strength and a barangay-wide advisory fills the boundary.
+  // Advisory areas show on selection only: hovering a pin opens its tip,
+  // clicking it highlights the streets and boundary it covers.
   const applyAdvisoryFocus = useCallback(
     (id: number | null) => {
       const L = LRef.current
@@ -289,9 +402,8 @@ export function ResidentLeafletMap({
       highlight.clearLayers()
       for (const [key, entry] of advisoryRoadsRef.current) {
         const strong = id != null && key === id
-        for (const { casing, core } of entry.roads) {
-          casing.setStyle({ opacity: strong ? 0.95 : 0.55 })
-          core.setStyle({ opacity: strong ? 0.95 : 0.4 })
+        for (const { flow } of entry.roads) {
+          flow.setStyle({ opacity: strong ? 1 : 0.9 })
         }
       }
       const entry = id != null ? advisoryRoadsRef.current.get(id) : null
@@ -299,9 +411,9 @@ export function ResidentLeafletMap({
         const ring = geoJsonToRing(boundary.geometry as GeoJsonPolygon)
         if (ring.length >= 3) {
           L.polygon(ring, {
-            color: entry.wide,
-            weight: 2,
-            opacity: 0.9,
+            // Keep the wide-advisory tint without drawing a second barangay
+            // outline over the map.
+            stroke: false,
             fillColor: entry.wide,
             fillOpacity: 0.15,
             interactive: false,
@@ -431,6 +543,7 @@ export function ResidentLeafletMap({
           zoomIn: () => map?.zoomIn(),
           zoomOut: () => map?.zoomOut(),
           toggleStreetViewPick: () => toggleStreetViewPick(),
+          openStreetViewAtPin: () => openStreetViewAtPin(),
         })
         // Multiple paints: container often still settling after route mount
         requestAnimationFrame(forcePaint)
@@ -458,7 +571,6 @@ export function ResidentLeafletMap({
       boundaryLayerRef.current = null
       fittedGeomKeyRef.current = ""
       highlightGroupRef.current = null
-      hoverIdRef.current = null
       focusIdRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -484,18 +596,16 @@ export function ResidentLeafletMap({
     }
     if (fittedGeomKeyRef.current === boundaryGeomKey) return
 
-    // The selected community is a quiet fill only. Its outline and every
-    // neighbouring-community outline stay hidden so the map does not become a
-    // boundary diagram.
+    // The selected community geometry is used for framing only. Its outline
+    // and fill stay hidden so the map does not become a boundary diagram.
     boundaryLayerRef.current = L.geoJSON(
       boundary.geometry as Parameters<typeof L.geoJSON>[0],
       {
         style: {
-          color: "transparent",
-          weight: 0,
-          fillColor: "#f97316",
-          fillOpacity: 0.12,
-          opacity: 0,
+          // Keep the geometry for framing, but hide the barangay boundary
+          // visual from the alert map.
+          stroke: false,
+          fillOpacity: 0,
         },
         interactive: false,
       }
@@ -536,18 +646,21 @@ export function ResidentLeafletMap({
     group.clearLayers()
     advisoryRoadsRef.current.clear()
     highlightGroupRef.current?.clearLayers()
-    hoverIdRef.current = null
 
     // Only plot device GPS when near Marikina (avoids far-away user pin)
     if (userPos && isLocalGps(userPos, boundary?.geometry)) {
       const userMarker = L.marker([userPos.lat, userPos.lng], {
         icon: L.divIcon({
           className: "",
-          html: userPinHtml(),
-          iconSize: [USER_PIN, USER_PIN],
-          iconAnchor: [USER_PIN / 2, USER_PIN / 2],
+          html: dotPinHtml({
+            color: MAP_COLORS.you,
+            size: 14,
+            live: true,
+          }),
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
         }),
-        zIndexOffset: 0,
+        zIndexOffset: 1200,
         keyboard: false,
       })
       userMarker.addTo(group)
@@ -556,6 +669,8 @@ export function ResidentLeafletMap({
     for (const post of posts) {
       const pos = validCoord(post.latitude, post.longitude)
       if (!pos) continue
+      const severity =
+        post.severity ?? (post.priority_score >= 3000 ? "critical" : null)
       const selected = selectedId === post.id
       const pinSize = concernMarkerSize(selected)
       const marker = L.marker(pos, {
@@ -567,6 +682,7 @@ export function ResidentLeafletMap({
             imageUrl: post.category_ref?.icon_image_url,
             customLabel: post.category_ref?.custom_icon_label,
             status: post.status,
+            severity,
             selected,
             hoverGrow: true,
           }),
@@ -581,13 +697,32 @@ export function ResidentLeafletMap({
         marker,
         {
           image: post.media?.[0]?.preview_url ?? null,
-          title: post.notification_subject || post.title,
-          excerpt: post.summary || post.description,
-          excerptLabel: post.summary
-            ? null
-            : post.description
-              ? "Report description"
-              : null,
+          resolutionImage:
+            post.resolution_evidence?.find((item) =>
+              item.mime_type.startsWith("image/")
+            )?.preview_url ?? null,
+          resolutionCount: post.resolution_evidence?.filter((item) =>
+            item.mime_type.startsWith("image/")
+          ).length,
+          resolved:
+            post.status === "resolved" || post.status === "partially_resolved",
+          resolvedAt:
+            [...(post.status_events ?? [])]
+              .filter((event) => statusGroupOf(event.status) === "closed")
+              .sort(
+                (a, b) =>
+                  new Date(b.created_at).getTime() -
+                  new Date(a.created_at).getTime()
+              )[0]?.created_at ?? post.updated_at,
+          title: concernTitleText(post),
+          reporterName: post.reporter?.full_name,
+          meta:
+            streetSegment(post.address) ||
+            streetSegment(post.barangay) ||
+            undefined,
+          description: post.description,
+          summary: post.summary,
+          severity,
           date: post.created_at,
         },
         pinSize
@@ -612,12 +747,18 @@ export function ResidentLeafletMap({
       const pinSize = advisoryMarkerSize(26, selected)
       const doneColor = advisoryDoneColor(
         announcement,
-        advisoryMeta(announcement.tag).color
+        ANNOUNCEMENT_ACCENT.color
       )
       const marker = L.marker(at, {
         icon: L.divIcon({
           className: "",
-          html: advisoryMarkerHtml(announcement.tag, 26, "light", selected, doneColor),
+          html: advisoryMarkerHtml(
+            announcement.tag,
+            26,
+            "light",
+            selected,
+            doneColor
+          ),
           iconSize: [pinSize, pinSize],
           iconAnchor: [pinSize / 2, pinSize / 2],
         }),
@@ -628,39 +769,27 @@ export function ResidentLeafletMap({
         L,
         {
           image: announcement.image_url,
-          title: announcement.title,
+          eyebrow: advisoryLabel(announcement.tag),
+          eyebrowColor: ANNOUNCEMENT_ACCENT.color,
+          badgeSvg: advisoryGlyphHtml(announcement.tag, 18),
+          title: announcementTitle(announcement),
+          meta: announcement.place_label || announcement.barangay,
           excerpt: announcement.body,
+          summary: announcementSummary(announcement),
           date:
             announcement.starts_at ??
-            announcement.expires_at ??
+            announcement.published_at ??
             announcement.created_at,
         },
         pinSize
       )
       marker.on("mouseover", () => {
-        hoverIdRef.current = id
-        applyAdvisoryFocus(id)
         if (card) openHoverCard(map, card, marker)
-      })
-      marker.on("mouseout", () => {
-        hoverIdRef.current = null
-        applyAdvisoryFocus(focusIdRef.current)
       })
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e)
         onSelectAnnouncement?.(id)
       })
-      const icon = marker.getElement()
-      if (icon) {
-        icon.addEventListener("focus", () => {
-          focusIdRef.current = id
-          applyAdvisoryFocus(id)
-        })
-        icon.addEventListener("blur", () => {
-          focusIdRef.current = null
-          applyAdvisoryFocus(hoverIdRef.current)
-        })
-      }
       marker.addTo(group)
     }
 
@@ -669,77 +798,73 @@ export function ResidentLeafletMap({
       const point = validCoord(announcement.latitude, announcement.longitude)
       const tagColor = advisoryDoneColor(
         announcement,
-        advisoryMeta(announcement.tag).color
+        ANNOUNCEMENT_ACCENT.color
       )
-      const roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }> =
-        []
+      const roads: Array<{ flow: leaflet.Polyline }> = []
+      const streetRuns = joinLineRuns(
+        (announcement.street_geometries ?? []).flatMap(geoJsonToLines)
+      )
 
       // An explicit point wins: the official pinned that exact place.
       if (point) addAdvisoryMarker(announcement, point)
 
-      if (!geometry) {
+      if (streetRuns.length > 0) {
         const drawRoad = (run: leaflet.LatLngTuple[]) => {
-          const casing = L.polyline(run, {
-            color: "#ffffff",
-            weight: 8,
-            opacity: 0.55,
-            lineCap: "round",
-            lineJoin: "round",
-            interactive: false,
-          }).addTo(group)
-          const core = L.polyline(run, {
+          const flow = L.polyline(run, {
             color: tagColor,
-            weight: 3,
-            opacity: 0.4,
+            weight: 4,
+            opacity: 0.9,
             lineCap: "round",
             lineJoin: "round",
+            dashArray: "7 7",
+            className: "eboses-alerts-corridor-flow",
             interactive: false,
           }).addTo(group)
-          roads.push({ casing, core })
+          roads.push({ flow })
         }
         let anchor: leaflet.LatLngTuple | null = null
         let anchorLat = 0
         let anchorLng = 0
         let anchorPointCount = 0
-        for (const line of announcement.street_geometries ?? []) {
-          const points = geoJsonToLines(line)
-          for (const run of points) {
-            drawRoad(run)
-            for (const point of run) {
-              anchorLat += point[0]
-              anchorLng += point[1]
-              anchorPointCount += 1
-            }
+        for (const run of streetRuns) {
+          drawRoad(run)
+          for (const point of run) {
+            anchorLat += point[0]
+            anchorLng += point[1]
+            anchorPointCount += 1
           }
         }
         if (anchorPointCount > 0) {
           anchor = [anchorLat / anchorPointCount, anchorLng / anchorPointCount]
         }
-        if (!point && !anchor) {
-          // Keep barangay-wide notices visible. Cache the fallback coordinate
-          // per announcement so selecting a community does not move a pin
-          // simply because the map center prop changed.
-          anchor =
-            advisoryFallbackAnchorsRef.current.get(announcement.id) ?? null
-          if (!anchor) {
-            const slot = Math.abs(announcement.id) % 8
-            const angle = (slot * Math.PI) / 4
-            anchor = [
-              center.latitude + Math.sin(angle) * 0.00012,
-              center.longitude + Math.cos(angle) * 0.00012,
-            ]
-            advisoryFallbackAnchorsRef.current.set(announcement.id, anchor)
-          }
-          addAdvisoryMarker(announcement, anchor)
-          advisoryRoadsRef.current.set(announcement.id, {
-            roads: [],
-            wide: tagColor,
-          })
-        } else if (!point && anchor) {
+        if (!point && anchor) {
           addAdvisoryMarker(announcement, anchor)
         }
         if (roads.length > 0)
           advisoryRoadsRef.current.set(announcement.id, { roads, wide: null })
+        continue
+      }
+      if (!geometry) {
+        const fallback =
+          advisoryFallbackAnchorsRef.current.get(announcement.id) ?? null
+        if (!point && !fallback) {
+          const slot = Math.abs(announcement.id) % 8
+          const angle = (slot * Math.PI) / 4
+          const jittered: leaflet.LatLngTuple = [
+            center.latitude + Math.sin(angle) * 0.00012,
+            center.longitude + Math.cos(angle) * 0.00012,
+          ]
+          advisoryFallbackAnchorsRef.current.set(announcement.id, jittered)
+        }
+        const fallbackAnchor =
+          advisoryFallbackAnchorsRef.current.get(announcement.id) ?? null
+        if (!point && fallbackAnchor)
+          addAdvisoryMarker(announcement, fallbackAnchor)
+        if (!point)
+          advisoryRoadsRef.current.set(announcement.id, {
+            roads: [],
+            wide: tagColor,
+          })
         continue
       }
       try {
@@ -797,6 +922,7 @@ export function ResidentLeafletMap({
               : em.note
                 ? "Resident report"
                 : null,
+          severity: "critical",
           date: em.created_at,
         },
         box
@@ -833,6 +959,7 @@ export function ResidentLeafletMap({
     if (!mapReady || selectedId == null || !mapRef.current) return
     const post = posts.find((p) => p.id === selectedId)
     const pos = post ? validCoord(post.latitude, post.longitude) : null
+    mapRef.current.closePopup()
     if (pos) mapRef.current.panTo(pos, { animate: true })
   }, [mapReady, selectedId, posts])
 
@@ -840,19 +967,21 @@ export function ResidentLeafletMap({
     if (!mapReady || selectedEmergencyId == null || !mapRef.current) return
     const em = emergencies.find((e) => e.id === selectedEmergencyId)
     const pos = em ? validCoord(em.latitude, em.longitude) : null
+    mapRef.current.closePopup()
     if (pos) mapRef.current.panTo(pos, { animate: true })
   }, [mapReady, selectedEmergencyId, emergencies])
 
-  // Opening an advisory keeps its barangay highlight while the panel is open;
-  // closing the panel drops it back to hover-only.
+  // Opening an advisory highlights its covered area while the panel is open;
+  // closing the panel clears it back to pins only.
   useEffect(() => {
     if (!mapReady) return
     if (selectedAnnouncementId == null) {
       if (focusIdRef.current != null) {
         focusIdRef.current = null
-        applyAdvisoryFocus(hoverIdRef.current)
+        applyAdvisoryFocus(null)
       }
     } else {
+      mapRef.current?.closePopup()
       focusIdRef.current = selectedAnnouncementId
       applyAdvisoryFocus(selectedAnnouncementId)
     }
@@ -868,7 +997,7 @@ export function ResidentLeafletMap({
         .eboses-alerts-map.leaflet-container {
           width: 100%;
           height: 100%;
-          background: #e8eef5;
+          background: #e8f5f0;
           font: inherit;
         }
         .eboses-alerts-map .leaflet-tile-pane,
@@ -967,6 +1096,19 @@ export function ResidentLeafletMap({
           }
           50% {
             box-shadow: 0 0 3px 1px var(--pin);
+          }
+        }
+        .eboses-alerts-corridor-flow {
+          animation: eboses-corridor-flow 1.1s linear infinite;
+        }
+        @keyframes eboses-corridor-flow {
+          to {
+            stroke-dashoffset: -14;
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .eboses-alerts-corridor-flow {
+            animation: none;
           }
         }
       `}</style>

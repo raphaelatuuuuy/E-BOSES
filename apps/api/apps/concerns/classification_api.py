@@ -37,7 +37,7 @@ from apps.concerns.models import (
     ContentFlag,
     LlmDecisionLog,
 )
-from apps.capabilities import CONFIGURE_CLASSIFICATION, HasCapability
+from apps.capabilities import CONFIGURE_CLASSIFICATION, MANAGE_USERS, HasCapability, capabilities_for
 from apps.geo_services import validate_report_location
 from apps.media_urls import concern_media_preview_url
 
@@ -58,7 +58,7 @@ class ClassificationConfigurationSerializer(serializers.ModelSerializer):
         fields = (
             "id", "nlp_provider", "text_model",
             "text_relevance_threshold", "duplicate_similarity_threshold",
-            "minimum_description_length", "mismatch_action", "flag_suspicious", "flag_duplicates",
+            "minimum_description_length", "flag_suspicious", "flag_duplicates",
             "flag_irrelevant", "suspicious_terms", "category_keywords",
             "report_duplicate_detection_enabled", "report_duplicate_action",
             "report_duplicate_lookback_days", "report_duplicate_distance_meters",
@@ -610,6 +610,7 @@ class OfficialClassificationSubmissionTestView(APIView):
         )
         duplicate, duplicate_similarity = _duplicate_preview(config, title=title, description=description)
         details = result.get("details") or {}
+        effective_category = str(details.get("primary_category") or selected_category)
         # The privacy preview demonstrates blur behaviour, not evidentiary
         # review — kept to the first photo to avoid returning N protected
         # images the tester UI has no multi-photo panel for yet.
@@ -628,8 +629,8 @@ class OfficialClassificationSubmissionTestView(APIView):
             "privacy": privacy,
             "location": _location_dry_run(request),
             "media_integrity": _media_integrity_preview(config, details=details, images=images),
-            "street_imagery": _street_imagery_preview(config, category=selected_category, latitude=latitude, longitude=longitude, images=images),
-            "photo_duplicate_llm": _photo_dedup_llm_preview(config, category=selected_category, latitude=latitude, longitude=longitude, images=images),
+            "street_imagery": _street_imagery_preview(config, category=effective_category, latitude=latitude, longitude=longitude, images=images),
+            "photo_duplicate_llm": _photo_dedup_llm_preview(config, category=effective_category, latitude=latitude, longitude=longitude, images=images),
             **_review_details(result, selected_category=selected_category, image_uploaded=bool(uploaded_files), title=title, description=description, community=config.community),
         })
 
@@ -909,7 +910,6 @@ class ResidentConcernPrecheckView(APIView):
         )
         payload = _resident_feedback(
             result,
-            selected_category=inferred_category,
             image_uploaded=bool(uploaded_files),
             photo_count=len(uploaded_files),
             image_errors=image_errors,
@@ -941,12 +941,6 @@ class ResidentConcernPrecheckView(APIView):
         payload["public_feed_allowed"] = bool(
             not inferred_category_ref or inferred_category_ref.public_feed_allowed
         )
-        payload["auto_escalate"] = bool(
-            details.get("recommended_action") == "escalate_as_emergency"
-            and details.get("matched_emergency_type")
-            and details.get("incident_timing") == "ongoing"
-        )
-        payload["emergency_type"] = details.get("matched_emergency_type") or ""
         return Response(payload)
 
 
@@ -1166,11 +1160,9 @@ def _report_duplicate_feedback(config, *, request, selected_category: str, title
 def _resident_message_text(
     details: dict,
     *,
-    selected_category: str,
     image_uploaded: bool,
     duplicate_feedback: dict | None = None,
 ) -> str:
-    primary = details.get("primary_category") or ""
     relationship = details.get("evidence_relationship") or ""
     messages = []
     if details.get("failure_type"):
@@ -1178,8 +1170,6 @@ def _resident_message_text(
         # "clearer description" demand would be a lie — the report is routed
         # to an official instead.
         messages.append("The automatic review could not run. An official will review it.")
-    if primary and selected_category and primary != selected_category:
-        messages.append(f"Your description sounds like {primary.replace('_', ' ')}, but you selected {selected_category.replace('_', ' ')}.")
     if relationship in {"contradicts_report", "no_useful_image_evidence"}:
         messages.append("The photo does not clearly show the issue described.")
     elif relationship == "image_review_failed":
@@ -1190,8 +1180,8 @@ def _resident_message_text(
         messages.append("No photo was attached. A clear photo helps confirm your report.")
     if details.get("privacy_scan_required"):
         messages.append("This may show private details. Sensitive parts may be blurred before public display.")
-    if details.get("urgent_attention") and details.get("matched_emergency_type"):
-        messages.append("This may need urgent attention. Submit it now or use Emergency Alert if someone is in immediate danger.")
+    if details.get("urgent_attention"):
+        messages.append("This report may need urgent attention. It will be sent as a high-priority concern for official review.")
     if duplicate_feedback and duplicate_feedback.get("found"):
         action = duplicate_feedback.get("action")
         if action == ConcernClassificationConfiguration.ReportDuplicateAction.BLOCK:
@@ -1206,7 +1196,6 @@ def _resident_message_text(
 def _resident_feedback(
     result: dict,
     *,
-    selected_category: str,
     image_uploaded: bool,
     photo_count: int = 0,
     image_errors: dict | None = None,
@@ -1226,8 +1215,6 @@ def _resident_feedback(
     if not details.get("failure_type") and result.get("outcome") == "needs_review" and not primary:
         field_errors["description"] = "Add a clearer description of the issue."
         can_submit = False
-        needs_revision = True
-    if primary and primary != selected_category:
         needs_revision = True
     photo_evidence_contradicted = relationship == "contradicts_report" or any(
         isinstance(item, dict)
@@ -1250,7 +1237,6 @@ def _resident_feedback(
             needs_revision = True
     message = _resident_message_text(
         details,
-        selected_category=selected_category,
         image_uploaded=image_uploaded,
         duplicate_feedback=duplicate_feedback,
     )
@@ -1364,38 +1350,29 @@ def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dic
 
 def _assigned_unit_for_category(category_ref: ConcernCategory | None) -> dict | None:
     """The unit a report under this category would be routed to, per the
-    barangay's configured routing rules. None when the category has no active
-    rule pointing at a department."""
+    barangay's configured routing rules. The category's default department is
+    the fallback used when no active override rule exists. None only when the
+    category has no configured department at all."""
     if not category_ref:
         return None
     rule = category_ref.routing_rules.filter(is_active=True).select_related("department").first()
-    if not rule or not rule.department_id:
+    department = rule.department if rule and rule.department_id else category_ref.department
+    if not department:
         return None
-    return {"code": rule.department.code, "name": rule.department.name}
+    return {"code": department.code, "name": department.name}
 
 
 def _precheck_extras(request, result, *, selected_category, category_ref, config, uploaded_files, image_errors, duplicate_feedback) -> dict:
     """The fields the frontend reads: inferred routing, duplicate/resolved
-    checks, emergency triage, resolved address, privacy preview, assigned unit,
-    and category requirements. Each has a safe None/false default so the chain
-    simply skips when there is nothing to show."""
+    checks, resolved address, privacy preview, assigned unit, and category
+    requirements. Each has a safe None/false default so the chain simply skips
+    when there is nothing to show."""
     details = result.get("details") or {}
     payload = {
         "description_required": bool(category_ref and category_ref.description_required),
         "location_required": bool(category_ref and category_ref.location_required),
         "photo_required": bool(category_ref and category_ref.photo_required),
     }
-
-    primary = details.get("primary_category") or ""
-    if primary and primary != selected_category:
-        category = ConcernCategory.objects.filter(
-            community=config.community,
-            code=primary,
-            is_active=True,
-        ).first()
-        label = category.name if category else dict(Concern.Category.choices).get(primary, primary.replace("_", " ").title())
-        payload["suggested_category_label"] = label
-        payload["category_confirm_required"] = True
 
     payload["assigned_unit"] = _assigned_unit_for_category(category_ref)
 
@@ -1419,17 +1396,6 @@ def _precheck_extras(request, result, *, selected_category, category_ref, config
         title=request.data.get("title", ""),
         description=request.data.get("description", ""),
     )
-
-    emergency_triage = None
-    if details.get("urgent_attention"):
-        matched_type = details.get("matched_emergency_type") or ""
-        emergency_triage = {
-            "is_emergency": True,
-            "matched_type": matched_type,
-            "reason": details.get("emergency_routing_reason") or details.get("short_explanation") or "The report may need immediate attention.",
-            "escalation_offered": True,
-        }
-    payload["emergency_triage"] = emergency_triage
 
     payload["resolved_address"] = _resolved_address(
         request.data.get("latitude"),
@@ -1560,11 +1526,20 @@ def _review_details(result: dict, *, selected_category: str, image_uploaded: boo
     they try a sample is the same vocabulary they see on a real report.
     """
     details = result.get("details") or {}
-    category_ref = (
-        ConcernCategory.objects.filter(code=selected_category, community=community, is_active=True).first()
-        if selected_category
-        else None
-    )
+    effective_category = str(details.get("primary_category") or selected_category or "")
+    category_ref = None
+    if effective_category:
+        category_ref = ConcernCategory.objects.filter(
+            code=effective_category,
+            community=community,
+            is_active=True,
+        ).first()
+        if category_ref is None:
+            category_ref = ConcernCategory.objects.filter(
+                code=effective_category,
+                community__isnull=True,
+                is_active=True,
+            ).first()
     return {
         "relevance": details.get("relevance"),
         "primary_category": details.get("primary_category"),
@@ -1582,7 +1557,7 @@ def _review_details(result: dict, *, selected_category: str, image_uploaded: boo
         "recommended_action": details.get("recommended_action"),
         "short_explanation": details.get("short_explanation"),
         "image_review_succeeded": details.get("image_review_succeeded"),
-        "resident_message": _resident_message_text(details, selected_category=selected_category, image_uploaded=image_uploaded),
+        "resident_message": _resident_message_text(details, image_uploaded=image_uploaded),
         "matched_emergency_type": details.get("matched_emergency_type"),
         "emergency_routing_reason": details.get("emergency_routing_reason"),
         "ongoing_emergency_confirmation_required": bool(details.get("ongoing_emergency_confirmation_required")),
@@ -1598,12 +1573,13 @@ LLM_DECISION_LOG_PAGE_SIZE = 25
 
 
 class LlmDecisionLogListView(APIView):
-    """Paginated read of the LLM decision audit trail for the config screen."""
-    permission_classes = [IsAuthenticated, HasRolePermission, HasCapability]
-    required_permission = "concerns.manage"
-    required_capability = CONFIGURE_CLASSIFICATION
+    """Paginated read of automated decisions for the unified audit log."""
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        granted = capabilities_for(request.user)
+        if CONFIGURE_CLASSIFICATION not in granted and MANAGE_USERS not in granted:
+            return Response({"detail": "You do not have permission to read automated decisions."}, status=status.HTTP_403_FORBIDDEN)
         from apps.community_scope import selected_community
 
         community = selected_community(request.user, request.query_params.get("community_id"))
@@ -1712,8 +1688,6 @@ def _decision_source(rejection_code: str, *, has_emergency: bool = False) -> str
         "automated_street_imagery_inconclusive_resubmit": "Street-view location check",
         "automated_media_integrity": "Photo authenticity check",
         "automated_media_integrity_resubmit": "Photo authenticity check",
-        "automated_category_mismatch": "Category check",
-        "automated_category_mismatch_resubmit": "Category check",
         "automated_irrelevant": "Relevance check",
         "automated_incomplete": "Required information check",
     }.get(rejection_code, "Automated validation")

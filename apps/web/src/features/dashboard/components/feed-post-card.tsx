@@ -11,10 +11,14 @@ import {
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { concernBodyText } from "@/features/dashboard/components/feed-post-text"
+import { ConcernDescriptionBlock } from "@/features/dashboard/components/concerns/concern-description-block"
+import { concernTitleText } from "@/features/dashboard/components/feed-post-text"
 import { streetSegment } from "@/features/dashboard/lib/location-text"
 import { timeAgo } from "@/features/dashboard/lib/format"
-import { formatDate } from "@/features/dashboard/components/concerns/concern-display"
+import {
+  formatDate,
+  formatTime,
+} from "@/features/dashboard/components/concerns/concern-display"
 import {
   mediaDisplaySource,
   type MediaPreviewItem,
@@ -23,11 +27,9 @@ import {
   AuthenticatedMediaImage,
   MediaLightbox,
 } from "@/features/dashboard/components/authenticated-media"
-import {
-  statusGroupOf,
-  statusLabelOf,
-} from "@/features/dashboard/lib/status-vocabulary"
-import { FS, STROKE } from "@/features/dashboard/components/home/home-style"
+import { ResolvedPhoto } from "@/features/dashboard/components/concerns/resolved-photo"
+import { statusGroupOf } from "@/features/dashboard/lib/status-vocabulary"
+import { FS } from "@/features/dashboard/components/home/home-style"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import type {
   CommunityIncidentReport,
@@ -49,7 +51,6 @@ import {
 import {
   CommentThread,
   fromConcernComment,
-  ResolutionBanner,
   type CommentThreadAnchor,
   type UnifiedComment,
 } from "@/features/dashboard/components/comments"
@@ -67,45 +68,20 @@ import {
  * announcement and an emergency all use one row, one composer, one official
  * badge and one timestamp format.
  *
- * The resolution banner and the "neighbours also reported this" roll-up stay
- * local: they look like comments but are not, so they keep their own row and
- * are passed in as thread anchors that pin their replies beneath them.
+ * The "neighbours also reported this" roll-up stays local and is passed in as
+ * a thread anchor. Resolution is presented on the report photo, never as a
+ * synthetic comment.
  */
-function resolutionOfficial(post: Concern) {
-  const evidence = (post.resolution_evidence ?? []).filter((item) =>
-    item.mime_type?.startsWith("image/")
-  )
-  const closingEvent = [...(post.status_events ?? [])]
-    .reverse()
-    .find((event) => event.status === post.status)
-  return evidence[0]?.uploaded_by ?? closingEvent?.actor ?? null
-}
-
 function relatedReports(post: Concern) {
   return (
     post.community_incident?.reports?.filter((entry) => !entry.is_primary) ?? []
   )
 }
 
-function officialReplyPrefix(post: Concern) {
-  const official = resolutionOfficial(post)
-  return official?.id
-    ? `${mentionToken(toMentionUser(official))} `
-    : `${firstNameOf(official?.full_name || "Barangay Hall")} `
-}
-
 function reportReplyPrefix(entry: CommunityIncidentReport) {
   return entry.reporter_id
     ? `${mentionToken(toMentionUser({ id: entry.reporter_id, full_name: entry.reporter_name }))} `
     : `${firstNameOf(entry.reporter_name)} `
-}
-
-function normaliseFeedCopy(value: string) {
-  return value
-    .replace(/[“”‘’"']/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase()
 }
 
 function PostCommentsBlock({
@@ -159,7 +135,6 @@ function PostCommentsBlock({
     seen.add(u.id)
     mentionUsers.push({ id: u.id, full_name: u.full_name })
   }
-  addMention(resolutionOfficial(post))
   for (const entry of relatedReports(post)) {
     addMention(
       entry.reporter_id
@@ -169,8 +144,6 @@ function PostCommentsBlock({
   }
 
   const linked = relatedReports(post)
-  const bannerPrefix = officialReplyPrefix(post)
-  const bannerReplies: UnifiedComment[] = []
   const reportReplies = new Map<number, UnifiedComment[]>()
   const rest: UnifiedComment[] = []
   for (const comment of post.comments.map((row) =>
@@ -183,31 +156,12 @@ function PostCommentsBlock({
       const list = reportReplies.get(report.id) ?? []
       list.push(comment)
       reportReplies.set(report.id, list)
-    } else if (comment.body.startsWith(bannerPrefix)) {
-      bannerReplies.push(comment)
     } else {
       rest.push(comment)
     }
   }
 
   const anchors: CommentThreadAnchor[] = []
-  if (statusGroupOf(post.status) === "closed") {
-    anchors.push({
-      key: "resolution",
-      node: (
-        <ResolutionBanner
-          post={post}
-          sessionUser={sessionUser}
-          mentionUsers={mentionUsers}
-          replyPrefix={bannerPrefix}
-          trunk={bannerReplies.length > 0}
-          onSubmitReply={onSubmitInline}
-          canReply={canInteract}
-        />
-      ),
-      comments: bannerReplies,
-    })
-  }
   if (linked.length > 0) {
     anchors.push({
       key: "neighbours",
@@ -293,6 +247,12 @@ export type FeedPostCardProps = {
   className?: string
   /** Hide report menu (default false) */
   hideMoreMenu?: boolean
+  /** Drop the card chrome so content merges into the parent surface */
+  bare?: boolean
+  /** Hide the generated summary box (e.g. already shown upstream) */
+  hideSummary?: boolean
+  /** Inset the photo with rounded corners instead of full-bleed */
+  insetMedia?: boolean
 }
 
 /**
@@ -483,6 +443,9 @@ export function FeedPostCard({
   onDeleteComment,
   className,
   hideMoreMenu = false,
+  bare = false,
+  insetMedia = false,
+  hideSummary = false,
 }: FeedPostCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(true)
   const isExpanded = commentsExpandedProp ?? internalExpanded
@@ -494,40 +457,98 @@ export function FeedPostCard({
   const [commentInput, setCommentInput] = useState("")
   const [menuOpenPost, setMenuOpenPost] = useState(false)
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null)
-  const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(
+  const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem[] | null>(
     null
   )
 
   const street =
-    streetSegment(post.address) || streetSegment(post.reporter.street)
-  const barangay = (post.barangay || "").trim()
-  const reporterCommunityName =
-    post.reporter_community?.name?.trim() || post.community?.name?.trim() || ""
-  // When geocoding failed, the server's public address is just the barangay
-  // name. Echoing it twice ("Concepcion Dos, Concepcion Dos") reads as a bug,
-  // so the duplicated street half is dropped.
-  const locationParts =
-    street && barangay && street.toLowerCase() === barangay.toLowerCase()
-      ? [barangay]
-      : [street, barangay]
-  const pinnedLocation =
-    locationParts.filter(Boolean).join(", ") || "Location pinned on the map"
+    streetSegment(post.address) ||
+    streetSegment(post.reporter.street) ||
+    streetSegment(post.barangay)
+  const pinnedLocation = street || "Location pinned on the map"
   const commentFieldId = `feed-post-comment-${post.id}`
-  // The comment icon counts every row shown in the thread: real comments plus
-  // the resolution banner and the "neighbours also reported" entries.
-  const resolutionRows = statusGroupOf(post.status) === "closed" ? 1 : 0
+  // The comment icon counts actual comments and linked neighbour reports.
   const relatedRows = (
     post.community_incident?.reports?.filter((entry) => !entry.is_primary) ?? []
   ).length
-  const totalCommentRows = post.comment_count + resolutionRows + relatedRows
-  const generatedSummary = (post.summary || "").replace(/\s+/g, " ").trim()
-  const submittedDescription = concernBodyText(post).replace(/\s+/g, " ").trim()
-  const summaryDiffers =
-    Boolean(generatedSummary) &&
-    Boolean(submittedDescription) &&
-    normaliseFeedCopy(generatedSummary) !==
-      normaliseFeedCopy(submittedDescription)
-
+  const totalCommentRows = post.comment_count + relatedRows
+  const footerText = "text-[14px]"
+  const footerMsgIcon = "size-[22px] shrink-0"
+  const footerVoteIcon = "size-[22px] shrink-0"
+  const upvoted = post.user_vote === 1
+  const commentLabel =
+    totalCommentRows > 0
+      ? `${totalCommentRows} ${totalCommentRows === 1 ? "comment" : "comments"}`
+      : "Comment"
+  const voteLabel =
+    post.vote_count > 0
+      ? `${post.vote_count} ${post.vote_count === 1 ? "upvote" : "upvotes"}`
+      : "Upvote"
+  function toggleComments() {
+    const next = !isExpanded
+    setExpanded(next)
+    window.requestAnimationFrame(() => {
+      if (next) document.getElementById(commentFieldId)?.focus()
+    })
+  }
+  const resolved = statusGroupOf(post.status) === "closed"
+  const critical =
+    (post.severity ?? "").toLowerCase() === "critical" ||
+    post.priority_score >= 3000
+  const bodyText = (post.description || "").trim()
+  const rawTitle = concernTitleText(post)
+  const resolvedAt =
+    [...(post.status_events ?? [])]
+      .filter((event) => statusGroupOf(event.status) === "closed")
+      .sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )[0]?.created_at ?? post.updated_at
+  const resolutionImages = (post.resolution_evidence ?? []).filter((item) =>
+    item.mime_type?.startsWith("image/")
+  )
+  const originalPhoto =
+    post.media.find((item) => item.mime_type?.startsWith("image/")) ?? null
+  const originalPhotoSrc = originalPhoto
+    ? mediaDisplaySource(originalPhoto)
+    : ""
+  const resolutionPreviewItems = (resolved ? resolutionImages : [])
+    .map((item) => ({
+      src: item.preview_url || item.raw_url,
+      filename: item.original_filename || "Resolution photo",
+      kind: "image" as const,
+      eyebrow: street || undefined,
+      postedLabel: `${formatDate(post.created_at)} at ${formatTime(post.created_at)}`,
+      heading: rawTitle || undefined,
+      badge: "Resolved case",
+      blurb: bodyText || undefined,
+    }))
+    .filter((item) => item.src)
+  const resolutionPhotoSrc = resolutionPreviewItems[0]?.src || ""
+  const reportPhotoItems = post.media
+    .filter((item) => item.mime_type?.startsWith("image/"))
+    .map((item) => {
+      const src = mediaDisplaySource(item)
+      return src
+        ? {
+            src,
+            filename: item.original_filename || "Report photo",
+            kind: "image" as const,
+            media: item,
+            eyebrow: street || undefined,
+            postedLabel: `${formatDate(post.created_at)} at ${formatTime(post.created_at)}`,
+            heading: rawTitle || undefined,
+            badge: "Reported issue",
+            blurb: bodyText || undefined,
+          }
+        : null
+    })
+    .filter((item) => item !== null)
+  const openReportMedia = () => {
+    const items = [...reportPhotoItems, ...resolutionPreviewItems]
+    if (!items.length) return
+    setPreviewMedia(items)
+  }
   useEffect(() => {
     if (!focusCommentOnMount) return
     // Defer the expandState a microtask so parent state propagation doesn't
@@ -561,12 +582,16 @@ export function FeedPostCard({
   return (
     <>
       <article
-        className={cn(
-          "relative rounded-lg border border-neutral-300 bg-white",
-          className
-        )}
+        className={
+          bare
+            ? className
+            : cn(
+                "relative rounded-lg border border-neutral-300 bg-white",
+                className
+              )
+        }
       >
-        <div className="flex gap-2.5 p-3.5 pb-0">
+        <div className="flex items-center gap-2.5 p-3.5 pb-0">
           <UserAvatar user={post.reporter} size="lg" />
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
@@ -580,32 +605,9 @@ export function FeedPostCard({
                   >
                     {post.reporter.full_name}
                   </p>
-                  {reporterCommunityName ? (
-                    <p className="min-w-0 truncate text-[12px] font-medium text-neutral-500">
-                      {reporterCommunityName}
-                    </p>
-                  ) : null}
                 </div>
                 <div className="text-[13px] leading-snug text-neutral-500 sm:text-[14px]">
-                  <p className="flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                    <span className="min-w-0 break-words">
-                      {pinnedLocation}
-                    </span>
-                    <span className="shrink-0">
-                      {formatDate(post.created_at)}
-                    </span>
-                    {statusGroupOf(post.status) === "closed" ? (
-                      <span className="inline-flex shrink-0 items-center gap-1">
-                        <span className="inline-flex items-center gap-1 font-medium text-status-closed">
-                          <CircleCheck
-                            className="size-3.5 shrink-0"
-                            strokeWidth={2.4}
-                          />
-                          {statusLabelOf(post.status, "resident", "concern")}
-                        </span>
-                      </span>
-                    ) : null}
-                  </p>
+                  <p className="min-w-0 break-words">{pinnedLocation}</p>
                 </div>
               </div>
               {!hideMoreMenu && post.can_interact !== false ? (
@@ -621,219 +623,149 @@ export function FeedPostCard({
           </div>
         </div>
 
-        <div className="space-y-2.5 p-3.5 pt-2">
-          {generatedSummary ? (
-            <div>
-              <p className={cn("leading-relaxed text-neutral-900", FS.body)}>
-                {generatedSummary}
-              </p>
-            </div>
-          ) : (
-            <p className={cn("leading-relaxed text-neutral-900", FS.body)}>
-              {submittedDescription}
+        <div className="space-y-2.5 px-3.5 pt-2 pb-1.5">
+          <div className="space-y-1">
+            <p className="text-meta text-neutral-500">
+              Posted on {formatDate(post.created_at)} at{" "}
+              {formatTime(post.created_at)}
             </p>
-          )}
-          {summaryDiffers ? (
-            <div className="border-t border-neutral-100 pt-2">
-              <p className="mb-1 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
-                Submitted description
-              </p>
-              <p className="text-[13px] leading-relaxed text-neutral-600">
-                {submittedDescription}
-              </p>
-            </div>
-          ) : null}
+            <ConcernDescriptionBlock
+              title={rawTitle}
+              description={bodyText}
+              summary={hideSummary || resolved ? null : post.summary}
+              descriptionClassName={FS.body}
+              summaryTone={critical ? "critical" : "default"}
+            />
+            {resolved ? (
+              <div className="flex w-full items-start gap-2 rounded-lg bg-status-closed-surface px-3 py-2.5 text-[16px] leading-relaxed text-status-closed-ink">
+                <CircleCheck
+                  className="mt-[2px] size-5 shrink-0"
+                  strokeWidth={1.9}
+                  aria-hidden
+                />
+                <p className="min-w-0 flex-1 break-words">
+                  This issue was resolved on {formatDate(resolvedAt)} at{" "}
+                  {formatTime(resolvedAt)}
+                </p>
+              </div>
+            ) : null}
+          </div>
         </div>
 
-        {post.media.length > 0 &&
-        post.media[0].mime_type?.startsWith("image/") ? (
-          <div className="mt-2.5 border-y border-neutral-200">
+        {(
+          resolved
+            ? Boolean(resolutionPhotoSrc || originalPhoto)
+            : Boolean(originalPhoto)
+        ) ? (
+          <div
+            className={
+              insetMedia
+                ? "mt-2.5 px-3.5"
+                : "mt-2.5 border-y border-neutral-200"
+            }
+          >
+            <div
+              className={
+                insetMedia
+                  ? "overflow-hidden rounded-2xl border border-neutral-200"
+                  : undefined
+              }
+            >
             {/* Full photo at its natural aspect ratio — no fixed height, no
               cropping. Click opens the full image in the lightbox. */}
-            <button
-              type="button"
-              onClick={() =>
-                setPreviewMedia({
-                  src: mediaDisplaySource(post.media[0]),
-                  filename: post.media[0].original_filename || "Photo",
-                  kind: "image",
-                  media: post.media[0],
-                })
-              }
-              aria-label="Preview photo"
-              className="block w-full"
-            >
-              <AuthenticatedMediaImage
-                src={mediaDisplaySource(post.media[0])}
+            {resolved ? (
+              <ResolvedPhoto
+                originalSrc={originalPhotoSrc || null}
+                resolutionSrc={resolutionPhotoSrc || null}
+                resolutionCount={resolutionPreviewItems.length}
                 alt="Report photo"
-                className="h-auto w-full object-contain"
+                imageClassName="h-auto w-full object-contain"
+                onOpen={openReportMedia}
               />
-            </button>
+            ) : (
+              <button
+                type="button"
+                onClick={openReportMedia}
+                aria-label="Preview photo"
+                className="block w-full"
+              >
+                <AuthenticatedMediaImage
+                  src={mediaDisplaySource(originalPhoto ?? {})}
+                  alt="Report photo"
+                  className="h-auto w-full object-contain"
+                />
+              </button>
+            )}
+            </div>
           </div>
         ) : null}
 
-        <div className="space-y-2.5 p-3.5 pt-3">
+        <div className="px-3.5">
           {post.can_interact === false ? (
-            <div className="flex items-center justify-end">
+            <div className={cn("-mx-3.5 grid grid-cols-1 px-1.5", !isExpanded && "rounded-b-lg")}>
               <button
                 type="button"
-                onClick={() => setExpanded(!isExpanded)}
+                onClick={toggleComments}
                 aria-label={isExpanded ? "Hide comments" : "Show comments"}
                 aria-expanded={isExpanded}
                 className={cn(
-                  "flex shrink-0 items-center gap-1 text-[11px] font-medium transition-colors",
+                  `flex min-h-12 items-center justify-center gap-2 ${footerText} font-semibold transition-colors`,
                   isExpanded
                     ? "text-neutral-800"
                     : "text-neutral-500 hover:text-neutral-800"
                 )}
               >
                 <MessageCircleIcon
-                  className="size-3.5 shrink-0"
+                  className={footerMsgIcon}
                   strokeWidth={2}
                 />
-                <span>
-                  {totalCommentRows > 0
-                    ? `${totalCommentRows} comments`
-                    : "No comments"}
+                <span className="leading-none">
+                  {totalCommentRows > 0 ? commentLabel : "No comments"}
                 </span>
               </button>
             </div>
           ) : (
-            <>
-              {/* With upvotes: avatar stack + count on the left, comment on the
-              right (the shared concern-queue footer pattern). With none: the
-              comment part still sits on the right — matching the feed footer —
-              while the "Upvote" affordance stays pinned to the left edge. */}
-              {post.vote_count > 0 ? (
-                <div className="flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => onVote(post)}
-                    aria-label={
-                      post.user_vote === 1 ? "Remove upvote" : "Upvote"
-                    }
-                    aria-pressed={post.user_vote === 1}
-                    className={cn(
-                      "flex min-w-0 items-center gap-1.5 text-[11px] font-medium transition-colors",
-                      post.user_vote === 1
-                        ? "text-neutral-900"
-                        : "text-neutral-500 hover:text-neutral-800"
-                    )}
-                  >
-                    <>
-                      <span className="flex -space-x-1.5" aria-hidden="true">
-                        {(post.upvoters ?? []).slice(0, 3).map((name, i) => (
-                          <span
-                            key={`${name}-${i}`}
-                            className="flex size-5 items-center justify-center rounded-full bg-slate-soft text-[8px] font-semibold text-navy-muted ring-1 ring-white"
-                          >
-                            {name.trim().charAt(0).toUpperCase()}
-                          </span>
-                        ))}
-                        {post.vote_count -
-                          (post.upvoters ?? []).slice(0, 3).length >
-                        0 ? (
-                          <span className="flex size-5 items-center justify-center rounded-full bg-neutral-100 text-[8px] font-semibold text-neutral-500 ring-1 ring-white">
-                            +
-                            {post.vote_count -
-                              (post.upvoters ?? []).slice(0, 3).length}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="shrink-0">
-                        {post.vote_count}{" "}
-                        {post.vote_count === 1 ? "upvote" : "upvotes"}
-                      </span>
-                    </>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !isExpanded
-                      setExpanded(next)
-                      window.requestAnimationFrame(() => {
-                        if (next)
-                          document.getElementById(commentFieldId)?.focus()
-                      })
-                    }}
-                    aria-label={isExpanded ? "Hide comments" : "Show comments"}
-                    aria-expanded={isExpanded}
-                    className={cn(
-                      "flex shrink-0 items-center gap-1 text-[11px] font-medium transition-colors",
-                      isExpanded
-                        ? "text-neutral-800"
-                        : "text-neutral-500 hover:text-neutral-800"
-                    )}
-                  >
-                    <MessageCircleIcon
-                      className="size-3.5 shrink-0"
-                      strokeWidth={2}
-                    />
-                    <span>
-                      {totalCommentRows > 0
-                        ? `${totalCommentRows} comments`
-                        : "Add a Comment"}
-                    </span>
-                  </button>
-                </div>
-              ) : (
-                <div className="relative flex items-center justify-end">
-                  <button
-                    type="button"
-                    onClick={() => onVote(post)}
-                    aria-label={
-                      post.user_vote === 1 ? "Remove upvote" : "Upvote"
-                    }
-                    aria-pressed={post.user_vote === 1}
-                    className={cn(
-                      "absolute left-0 flex items-center gap-1.5 text-[11px] font-medium transition-colors",
-                      post.user_vote === 1
-                        ? "text-neutral-900"
-                        : "text-neutral-500 hover:text-neutral-800"
-                    )}
-                  >
-                    <CircleArrowUp
-                      className="size-4 shrink-0"
-                      strokeWidth={STROKE}
-                    />
-                    <span className="shrink-0">Upvote</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !isExpanded
-                      setExpanded(next)
-                      window.requestAnimationFrame(() => {
-                        if (next)
-                          document.getElementById(commentFieldId)?.focus()
-                      })
-                    }}
-                    aria-label={isExpanded ? "Hide comments" : "Show comments"}
-                    aria-expanded={isExpanded}
-                    className={cn(
-                      "flex shrink-0 items-center gap-1 text-[11px] font-medium transition-colors",
-                      isExpanded
-                        ? "text-neutral-800"
-                        : "text-neutral-500 hover:text-neutral-800"
-                    )}
-                  >
-                    <MessageCircleIcon
-                      className="size-3.5 shrink-0"
-                      strokeWidth={2}
-                    />
-                    <span>
-                      {totalCommentRows > 0
-                        ? `${totalCommentRows} comments`
-                        : "Add a Comment"}
-                    </span>
-                  </button>
-                </div>
-              )}
-            </>
+            <div className="-mx-3.5 grid grid-cols-2 rounded-b-lg px-1.5">
+              <button
+                type="button"
+                onClick={() => onVote(post)}
+                aria-label={upvoted ? "Remove upvote" : "Upvote"}
+                aria-pressed={upvoted}
+                className={cn(
+                  `flex min-h-12 items-center justify-center gap-2 ${footerText} font-semibold transition-colors`,
+                  upvoted
+                    ? "text-brand-orange"
+                    : "text-neutral-500 hover:text-neutral-800"
+                )}
+              >
+                <CircleArrowUp
+                  className={footerVoteIcon}
+                  strokeWidth={2}
+                />
+                <span className="leading-none">{voteLabel}</span>
+              </button>
+              <button
+                type="button"
+                onClick={toggleComments}
+                aria-label={isExpanded ? "Hide comments" : "Show comments"}
+                aria-expanded={isExpanded}
+                className={cn(
+                  `flex min-h-12 items-center justify-center gap-2 ${footerText} font-semibold transition-colors`,
+                  isExpanded
+                    ? "text-neutral-800"
+                    : "text-neutral-500 hover:text-neutral-800"
+                )}
+              >
+                <MessageCircleIcon
+                  className={footerMsgIcon}
+                  strokeWidth={2}
+                />
+                <span className="leading-none">{commentLabel}</span>
+              </button>
+            </div>
           )}
 
+          <div className={cn(isExpanded && "pt-2.5 pb-3.5")}>
           <PostCommentsBlock
             post={post}
             isExpanded={isExpanded}
@@ -861,6 +793,7 @@ export function FeedPostCard({
             commentFieldId={commentFieldId}
             canInteract={post.can_interact !== false}
           />
+          </div>
         </div>
       </article>
 
@@ -872,8 +805,15 @@ export function FeedPostCard({
 
       {previewMedia ? (
         <MediaLightbox
-          items={[previewMedia]}
-          index={0}
+          items={previewMedia}
+          index={
+            resolved &&
+            resolutionPreviewItems.length > 0 &&
+            reportPhotoItems.length > 0
+              ? reportPhotoItems.length
+              : 0
+          }
+          simpleCounter
           onClose={() => setPreviewMedia(null)}
         />
       ) : null}

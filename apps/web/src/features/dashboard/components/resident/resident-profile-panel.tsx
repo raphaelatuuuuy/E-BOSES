@@ -67,14 +67,10 @@ export function ResidentProfilePanel() {
         <SheetFactRow label="Email" value={user?.email || "Not recorded"} />
         <SheetFactRow label="Phone" value={user?.phone_number || "Not recorded"} />
         <SheetFactRow label="Barangay" value={barangay} />
-        <SheetFactRow
-          label="Account status"
-          value={user?.status === "verified" ? "Verified" : user?.status || "Not recorded"}
-        />
       </SheetList>
 
       <div className="mt-6">
-        <SheetPrimaryButton onClick={() => void signOut().finally(() => navigate("/sign-in"))}>
+        <SheetPrimaryButton tone="accent" onClick={() => void signOut().finally(() => navigate("/sign-in"))}>
           Sign out
         </SheetPrimaryButton>
       </div>

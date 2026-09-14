@@ -1,19 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { CircleCheck, ChevronDownIcon, ChevronUpIcon, PlusIcon, SirenIcon, UsersIcon } from "lucide-react"
-import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
+import { ChevronDownIcon, ChevronUpIcon, PencilIcon, PlusIcon, Trash2Icon, UsersIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
-import {
-  ConfigAlarm,
-  ConfigHeroAction,
-  ConfigShell,
-} from "@/features/dashboard/components/config/config-shell"
-import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
-import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
-import { listEmergencyCategories, type EmergencyCategory } from "@/features/dashboard/emergency-api"
-import { useWheelScroll } from "@/hooks/use-wheel-scroll"
+import { ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
+import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
+import { ConfigurationTable, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
+import { SheetActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 
 interface Unit {
   id: number
@@ -24,8 +18,6 @@ interface Unit {
   emergency_role: string
   sort_order: number
   is_active: boolean
-  responds_to_emergencies: boolean
-  emergency_types: string[]
   contact_number: string
   member_count: number
 }
@@ -47,8 +39,6 @@ function unitSnapshot(value: Draft | null) {
     code: value?.code ?? "",
     short_name: value?.short_name ?? "",
     description: value?.description ?? "",
-    emergency_types: value?.emergency_types ?? [],
-    responds_to_emergencies: value?.responds_to_emergencies ?? false,
     is_active: value?.is_active ?? true,
   })
 }
@@ -59,38 +49,44 @@ function slugify(value: string) {
 
 const FILTERS = [
   { key: "all", label: "Active" },
-  { key: "emergency", label: "Emergency responders" },
   { key: "inactive", label: "Inactive" },
 ]
 
 function EditDialog({
-  open, draft, onChange, onSave, onClose, saving, emergencyCategories, originalDraft,
+  open, draft, onChange, onSave, onClose, saving, originalDraft,
   positions, positionsDirty, onPositionsChange,
 }: {
   open: boolean; draft: Draft; onChange: (next: Draft) => void; onSave: () => void
-  onClose: () => void; saving: boolean; emergencyCategories: EmergencyCategory[]
+  onClose: () => void; saving: boolean
   originalDraft: string | null
   positions: UnitPosition[]; positionsDirty: boolean; onPositionsChange: (next: UnitPosition[]) => void
 }) {
   const isNew = !draft.id
   const dirty = isNew || unitSnapshot(draft) !== originalDraft
   const canSave = dirty || positionsDirty
-  const responds = Boolean(draft.responds_to_emergencies)
-  const types = draft.emergency_types ?? []
-
-  // Strip any stale codes the DB no longer has as active
-  const activeCodes = new Set(emergencyCategories.filter((c) => c.is_active).map((c) => c.code))
-  const validTypes = types.filter((t) => activeCodes.has(t))
-  if (validTypes.length !== types.length) {
-    // silently drop invalid codes from the draft on first render
-    onChange({ ...draft, emergency_types: validTypes })
-  }
 
   const inputCls = "mt-1.5 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
   const labelCls = "text-[13px] font-semibold text-neutral-500"
 
   return (
-    <SheetDialog open={open} onClose={onClose} title={isNew ? "New unit" : `Edit ${draft.name}`} size="wide">
+    <SheetDialog
+      open={open}
+      onClose={onClose}
+      title={isNew ? "New unit" : `Edit ${draft.name}`}
+      size="wide"
+      footer={
+        <SheetActionRow>
+          <SheetSecondaryButton onClick={onClose} disabled={saving}>Cancel</SheetSecondaryButton>
+          <SheetPrimaryButton
+            tone="accent"
+            onClick={onSave}
+            disabled={saving || !draft.name?.trim() || !canSave}
+          >
+            {saving ? "Saving…" : isNew ? "Create unit" : "Save changes"}
+          </SheetPrimaryButton>
+        </SheetActionRow>
+      }
+    >
       <div className="space-y-6">
         {/* Basic info */}
         <div className="space-y-4">
@@ -118,88 +114,9 @@ function EditDialog({
           )}
         </div>
 
-        {/* Emergency dispatch */}
-        <div className="space-y-2">
-          <p className="text-[13px] font-semibold text-neutral-500">Emergency types</p>
-          <EmergencyTypeDropdown
-            categories={emergencyCategories}
-            selected={validTypes}
-            onChange={(types) => onChange({ ...draft, emergency_types: types, responds_to_emergencies: types.length > 0 })}
-          />
-          {validTypes.length > 0 && (
-            <p className="text-[13px] text-neutral-400">This unit will respond to emergencies for the selected types.</p>
-          )}
-          {validTypes.length === 0 && (
-            <p className="text-[13px] text-neutral-400">Leave empty if this unit does not respond to emergencies.</p>
-          )}
-        </div>
       </div>
 
-      <div className="mt-6 space-y-3">
-        <button type="button" onClick={onSave} disabled={saving || !draft.name || (responds && validTypes.length === 0) || !canSave}
-          className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400">
-          {saving ? "Saving\u2026" : isNew ? "Create unit" : "Save changes"}
-        </button>
-        <SheetPrimaryButton onClick={onClose} disabled={saving}>Cancel</SheetPrimaryButton>
-      </div>
     </SheetDialog>
-  )
-}
-
-
-
-function EmergencyTypeDropdown({ categories, selected, onChange }: {
-  categories: EmergencyCategory[]; selected: string[]; onChange: (types: string[]) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [])
-
-  const active = categories.filter((c) => c.is_active)
-  const selectedLabels = selected.map((code) => active.find((c) => c.code === code)?.label).filter(Boolean)
-
-  function toggle(code: string) {
-    onChange(selected.includes(code) ? selected.filter((t) => t !== code) : [...selected, code])
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors hover:border-neutral-400">
-        <span className="flex-1 truncate font-medium">
-          {selectedLabels.length > 0 ? selectedLabels.join(", ") : "Select emergency types"}
-        </span>
-        {open ? <ChevronUpIcon className="size-4 shrink-0 text-neutral-400" /> : <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" />}
-      </button>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={{ maxHeight: '110px', overflowY: 'auto' }}>
-          <div className="py-1">
-            {active.map((category) => {
-              const Icon = resolveIconByKey(category.icon_key) ?? SirenIcon
-              const isSelected = selected.includes(category.code)
-              return (
-                <button key={category.code} type="button"
-                  onClick={() => toggle(category.code)}
-                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[15px] text-neutral-700 transition hover:bg-neutral-50">
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-brand-navy text-white">
-                    <Icon className="size-3.5" strokeWidth={1.7} />
-                  </span>
-                  <span className="flex-1 min-w-0">
-                    <span className="block font-medium text-neutral-900">{category.label}</span>
-                    <span className="block text-[13px] text-neutral-500">{category.subtext || category.code}</span>
-                  </span>
-                  {isSelected && <CircleCheck className="size-4 shrink-0 text-green-600" strokeWidth={2} />}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -345,27 +262,25 @@ function DeleteDialog({ open, unit, onConfirm, onClose, saving }: {
             placeholder={unit.name}
             autoFocus
           />
-          <div className="flex gap-2">
-            <SheetPrimaryButton disabled={saving} onClick={() => { setConfirmName(""); onClose() }} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">Cancel</SheetPrimaryButton>
-            <SheetPrimaryButton tone="danger" disabled={saving || !matches} onClick={onConfirm} className="flex-1 text-[15px]">
+          <SheetActionRow>
+            <SheetSecondaryButton disabled={saving} onClick={() => { setConfirmName(""); onClose() }}>Cancel</SheetSecondaryButton>
+            <SheetPrimaryButton tone="danger" disabled={saving || !matches} onClick={onConfirm}>
               {saving ? "Deleting\u2026" : "Delete"}
             </SheetPrimaryButton>
-          </div>
+          </SheetActionRow>
         </div>
       }
     />
   )
 }
 
-export default function OfficialUnitsPage() {
+export default function OfficialUnitsPage({ embedded = false }: { embedded?: boolean }) {
   const [units, setUnits] = useState<Unit[]>([])
-  const [emergencyCategories, setEmergencyCategories] = useState<EmergencyCategory[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState("all")
   const [search, setSearch] = useState("")
   const [debounced, setDebounced] = useState("")
   const [offset, setOffset] = useState(0)
-  const rangeScrollRef = useWheelScroll<HTMLDivElement>()
   const [editOpen, setEditOpen] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [originalDraft, setOriginalDraft] = useState<string | null>(null)
@@ -383,8 +298,8 @@ export default function OfficialUnitsPage() {
   if (prevKey !== filterKey) { setPrevKey(filterKey); setOffset(0) }
 
   const load = useCallback(() => {
-    Promise.all([apiRequest<Unit[]>("/concerns/admin/departments/"), listEmergencyCategories()])
-      .then(([u, c]) => { setUnits(u); setEmergencyCategories(c) })
+    apiRequest<Unit[]>("/concerns/admin/departments/")
+      .then(setUnits)
       .catch((e) => toast.error(describeApiError(e, "Could not load units.")))
       .finally(() => setLoading(false))
   }, [])
@@ -402,7 +317,7 @@ export default function OfficialUnitsPage() {
 
   function openEdit(unit: Unit | null) {
     const isNew = unit == null
-    setDraft(isNew ? { name: "", code: "", emergency_types: [] } : unit)
+    setDraft(isNew ? { name: "", code: "" } : unit)
     setOriginalDraft(isNew ? null : unitSnapshot(unit))
     setEditPositions([])
     setOriginalPositions(null)
@@ -422,7 +337,15 @@ export default function OfficialUnitsPage() {
     setSaving(true)
     try {
       const isNew = !draft.id
-      const saved = await apiRequest<Unit>(isNew ? "/concerns/admin/departments/" : `/concerns/admin/departments/${draft.id}/`, { method: isNew ? "POST" : "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) })
+      const unitPayload = {
+        name: draft.name?.trim(),
+        code: draft.code || slugify(draft.name || ""),
+        short_name: draft.short_name ?? "",
+        description: draft.description ?? "",
+        contact_number: draft.contact_number ?? "",
+        is_active: draft.is_active ?? true,
+      }
+      const saved = await apiRequest<Unit>(isNew ? "/concerns/admin/departments/" : `/concerns/admin/departments/${draft.id}/`, { method: isNew ? "POST" : "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(unitPayload) })
       if (positionsDirty) {
         const original: { id: number; name: string }[] = originalPositions ? JSON.parse(originalPositions) : []
         const keptIds = new Set(editPositions.filter((p) => p.id != null).map((p) => p.id as number))
@@ -457,6 +380,13 @@ export default function OfficialUnitsPage() {
     } catch (e) { toast.error(describeApiError(e, "Could not save the unit.")) } finally { setSaving(false) }
   }
 
+  useEffect(() => {
+    if (!embedded) return
+    const handle = () => openEdit(null)
+    window.addEventListener("configuration-primary-action", handle)
+    return () => window.removeEventListener("configuration-primary-action", handle)
+  }, [embedded, openEdit])
+
   async function confirmDelete() {
     if (!deleteTarget) return
     setDeleting(true)
@@ -469,64 +399,59 @@ export default function OfficialUnitsPage() {
 
   const query = debounced.toLowerCase()
   const filtered = units.filter((u) => {
-    if (filter === "emergency" && !u.responds_to_emergencies) return false
     if (filter === "inactive" && u.is_active) return false
     if (filter === "all" && !u.is_active) return false
     if (query && !`${u.name} ${u.short_name} ${u.code} ${u.description}`.toLowerCase().includes(query)) return false
     return true
   })
 
-  const page = filtered.slice(offset, offset + PAGE_SIZE)
-  const eLabel = (code: string) => emergencyCategories.find((c) => c.code === code)?.label ?? code
-  const respondingCount = units.filter((u) => u.is_active && u.responds_to_emergencies).length
+  const page = filtered.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
 
   return (
-    <ConfigShell icon={UsersIcon} eyebrow="User management" title="Units"
-      description="Barangay units, desks and committees. A unit marked as an emergency responder receives SOS alerts for the types you choose."
+    <ConfigShell embedded={embedded} hideEmbeddedAction={embedded} icon={UsersIcon} eyebrow="User management" title="Units"
+      description="Add the barangay offices, desks, teams and committees that receive reports."
       stats={[
         { label: "Active units", value: units.filter((u) => u.is_active).length },
-        { label: "Answer emergencies", value: respondingCount, alarm: respondingCount === 0 },
         { label: "Members placed", value: units.reduce((t, u) => t + u.member_count, 0) },
         { label: "Inactive", value: units.filter((u) => !u.is_active).length },
       ]}
       action={<ConfigHeroAction icon={PlusIcon} onClick={() => openEdit(null)}>New unit</ConfigHeroAction>}>
-      {!loading && respondingCount === 0 && <ConfigAlarm>No unit answers emergencies yet. Until one does, an SOS cannot be routed to anyone automatically — open a unit and turn on "Responds to emergencies".</ConfigAlarm>}
-
       <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
-          <ListSearch value={search} onChange={setSearch} placeholder="Search units" label="Search units" className="flex-1 sm:max-w-xs" />
-          <div ref={rangeScrollRef} className="flex items-center gap-6 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {FILTERS.map((item) => {
-              const count = item.key === "all" ? units.filter((u) => u.is_active).length : item.key === "emergency" ? units.filter((u) => u.responds_to_emergencies).length : units.filter((u) => !u.is_active).length
-              return <button key={item.key} type="button" onClick={() => setFilter(item.key)} className={filter === item.key ? "shrink-0 text-read font-medium text-brand-navy" : "shrink-0 text-read text-neutral-400 hover:text-brand-navy"}>{item.label}<span className="ml-1.5 tabular-nums text-neutral-400">{count}</span></button>
-            })}
-          </div>
-        </div>
+        <ConfigurationListToolbar
+          search={search}
+          onSearch={(value) => { setSearch(value); setOffset(0) }}
+          placeholder="Search units"
+          filters={FILTERS.map((item) => ({ key: item.key, label: item.label, count: item.key === "all" ? units.filter((u) => u.is_active).length : units.filter((u) => !u.is_active).length }))}
+          activeFilter={filter}
+          onFilter={(value) => { setFilter(value); setOffset(0) }}
+        />
 
         {loading ? <div className="divide-y divide-neutral-200">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="flex items-center gap-4 px-1 py-5"><span className="h-3 w-32 animate-pulse rounded-full bg-neutral-200" /><span className="h-3 w-20 animate-pulse rounded-full bg-neutral-200" /></div>)}</div>
         : page.length === 0 ? <p className="py-16 text-center text-read text-neutral-500">{query ? "No units match your search." : 'No units here yet. Use "New unit" above to create one.'}</p>
-        : <ol className="divide-y divide-neutral-200">{page.map((unit) => (
-          <li key={unit.id} className="flex items-center gap-4 py-5">
+        : <ConfigurationTable label="Units">{page.map((unit) => (
+          <ConfigurationTableRow key={unit.id} actions={<>
+            <SheetIconButton label={`Edit ${unit.name}`} onClick={() => openEdit(unit)}>
+              <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
+            </SheetIconButton>
+            <SheetIconButton label={`Delete ${unit.name}`} onClick={() => { setDeleteTarget(unit); setDeleteOpen(true) }} className="text-neutral-500 hover:text-sos">
+              <Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden />
+            </SheetIconButton>
+          </>}>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-3">
                 <span className="text-row font-medium text-brand-navy">{unit.name}</span>
                 {unit.short_name && <span className="text-meta text-neutral-400">{unit.short_name}</span>}
                 {!unit.is_active && <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-meta font-medium text-neutral-500">Inactive</span>}
               </div>
               <p className="mt-1 text-meta text-neutral-500">{unit.description || unit.code}{unit.member_count > 0 && <> · {unit.member_count} member{unit.member_count === 1 ? "" : "s"}</>}</p>
-              {unit.responds_to_emergencies && unit.emergency_types.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{unit.emergency_types.map((type) => <span key={type} className="rounded-full bg-neutral-100 px-2 py-0.5 text-meta font-medium text-neutral-600">{eLabel(type)}</span>)}</div>}
             </div>
-            <div className="flex shrink-0 items-center gap-3">
-              <button type="button" onClick={() => openEdit(unit)} className="text-meta text-neutral-500 transition-colors hover:text-accent">Edit</button>
-              <button type="button" onClick={() => { setDeleteTarget(unit); setDeleteOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-sos">Delete</button>
-            </div>
-          </li>
-        ))}</ol>}
+          </ConfigurationTableRow>
+        ))}</ConfigurationTable>}
 
-        {!loading && filtered.length > 0 && <Pager offset={offset} total={filtered.length} onChange={setOffset} noun="units" />}
+        {!loading && filtered.length > 0 && <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="units" />}
       </div>
 
-      {draft && <EditDialog open={editOpen} draft={draft} onChange={setDraft} onSave={() => void save()} onClose={closeEdit} saving={saving} emergencyCategories={emergencyCategories} originalDraft={originalDraft} positions={editPositions} positionsDirty={positionsDirty} onPositionsChange={setEditPositions} />}
+      {draft && <EditDialog open={editOpen} draft={draft} onChange={setDraft} onSave={() => void save()} onClose={closeEdit} saving={saving} originalDraft={originalDraft} positions={editPositions} positionsDirty={positionsDirty} onPositionsChange={setEditPositions} />}
       <DeleteDialog open={deleteOpen} unit={deleteTarget} onConfirm={() => void confirmDelete()} onClose={() => { setDeleteOpen(false); setDeleteTarget(null) }} saving={deleting} />
     </ConfigShell>
   )

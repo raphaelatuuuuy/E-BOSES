@@ -23,8 +23,8 @@ from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.duplicate_detector import report_fingerprints
 from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, parse_gemma_result, payload_from_result
 from apps.concerns.ai_fixtures import gemma_result
-from apps.concerns.classification_api import _photo_verdict_payload
-from apps.concerns.models import Concern, ConcernAiAssessment, ConcernClassificationConfiguration, ConcernMedia, ContentFlag, Department, Designation, LlmDecisionLog, Position
+from apps.concerns.classification_api import _assigned_unit_for_category, _photo_verdict_payload
+from apps.concerns.models import Concern, ConcernAiAssessment, ConcernCategory, ConcernClassificationConfiguration, ConcernMedia, ContentFlag, Department, Designation, LlmDecisionLog, Position
 from apps.concerns.test_helpers import ensure_test_profile, grant_position
 
 
@@ -322,9 +322,27 @@ class ConcernClassificationApiTests(APITestCase):
             "message": "This photo could not be read. An official will review it.",
         }])
 
+    def test_category_default_department_is_a_normal_concern_unit_fallback(self):
+        department = Department.objects.filter(
+            community=self.resident.resident_profile.community,
+            is_active=True,
+        ).first()
+        self.assertIsNotNone(department)
+        category = ConcernCategory.objects.create(
+            community=self.resident.resident_profile.community,
+            name="Default routing fallback",
+            code="default-routing-fallback",
+            department=department,
+        )
+
+        self.assertEqual(
+            _assigned_unit_for_category(category),
+            {"code": department.code, "name": department.name},
+        )
+
     @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
     @patch("apps.concerns.classification_api.classification_payload")
-    def test_resident_precheck_infers_category_and_escalates_without_manual_choice(self, classify, _validate):
+    def test_resident_precheck_keeps_urgent_report_in_the_concern_flow(self, classify, _validate):
         classify.return_value = payload_from_result(
             gemma_result(
                 category="environment",
@@ -355,10 +373,9 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(response.data["category"], "environment")
         self.assertFalse(response.data["category_confirm_required"])
         self.assertEqual(response.data["category_label"], "Environment")
-        self.assertTrue(response.data["auto_escalate"])
-        self.assertEqual(response.data["emergency_type"], "fire")
-        self.assertEqual(response.data["emergency_triage"]["is_emergency"], True)
-        self.assertEqual(response.data["emergency_triage"]["escalation_offered"], True)
+        self.assertNotIn("auto_escalate", response.data)
+        self.assertNotIn("emergency_type", response.data)
+        self.assertNotIn("emergency_triage", response.data)
         self.assertIsNotNone(response.data["resolved_address"])
         self.assertIsNone(response.data["active_duplicate"])
         self.assertIsNone(response.data["resolved_match"])
@@ -392,7 +409,7 @@ class ConcernClassificationApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsNone(response.data["emergency_triage"])
+        self.assertNotIn("emergency_triage", response.data)
 
     @patch("apps.concerns.classification_api.classification_payload")
     def test_resident_precheck_suggests_an_active_duplicate(self, classify):
@@ -659,7 +676,7 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.NOT_CONFIGURED)
         self.assertEqual(assessment.recommended_action, "accept")
         concern.refresh_from_db()
-        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_analyzer_is_called_with_the_report_and_no_detector_evidence(self):
@@ -696,9 +713,9 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertIn("RuntimeError", review["fallback_reason"])
         self.assertEqual(assessment.nlp_validity, "needs_review")
         self.assertEqual(assessment.status, ConcernAiAssessment.Status.FAILED)
-        # A broken model does not discard a real report.
+        # A broken model cannot produce an authoritative category, so routing waits.
         concern.refresh_from_db()
-        self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_suspicious_flag_fires_from_the_result_flag(self):
@@ -706,7 +723,11 @@ class ConcernAiTextProviderPipelineTests(TestCase):
 
         with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
             classifier.return_value.analyze.return_value = replace(
-                gemma_result(relevance="IRRELEVANT", recommended_action="reject_as_irrelevant"),
+                gemma_result(
+                    category=Concern.Category.INFRASTRUCTURE,
+                    relevance="IRRELEVANT",
+                    recommended_action="reject_as_irrelevant",
+                ),
                 is_suspicious=True,
             )
             assessment = process_concern_ai(concern.id)
@@ -719,20 +740,19 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertEqual(concern.rejection_code, "automated_irrelevant")
 
     @override_settings(OLLAMA_API_KEY="test-key")
-    def test_category_mismatch_is_corrected_without_manual_review(self):
+    def test_llm_category_is_used_without_manual_category_review(self):
         concern = self._make_concern(category=Concern.Category.ENVIRONMENT)
 
         with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
             classifier.return_value.analyze.return_value = gemma_result(
                 category=Concern.Category.INFRASTRUCTURE,
-                selected_category_match=False,
                 recommended_action="accept",
             )
             assessment = process_concern_ai(concern.id)
 
-        self.assertFalse(assessment.category_match)
-        self.assertTrue(assessment.flagged)
-        self.assertIn("category_mismatch", [reason["reason"] for reason in assessment.flag_reasons])
+        self.assertTrue(assessment.category_match)
+        self.assertFalse(assessment.flagged)
+        self.assertNotIn("category_mismatch", [reason["reason"] for reason in assessment.flag_reasons])
         self.assertEqual(assessment.recommended_action, "accept")
         self.assertNotEqual(assessment.recommended_action, "reject_as_irrelevant")
         concern.refresh_from_db()
@@ -824,6 +844,45 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         street_check.assert_called_once()
 
     @override_settings(OLLAMA_API_KEY="test-key")
+    def test_every_attached_photo_must_support_the_report(self):
+        concern = self._make_concern()
+        for name in ("reported-issue.png", "unrelated-photo.png"):
+            media = png_upload(name)
+            ConcernMedia.objects.create(
+                concern=concern,
+                file=media,
+                original_filename=media.name,
+                mime_type="image/png",
+                file_size=media.size,
+            )
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+                evidence_relationship="supports_report",
+                image_review_succeeded=True,
+                photo_verdicts=[
+                    {
+                        "index": 0,
+                        "relevance": "supports_report",
+                        "note": "The first photo shows the reported issue.",
+                    },
+                    {
+                        "index": 1,
+                        "relevance": "neutral",
+                        "note": "The second photo shows an unrelated scene.",
+                    },
+                ],
+                recommended_action="accept",
+            )
+            assessment = process_concern_ai(concern.pk)
+
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
+        self.assertEqual(concern.rejection_code, "automated_photo_unsupported")
+        self.assertEqual(assessment.recommended_action, "request_more_information")
+
+    @override_settings(OLLAMA_API_KEY="test-key")
     @patch("apps.concerns.ai.pipeline._street_imagery_check")
     def test_inconclusive_street_context_requests_a_wider_photo(self, street_check):
         """A close-up cannot silently enter the queue when resubmission is configured."""
@@ -867,7 +926,7 @@ class ConcernAiTextProviderPipelineTests(TestCase):
 class GemmaParserTests(TestCase):
     VALID_JSON = (
         '{"relevance":"VALID","primary_category":"vehicle","possible_categories":["public_safety"],'
-        '"selected_category_match":true,"detected_objects":["vehicle","residential gate"],'
+        '"detected_objects":["vehicle","residential gate"],'
         '"text_assessment":"A vehicle is blocking a driveway.",'
         '"photo_assessment":"The photo shows a car in front of a gate.",'
         '"evidence_relationship":"supports_report","missing_information":[],"urgent_attention":false,'
@@ -1001,10 +1060,9 @@ class GemmaParserTests(TestCase):
 
         self.assertEqual(result.details["recommended_action"], "escalate_as_emergency")
 
-    def test_payload_marks_a_category_mismatch_as_needs_review(self):
-        content = self.VALID_JSON.replace('"selected_category_match":true', '"selected_category_match":false')
+    def test_payload_uses_the_llm_category_without_a_selection_mismatch(self):
         result = parse_gemma_result(
-            content,
+            self.VALID_JSON,
             model_version="gemma4:cloud",
             selected_category="public_safety",
             image_attached=True,
@@ -1013,8 +1071,8 @@ class GemmaParserTests(TestCase):
 
         payload = payload_from_result(result, selected_category="public_safety")
 
-        self.assertFalse(payload["category_match"])
-        self.assertEqual(payload["outcome"], "needs_review")
+        self.assertTrue(payload["category_match"])
+        self.assertEqual(payload["outcome"], "related")
 
 
 from apps.concerns.ai.community_moderation_analyzer import FAIL_OPEN_RESULT

@@ -30,9 +30,8 @@ CATEGORIES = (
     ("accounts", "Accounts", ("account.", "profile.", "admin.")),
     ("signin", "Sign-in", ("auth.", "password_reset.")),
     ("idchecks", "ID checks", ("ocr.",)),
-    ("concerns", "Concerns", ("concern.", "emergency.", "responder.")),
-    ("content", "Community content", ("announcement.", "event.", "content.")),
-    ("settings", "Configuration", ("settings.", "map_dispatch_policy.")),
+    ("concerns", "Concerns", ("concern.", "emergency.", "responder.", "content.")),
+    ("announcements", "Community Announcements", ("announcement.", "event.")),
 )
 
 # Plain sentences. Anything not listed falls back to a humanised action code,
@@ -64,6 +63,9 @@ ACTION_LABELS = {
     "ocr.template_sample_uploaded": "Uploaded a sample ID photo",
     "ocr.template_restored": "Restored a proof type",
     "ocr.test_run_created": "Ran an ID reading test",
+    "ocr.verification_accepted": "Accepted an ID check",
+    "ocr.verification_rejected": "Rejected an ID check",
+    "ocr.verification_review_required": "Held an ID check for review",
     "ocr.health_recheck": "Rechecked the ID reading service",
     "ocr.case_retry_requested": "Asked a resident to upload again",
     "concern.chat_message": "Sent a message on a report",
@@ -74,6 +76,8 @@ ACTION_LABELS = {
     "concern.appeal_submitted": "Appealed a report decision",
     "concern.appeal_reviewed": "Reviewed a report appeal",
     "content.flag_submitted": "Flagged something for review",
+    "content.flag_reviewed": "Reviewed flagged content",
+    "content.flag_auto_reviewed": "Automated review completed",
     "emergency.created": "Raised an emergency",
     "emergency.sms_created": "Raised an emergency by text message",
     "emergency.assigned": "Assigned an emergency to a unit",
@@ -93,7 +97,6 @@ ACTION_LABELS = {
     "event.created": "Added a calendar event",
     "event.updated": "Edited a calendar event",
     "event.deleted": "Deleted a calendar event",
-    "map_dispatch_policy.updated": "Changed the zones and radius",
 }
 
 # Actions worth noticing in a list of thousands. Not an alarm — a marker that

@@ -1,17 +1,32 @@
 import { useEffect, useState } from "react"
 
-import { getOfficialDashboardSummary } from "@/features/dashboard/api"
+import {
+  getOfficialDashboardSummary,
+  type OfficialOverviewReport,
+  type OfficialRoleSummary,
+} from "@/features/dashboard/api"
 
 /**
  * Pending-work counts for the staff rail, keyed by nav item key.
  *
  * Every reference dashboard we modelled the rail on carries counts directly on
  * the nav item, so an official can see where the work is without opening each
- * screen. Refreshes on the same window events the overview listens to, so it
- * costs one request per sign-in plus one per realtime change — no polling.
+ * screen. Refreshes on the same window events the overview listens to, with a
+ * low-frequency fallback for changes made from another browser tab or device.
  */
-export function useOfficialBadges(enabled: boolean): Record<string, number> {
+export interface OfficialBadgeState {
+  badges: Record<string, number>
+  criticalReport: OfficialOverviewReport | null
+  communityCenter: OfficialRoleSummary["community_center"]
+}
+
+export function useOfficialBadges(
+  enabled: boolean,
+  unitId?: number | null,
+): OfficialBadgeState {
   const [badges, setBadges] = useState<Record<string, number>>({})
+  const [criticalReport, setCriticalReport] = useState<OfficialOverviewReport | null>(null)
+  const [communityCenter, setCommunityCenter] = useState<OfficialRoleSummary["community_center"]>(null)
 
   useEffect(() => {
     if (!enabled) return
@@ -19,7 +34,7 @@ export function useOfficialBadges(enabled: boolean): Record<string, number> {
 
     async function load() {
       try {
-        const summary = await getOfficialDashboardSummary()
+        const summary = await getOfficialDashboardSummary(unitId)
         if (cancelled) return
         setBadges({
           concerns: summary.open_reports,
@@ -28,6 +43,8 @@ export function useOfficialBadges(enabled: boolean): Record<string, number> {
           configuration:
             summary.pending_resident_verifications + summary.pending_account_requests,
         })
+        setCriticalReport(summary.critical_report ?? null)
+        setCommunityCenter(summary.community_center ?? null)
       } catch {
         // Badges are decoration — a failure must never break navigation.
       }
@@ -39,15 +56,19 @@ export function useOfficialBadges(enabled: boolean): Record<string, number> {
 
     void load()
     window.addEventListener("eboses:notification-created", refresh)
+    window.addEventListener("eboses:report-created", refresh)
     window.addEventListener("eboses:concern-updated", refresh)
     window.addEventListener("eboses:emergency-updated", refresh)
+    const interval = window.setInterval(refresh, 30000)
     return () => {
       cancelled = true
+      window.clearInterval(interval)
       window.removeEventListener("eboses:notification-created", refresh)
+      window.removeEventListener("eboses:report-created", refresh)
       window.removeEventListener("eboses:concern-updated", refresh)
       window.removeEventListener("eboses:emergency-updated", refresh)
     }
-  }, [enabled])
+  }, [enabled, unitId])
 
-  return badges
+  return { badges, criticalReport, communityCenter }
 }

@@ -27,7 +27,17 @@ class ConcernSeverityTests(APITestCase):
             status=User.Status.VERIFIED,
         )
 
-    def _concern(self, *, category="others", estimate=None, urgent=False, relevance=None, votes=0):
+    def _concern(
+        self,
+        *,
+        category="others",
+        estimate=None,
+        urgent=False,
+        relevance=None,
+        current_danger=False,
+        incident_timing="unclear",
+        votes=0,
+    ):
         concern = Concern.objects.create(
             reporter=self.reporter,
             title="Test concern",
@@ -41,6 +51,12 @@ class ConcernSeverityTests(APITestCase):
                 severity_estimate=estimate,
                 urgent_attention=urgent,
                 nlp_confidence=relevance,
+                raw_result={
+                    "review": {
+                        "current_danger": current_danger,
+                        "incident_timing": incident_timing,
+                    }
+                },
             )
             concern.refresh_from_db()
         concern.vote_count = votes
@@ -52,11 +68,30 @@ class ConcernSeverityTests(APITestCase):
             self.assertEqual(severity_label(concern), expected, f"severity {estimate}")
 
     def test_urgent_attention_reaches_the_critical_band(self):
-        # `critical` is reserved for possible immediate danger, so the top band
-        # cannot be reached just by the model picking the highest of three
-        # ordinary severity levels.
         concern = self._concern(estimate="low", urgent=True)
         self.assertEqual(severity_label(concern), "critical")
+
+    def test_active_high_risk_reaches_critical_without_urgent_emergency_flag(self):
+        concern = self._concern(
+            estimate="high",
+            current_danger=True,
+            incident_timing="ongoing",
+        )
+        self.assertEqual(severity_label(concern), "critical")
+
+    def test_ended_or_non_dangerous_high_risk_stays_high(self):
+        ended = self._concern(
+            estimate="high",
+            current_danger=True,
+            incident_timing="ended",
+        )
+        quiet = self._concern(
+            estimate="high",
+            current_danger=False,
+            incident_timing="ongoing",
+        )
+        self.assertEqual(severity_label(ended), "high")
+        self.assertEqual(severity_label(quiet), "high")
 
     def test_category_baseline_applies_only_until_the_model_scores(self):
         unassessed = self._concern(category="public_safety")

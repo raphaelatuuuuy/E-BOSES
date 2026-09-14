@@ -1,4 +1,9 @@
-import { LeafIcon, SearchIcon, ShieldCheckIcon, TrafficConeIcon } from "lucide-react"
+import {
+  LeafIcon,
+  SearchIcon,
+  ShieldCheckIcon,
+  TrafficConeIcon,
+} from "lucide-react"
 
 import type {
   ConcernCategory,
@@ -11,7 +16,13 @@ import { useMinWidth } from "@/features/dashboard/lib/shell"
 
 export { useMinWidth }
 
-export const filters = ["All", "Active", "Resolved", "Rejected", "Appealed"] as const
+export const filters = [
+  "All",
+  "Active",
+  "Resolved",
+  "Rejected",
+  "Appealed",
+] as const
 
 export const activeStatuses: ConcernStatus[] = [...ACTIVE_CONCERN_STATUSES]
 
@@ -25,7 +36,11 @@ export function concernCategoryLabel(concern: {
   category: string
   category_ref?: { name: string } | null
 }): string {
-  return concern.category_ref?.name ?? categoryLabels[concern.category as ConcernCategory] ?? concern.category
+  return (
+    concern.category_ref?.name ??
+    categoryLabels[concern.category as ConcernCategory] ??
+    concern.category
+  )
 }
 
 export const categoryLabels: Record<ConcernCategory, string> = {
@@ -35,11 +50,34 @@ export const categoryLabels: Record<ConcernCategory, string> = {
   others: "Others",
 }
 
-export const categoryStyles: Record<ConcernCategory, { icon: typeof TrafficConeIcon; bg: string; text: string; sub: string }> = {
-  infrastructure: { icon: TrafficConeIcon, bg: "bg-tint", text: "text-brand-blue", sub: "Roads & utilities" },
-  environment: { icon: LeafIcon, bg: "bg-tint", text: "text-brand-blue", sub: "Garbage Collection" },
-  public_safety: { icon: ShieldCheckIcon, bg: "bg-brand-orange-soft", text: "text-accent", sub: "Safety & response" },
-  others: { icon: SearchIcon, bg: "bg-tint", text: "text-brand-blue", sub: "General concern" },
+export const categoryStyles: Record<
+  ConcernCategory,
+  { icon: typeof TrafficConeIcon; bg: string; text: string; sub: string }
+> = {
+  infrastructure: {
+    icon: TrafficConeIcon,
+    bg: "bg-tint",
+    text: "text-brand-blue",
+    sub: "Roads & utilities",
+  },
+  environment: {
+    icon: LeafIcon,
+    bg: "bg-tint",
+    text: "text-brand-blue",
+    sub: "Garbage Collection",
+  },
+  public_safety: {
+    icon: ShieldCheckIcon,
+    bg: "bg-brand-orange-soft",
+    text: "text-accent",
+    sub: "Safety & response",
+  },
+  others: {
+    icon: SearchIcon,
+    bg: "bg-tint",
+    text: "text-brand-blue",
+    sub: "General concern",
+  },
 }
 
 export function statusGroup(status: ConcernStatus): (typeof filters)[number] {
@@ -51,21 +89,29 @@ export function statusGroup(status: ConcernStatus): (typeof filters)[number] {
 }
 
 export function unitShortTag(
-  unit: { short_name?: string; code?: string; name?: string } | null | undefined,
+  unit: { short_name?: string; code?: string; name?: string } | null | undefined
 ): string {
   if (!unit) return ""
   const raw = (unit.short_name || unit.code || unit.name || "").trim()
   if (!raw) return ""
   const paren = raw.match(/\(([^)]+)\)/)
-  if (paren) return paren[1].replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()
+  if (paren)
+    return paren[1]
+      .replace(/[^A-Za-z0-9]/g, "")
+      .slice(0, 6)
+      .toUpperCase()
   if (/[^A-Za-z0-9]/.test(raw)) {
     const words = raw.split(/\s+/).filter(Boolean)
     if (words.length > 1 && words.length <= 5) {
       const letters = words.map((word) => word[0]).join("")
-      if (letters.length >= 2 && letters.length <= 5) return letters.toUpperCase()
+      if (letters.length >= 2 && letters.length <= 5)
+        return letters.toUpperCase()
     }
   }
-  return raw.replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()
+  return raw
+    .replace(/[^A-Za-z0-9]/g, "")
+    .slice(0, 6)
+    .toUpperCase()
 }
 
 export function formatDate(value: string) {
@@ -73,6 +119,13 @@ export function formatDate(value: string) {
     month: "short",
     day: "numeric",
     year: "numeric",
+  }).format(new Date(value))
+}
+
+export function formatTime(value: string) {
+  return new Intl.DateTimeFormat("en", {
+    hour: "numeric",
+    minute: "2-digit",
   }).format(new Date(value))
 }
 
@@ -103,7 +156,6 @@ export function truncateDescription(text: string, max = 72): string {
 const flagReasonLabels: Record<string, string> = {
   suspicious_text: "suspicious text",
   irrelevant_text: "irrelevant text",
-  category_mismatch: "category mismatch",
   possible_duplicate: "possible duplicate",
 }
 

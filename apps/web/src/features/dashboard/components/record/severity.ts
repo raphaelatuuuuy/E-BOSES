@@ -21,7 +21,12 @@
 export type Severity = "low" | "moderate" | "high" | "critical"
 
 /** Ordered low → critical. Index doubles as the numeric level (0..3). */
-export const SEVERITY_ORDER: readonly Severity[] = ["low", "moderate", "high", "critical"]
+export const SEVERITY_ORDER: readonly Severity[] = [
+  "low",
+  "moderate",
+  "high",
+  "critical",
+]
 
 export const SEVERITY_LABEL: Record<Severity, string> = {
   critical: "Critical",
@@ -35,7 +40,10 @@ export function severityLevel(severity: Severity): number {
 }
 
 function clampToSeverity(level: number): Severity {
-  const bounded = Math.max(0, Math.min(SEVERITY_ORDER.length - 1, Math.round(level)))
+  const bounded = Math.max(
+    0,
+    Math.min(SEVERITY_ORDER.length - 1, Math.round(level))
+  )
   return SEVERITY_ORDER[bounded]
 }
 
@@ -50,9 +58,9 @@ const CONCERN_CATEGORY_BASELINE: Record<string, number> = {
 }
 
 /**
- * Gemma reports three levels; the queue shows four. `critical` is reserved for
- * urgentAttention, so the top band means "someone may be in danger right now"
- * rather than "the model picked the highest of three options".
+ * Gemma reports three levels; the queue shows four. The top Concern band is
+ * reserved for an explicit urgent flag or a high-severity situation that is
+ * both dangerous and ongoing, rather than every `high` estimate.
  *
  * Mirrors SEVERITY_ESTIMATE_LEVEL in apps/api/apps/concerns/severity.py.
  */
@@ -75,6 +83,9 @@ export interface ConcernSeverityInput {
   severityEstimate?: string | null
   /** True when the review flagged possible immediate danger. Reaches `critical`. */
   urgentAttention?: boolean | null
+  /** Structured review signal for an active high-risk Concern. */
+  currentDanger?: boolean | null
+  incidentTiming?: string | null
   /** NLP relevance, 0..1. */
   relevance?: number | null
   /** Configured relevance threshold; below it the report reads as off-topic. */
@@ -88,7 +99,9 @@ export interface SeverityResult {
   assessed: boolean
 }
 
-export function deriveConcernSeverity(input: ConcernSeverityInput): SeverityResult {
+export function deriveConcernSeverity(
+  input: ConcernSeverityInput
+): SeverityResult {
   const baseline = CONCERN_CATEGORY_BASELINE[input.category ?? "others"] ?? 0
   const estimate = (input.severityEstimate ?? "").toLowerCase()
 
@@ -96,7 +109,12 @@ export function deriveConcernSeverity(input: ConcernSeverityInput): SeverityResu
     return { severity: clampToSeverity(baseline), assessed: false }
   }
 
-  if (input.urgentAttention) {
+  const activeHighRisk =
+    estimate === "high" &&
+    input.currentDanger === true &&
+    input.incidentTiming === "ongoing"
+
+  if (input.urgentAttention || activeHighRisk) {
     return { severity: clampToSeverity(3), assessed: true }
   }
 
@@ -138,7 +156,9 @@ export interface EmergencySeverityInput {
   witnessCount?: number | null
 }
 
-export function deriveEmergencySeverity(input: EmergencySeverityInput): SeverityResult {
+export function deriveEmergencySeverity(
+  input: EmergencySeverityInput
+): SeverityResult {
   const type = input.type ?? "other"
   let level = EMERGENCY_TYPE_BASELINE[type] ?? 0
 
@@ -174,9 +194,16 @@ const SUPPORT_SATURATION_VOTES = 25
 
 /** 0..100, used for ordering *within* a severity band. */
 export function derivePriority(input: PriorityInput): number {
-  const severityNorm = severityLevel(input.severity) / (SEVERITY_ORDER.length - 1)
-  const ageNorm = Math.min(Math.max(input.hoursSinceStatusChange ?? 0, 0) / AGE_SATURATION_HOURS, 1)
-  const supportNorm = Math.min(Math.max(input.voteCount ?? 0, 0) / SUPPORT_SATURATION_VOTES, 1)
+  const severityNorm =
+    severityLevel(input.severity) / (SEVERITY_ORDER.length - 1)
+  const ageNorm = Math.min(
+    Math.max(input.hoursSinceStatusChange ?? 0, 0) / AGE_SATURATION_HOURS,
+    1
+  )
+  const supportNorm = Math.min(
+    Math.max(input.voteCount ?? 0, 0) / SUPPORT_SATURATION_VOTES,
+    1
+  )
 
   return Math.round(60 * severityNorm + 25 * ageNorm + 15 * supportNorm)
 }
@@ -195,7 +222,9 @@ export interface SortableRecord {
  * no amount of community support or waiting can promote a record past a more
  * severe one — which a single blended score cannot promise.
  */
-export function sortRecords<T extends SortableRecord>(records: readonly T[]): T[] {
+export function sortRecords<T extends SortableRecord>(
+  records: readonly T[]
+): T[] {
   return [...records].sort((a, b) => {
     const bandDelta = severityLevel(b.severity) - severityLevel(a.severity)
     if (bandDelta !== 0) return bandDelta
@@ -228,7 +257,8 @@ export interface PriorityExplanationInput {
 
 export function priorityReasons(input: PriorityExplanationInput): string[] {
   const reasons: string[] = []
-  if (input.urgentAttention) reasons.push("the report describes immediate danger")
+  if (input.urgentAttention)
+    reasons.push("the report describes immediate danger")
   if (input.severity === "critical" || input.severity === "high") {
     reasons.push(`the assessed impact is ${input.severity}`)
   }
@@ -237,12 +267,16 @@ export function priorityReasons(input: PriorityExplanationInput): string[] {
   }
   const days = Math.floor((input.hoursSinceStatusChange ?? 0) / 24)
   if (days >= 3) reasons.push(`it has been waiting ${days} days`)
-  if ((input.voteCount ?? 0) >= 5) reasons.push(`${input.voteCount} neighbours supported it`)
+  if ((input.voteCount ?? 0) >= 5)
+    reasons.push(`${input.voteCount} neighbours supported it`)
   if (reasons.length === 0) reasons.push("no urgent factors were found")
   return reasons
 }
 
-export function priorityExplanation(band: PriorityBand, input: PriorityExplanationInput): string {
+export function priorityExplanation(
+  band: PriorityBand,
+  input: PriorityExplanationInput
+): string {
   const reasons = priorityReasons(input)
   const joined =
     reasons.length === 1

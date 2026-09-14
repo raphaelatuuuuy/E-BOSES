@@ -179,7 +179,7 @@ function hintFor(tool: Tool, draftLength: number): string {
   return ""
 }
 
-export default function OfficialCoverageAreaPage() {
+export default function OfficialCoverageAreaPage({ embedded = false }: { embedded?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -956,6 +956,13 @@ export default function OfficialCoverageAreaPage() {
     }
   }
 
+  useEffect(() => {
+    if (!embedded) return
+    const handle = () => void save()
+    window.addEventListener("configuration-primary-action", handle)
+    return () => window.removeEventListener("configuration-primary-action", handle)
+  }, [embedded, save])
+
   const hint = hintFor(tool, draft.length)
   const tools: Array<{
     id: Exclude<Tool, null>
@@ -970,6 +977,8 @@ export default function OfficialCoverageAreaPage() {
 
   return (
     <ConfigShell
+      embedded={embedded}
+      hideEmbeddedAction={embedded}
       icon={MapIcon}
       eyebrow="Operations"
       title="Coverage area"

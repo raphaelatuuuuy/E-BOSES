@@ -148,7 +148,7 @@ export default function ResponderShiftPage() {
                   <li key={alert.id}>
                     <button
                       type="button"
-                      onClick={() => navigate(`/dashboard/responders/dispatch?alert=${alert.id}`)}
+                      onClick={() => navigate(`/dashboard/reports?alert=${alert.id}`)}
                       className="w-full px-5 py-4 text-left transition-colors hover:bg-card-raised"
                     >
                       <div className="flex items-baseline justify-between gap-3">

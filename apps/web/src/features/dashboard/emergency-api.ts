@@ -18,6 +18,17 @@ function normalizeCoordinate(value: number | null | undefined) {
 export type EmergencyType = string
 export type EmergencyCategoryCode = string
 
+export interface EmergencyQuickQuestionChoice {
+  value: string
+  label: string
+}
+
+export interface EmergencyQuickQuestion {
+  key: string
+  question: string
+  choices: EmergencyQuickQuestionChoice[]
+}
+
 export interface EmergencyCategory {
   id: number
   code: EmergencyCategoryCode
@@ -31,6 +42,7 @@ export interface EmergencyCategory {
   sort_order: number
   is_active: boolean
   visible_to_residents: boolean
+  quick_questions: EmergencyQuickQuestion[]
   created_at: string
   updated_at: string
 }
@@ -220,8 +232,9 @@ export interface EmergencyRouteStep {
 
 export interface EmergencyRoute {
   alert_id: number
-  assignment_id: number
-  responder_id: number
+  assignment_id: number | null
+  responder_id: number | null
+  preview?: boolean
   status: "ok" | "stale" | "unavailable"
   profile: TravelProfile
   distance_meters: number | null
@@ -422,10 +435,11 @@ export interface ResponderShift {
   updated_at: string
 }
 
-export function createEmergency(formData: FormData) {
+export function createEmergency(formData: FormData, signal?: AbortSignal) {
   return alertRequest("/emergencies/", {
     method: "POST",
     body: formData,
+    signal,
   })
 }
 
@@ -555,16 +569,21 @@ export function getEmergency(id: number) {
 }
 
 /** Official repair action: replay the alert's persisted lifecycle to participants. */
-export function replayEmergencyNotifications(id: number, recipientIds?: number[]) {
-  return apiRequest<{ events: number; created: number; queued: number; skipped: number }>(
-    `/emergencies/${id}/notifications/replay/`,
-    {
-      method: "POST",
-      body: JSON.stringify(
-        recipientIds?.length ? { recipient_ids: recipientIds } : {}
-      ),
-    }
-  )
+export function replayEmergencyNotifications(
+  id: number,
+  recipientIds?: number[]
+) {
+  return apiRequest<{
+    events: number
+    created: number
+    queued: number
+    skipped: number
+  }>(`/emergencies/${id}/notifications/replay/`, {
+    method: "POST",
+    body: JSON.stringify(
+      recipientIds?.length ? { recipient_ids: recipientIds } : {}
+    ),
+  })
 }
 
 /**
@@ -574,11 +593,26 @@ export function replayEmergencyNotifications(id: number, recipientIds?: number[]
  */
 export function getEmergencyRoute(
   id: number,
-  { steps = false, refresh = false } = {}
+  {
+    steps = false,
+    refresh = false,
+    origin = null,
+    profile = null,
+  }: {
+    steps?: boolean
+    refresh?: boolean
+    origin?: { latitude: number; longitude: number } | null
+    profile?: TravelProfile | null
+  } = {}
 ) {
   const query = new URLSearchParams()
   if (steps) query.set("steps", "1")
   if (refresh) query.set("refresh", "1")
+  if (origin) {
+    query.set("origin_lat", String(origin.latitude))
+    query.set("origin_lng", String(origin.longitude))
+  }
+  if (profile) query.set("profile", profile)
   const suffix = query.toString()
   return apiRequest<EmergencyRoute>(
     `/emergencies/${id}/route/${suffix ? `?${suffix}` : ""}`

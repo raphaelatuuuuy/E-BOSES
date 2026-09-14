@@ -13,7 +13,7 @@ export const MAP_COLORS = {
   responderOffDuty: "#5d6785",
   resident: "#64748b",
   official: "#7c3aed",
-  resolved: "#6b7280",
+  resolved: "#2f9e78",
   you: "#0a0a0a",
 } as const
 

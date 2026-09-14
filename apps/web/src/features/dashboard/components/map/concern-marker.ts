@@ -16,7 +16,11 @@ export function isResolvedStatus(status: string) {
 }
 
 export function escapeHtml(text: string) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
 }
 
 /**
@@ -30,37 +34,52 @@ export function concernMarkerHtml({
   imageUrl,
   customLabel,
   status,
+  severity,
   selected,
   tone = "light",
   hoverGrow = false,
+  tint,
 }: {
   category: string
   iconKey?: string
   imageUrl?: string
   customLabel?: string
   status: string
+  severity?: string | null
   selected: boolean
   tone?: MarkerTone
   hoverGrow?: boolean
+  tint?: boolean
 }) {
   const resolved = isResolvedStatus(status)
+  const critical = (severity ?? "").toLowerCase() === "critical"
   const box = selected ? Math.round(BASE_SIZE * 1.3) : BASE_SIZE
   let content: string | undefined
-  if (imageUrl) {
+  // A critical report has one unambiguous visual language on every map:
+  // red pin plus the triangle alert glyph. Category artwork must not replace it.
+  if (!critical && !resolved && imageUrl) {
     content = `<img src="${escapeHtml(imageUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:9999px" />`
-  } else if (customLabel?.trim()) {
+  } else if (!critical && !resolved && customLabel?.trim()) {
     const short = escapeHtml(customLabel.trim().slice(0, 2).toUpperCase())
     content = `<span style="font-size:${Math.round(box * 0.42)}px;font-weight:700;line-height:1">${short}</span>`
   }
-  const paths = (iconKey ? lucideIconPaths(iconKey) : null) ?? concernGlyph(category)
+  const paths = critical
+    ? concernGlyph("emergency")
+    : resolved
+      ? (lucideIconPaths("check") ?? concernGlyph(category))
+      : ((iconKey ? lucideIconPaths(iconKey) : null) ?? concernGlyph(category))
   return glyphPinHtml({
     paths,
     content,
-    color: resolved ? MAP_COLORS.resolved : MAP_COLORS.concern,
+    color: critical
+      ? MAP_COLORS.emergency
+      : resolved
+        ? MAP_COLORS.resolved
+        : MAP_COLORS.concern,
     size: BASE_SIZE,
     selected,
     tone,
-    tint: resolved,
+    tint: tint ?? (critical || resolved),
     idleNeutral: false,
     hoverGrow,
   })

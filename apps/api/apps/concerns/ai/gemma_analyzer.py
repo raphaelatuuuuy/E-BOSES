@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict
 
 from django.conf import settings
+from django.db.models import Q
 
 from apps.concerns.models import Concern, ConcernCategory
 from apps.concerns.notification_subject import normalise_notification_subject
@@ -157,8 +158,10 @@ def configured_concern_categories(config) -> list[dict]:
     """
     category_queryset = ConcernCategory.objects.filter(is_active=True)
     if getattr(config, "community_id", None):
-        category_queryset = category_queryset.filter(community_id=config.community_id)
-    categories = list(category_queryset.order_by("name"))
+        category_queryset = category_queryset.filter(
+            Q(community_id=config.community_id) | Q(community__isnull=True)
+        )
+    categories = list(category_queryset.order_by("community_id", "name"))
     enabled = set(getattr(config, "enabled_categories", None) or [])
     labels = dict(Concern.Category.choices)
     if categories:
@@ -254,7 +257,6 @@ def empty_details() -> dict:
         "relevance": "UNCLEAR",
         "primary_category": "",
         "possible_categories": [],
-        "selected_category_match": None,
         "detected_objects": [],
         "report_title": "",
         "notification_subject": "",
@@ -550,7 +552,6 @@ def build_prompt(
     payload = {
         "configured_concern_categories": configured_concern_categories(configuration),
         "configured_emergency_types": configured_emergency_types(configuration),
-        "resident_selected_category": selected_category,
         "resident_title": title,
         "resident_description": description,
         "attached_image_available": image_attached,
@@ -610,14 +611,16 @@ def build_prompt(
         "relevance contradicts_report, recommended_action must be request_more_information. "
         "Never accept a report when the photo contradicts the description, even if the selected "
         "category or reported area matches.\n"
-        "10b. When one or more photos are attached and successfully reviewed, at least one "
+        "10b. When one or more photos are attached and successfully reviewed, every "
         "photo_verdicts item must have relevance supports_report before recommended_action can be "
         "accept. A photo that merely shows the general location, road, or surroundings does not "
-        "support a claimed defect unless that defect is actually visible. If every photo is neutral "
-        "or unclear, use request_more_information.\n"
-        "10. A category mismatch is corrected automatically. Never use reject_as_irrelevant for a "
-        "category mismatch on its own.\n"
-        "11. Decide severity in this order: first write severity_reason, then pick the severity that "
+        "support a claimed defect unless that defect is actually visible. If any photo is neutral, "
+        "unclear, or contradicts the report, use request_more_information.\n"
+        "11. Choose the single best primary_category from the configured concern categories using "
+        "the report and image. This category is authoritative and will be used for routing. Do not "
+        "compare it with a resident-selected category. Never use reject_as_irrelevant only because "
+        "of category choice.\n"
+        "12. Decide severity in this order: first write severity_reason, then pick the severity that "
         "reason actually supports. Judge the real risk to people from the description AND the photo "
         "together — read scale from the image: how deep, how wide, how close to where people walk, "
         "whether anything is already broken or exposed.\n"
@@ -634,16 +637,30 @@ def build_prompt(
         "risk of injury. These two must never disagree: if your reason says nobody is in physical "
         "danger, severity is not high; if your reason names someone who could be hurt today, "
         "severity is not low.\n"
-        "11a. severity_reason is one sentence naming the specific thing in the description or image "
-        "that set that severity — what is damaged, blocked, or at risk, and who it affects. Never "
-        "restate the level itself. Good: 'An open drainage hole about a metre wide sits in the "
-        "pedestrian lane with no cover.' Bad: 'The severity is high.', 'This is a serious issue.'\n"
-        "11b. report_title is a short official heading for the barangay queue: at most 10 words, no "
-        "ending period, naming the issue and where it is. Write it in English even when the report is "
-        "in Filipino or Taglish. State only what the report and image support, never a cause or blame. "
-        "Good: 'Stray dogs gathering outside the day-care on Dao Street'. "
-        "Bad: 'Urgent!!! ang daming askal!!!', 'Negligent owners letting dogs roam'.\n"
-        "11c. notification_subject is the short subject shown in a resident notification: exactly one, "
+         "11a. severity_reason is one sentence naming the specific thing in the description or image "
+         "that set that severity — what is damaged, blocked, or at risk, and who it affects. Never "
+         "restate the level itself. Good: 'An open drainage hole about a metre wide sits in the "
+         "pedestrian lane with no cover.' Bad: 'The severity is high.', 'This is a serious issue.' "
+         "When urgent_attention is true, or when severity is high with current danger and ongoing timing "
+         "(the conditions the system uses for Critical), describe the human risk naturally and say who "
+         "could be hurt. Use wording such as 'People at the scene could be hurt by the collision' when "
+         "supported by the report. Do not use the generic phrase 'risk of injury' for a Critical report, "
+         "and do not claim that anyone is already injured unless the report says so.\n"
+         "11b. report_title is a short official heading for the barangay queue: at most 10 words, no "
+         "ending period, naming the issue and where it is. Write it in English even when the report is "
+         "in Filipino or Taglish. State only what the report and image support, never a cause or blame. "
+         "Good: 'Stray dogs gathering outside the day-care on Dao Street'. "
+         "Bad: 'Urgent!!! ang daming askal!!!', 'Negligent owners letting dogs roam'.\n"
+         "11c. text_assessment is the concise, plain-English summary shown to residents and staff. "
+         "Write one or two natural sentences explaining what the report is about. When urgent_attention "
+         "is true, or when severity is high with current danger and ongoing timing, the system displays "
+         "the report as Critical, so describe the immediate human risk in "
+         "context rather than copying a priority label or appending a canned sentence. For example, "
+         "write 'The report describes a vehicle collision that just happened near Ayala Malls, where "
+         "someone could be hurt.' Do not use the generic phrase 'risk of injury' for an urgent report. "
+         "Keep the summary grounded in the resident description and image; do not invent that anyone is "
+         "already injured.\n"
+         "11d. notification_subject is the short subject shown in a resident notification: exactly one, "
         "two, or three words only. It must name the concrete issue, not the category, location, report "
         "status, urgency, or a generic phrase. Write it in clear English, without punctuation, quotes, "
         "a sentence, or an explanation. Prefer specific phrases such as 'Roadside Pothole', "
@@ -713,7 +730,7 @@ def build_prompt(
         f"{unreadable_rule}\n"
         "Example of a good short_explanation: \"The description reports accumulated garbage near the "
         "roadside, and the photo appears to show waste materials in the same area, which supports the "
-        "selected Environment category.\"\n\n"
+        "the Environment category.\"\n\n"
         "Another: \"The description reports a drainage problem, but the photo mainly shows a parked "
         "vehicle and a residential gate, so the image does not confirm the reported issue.\"\n\n"
         f"Payload:\n{json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -722,7 +739,6 @@ def build_prompt(
         '  "relevance": null,\n'
         '  "primary_category": null,\n'
         '  "possible_categories": [],\n'
-        '  "selected_category_match": null,\n'
         '  "detected_objects": [],\n'
         '  "report_title": null,\n'
         '  "notification_subject": null,\n'
@@ -862,10 +878,6 @@ def parse_gemma_result(
         privacy_required = False
         suspected = []
 
-    selected_match = data.get("selected_category_match")
-    if not isinstance(selected_match, bool):
-        selected_match = (primary == selected_category) if primary else None
-
     uncertain = bool(data.get("ai_result_uncertain")) or image_review_succeeded is False
 
     allowed_emergency_types = {item["key"] for item in configured_emergency_types(configuration)}
@@ -923,7 +935,6 @@ def parse_gemma_result(
         "relevance": relevance,
         "primary_category": primary,
         "possible_categories": possible,
-        "selected_category_match": selected_match,
         "detected_objects": detected_objects,
         "report_title": _clean_text(data.get("report_title"))[:140],
         "notification_subject": normalise_notification_subject(data.get("notification_subject")),
@@ -987,25 +998,26 @@ def _resolve_relationship(value, *, image_attached: bool, image_review_succeeded
 
 
 def payload_from_result(result: TextClassificationResult, *, selected_category: str) -> dict:
-    """Flat payload for the configuration screen's sample tester and the resident precheck."""
+    """Flat payload for the configuration screen's sample tester and resident precheck.
+
+    Category ownership belongs to the model now. ``selected_category`` remains
+    in the function signature for old callers, but it is not used to decide
+    whether the report is valid.
+    """
     details = result.details or {}
-    if details.get("selected_category_match") is not None:
-        category_match = bool(details.get("selected_category_match"))
-    else:
-        category_match = bool(result.category) and result.category == selected_category
+    category_match = bool(result.category)
 
     if details.get("ai_result_uncertain"):
         outcome = "needs_review"
     elif details.get("relevance") == "IRRELEVANT":
         outcome = "irrelevant"
-    elif not result.category or not category_match:
+    elif not result.category:
         outcome = "needs_review"
     else:
         outcome = "related"
 
     return {
         **asdict(result),
-        "selected_category": selected_category,
         "category_match": category_match,
         "outcome": outcome,
         "action": details.get("recommended_action") or "accept",

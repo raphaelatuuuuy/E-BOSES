@@ -1,5 +1,3 @@
-import { CheckIcon } from "lucide-react"
-
 import { cn } from "@workspace/ui/lib/utils"
 import type { EmergencyType } from "@/features/dashboard/emergency-api"
 import {
@@ -20,12 +18,12 @@ export function SosTypeStep({
   options?: SosEmergencyOption[]
 }) {
   return (
-    <div className="space-y-3">
+    <div className="flex min-h-full flex-col space-y-3">
       <p className="text-[14px] leading-6 text-white/70">
         Pick the closest match. Barangay responders will verify before
         dispatch.
       </p>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-2">
         {options.map((item) => {
           const selected = value === item.value
           const Icon = item.icon
@@ -36,34 +34,24 @@ export function SosTypeStep({
               aria-pressed={selected}
               onClick={() => onSelect(item.value)}
               className={cn(
-                "relative flex items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-colors",
+                "relative flex flex-col items-center justify-center gap-2.5 rounded-2xl border px-3 py-4 text-center transition-all",
                 selected
-                  ? "border-brand-orange bg-brand-orange/15 ring-1 ring-brand-orange/40"
+                  ? "border-transparent bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] shadow-[0_12px_32px_rgba(242,84,27,0.5)]"
                   : "border-white/15 bg-white/5 hover:bg-white/10"
               )}
             >
-              {selected ? (
-                <span
-                  aria-hidden="true"
-                  className="absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-brand-orange text-white shadow-md"
-                >
-                  <CheckIcon className="size-3.5" strokeWidth={3} />
-                </span>
-              ) : null}
               {item.iconImageUrl ? (
-                <img src={item.iconImageUrl} alt="" className="size-12 shrink-0 rounded-lg object-cover" />
+                <img src={item.iconImageUrl} alt="" className="size-14 shrink-0 rounded-xl object-cover" />
               ) : item.customIconLabel ? (
-                <span className={cn("flex size-12 shrink-0 items-center justify-center rounded-lg text-sm font-semibold", SOS_ICON_WELL)}>{item.customIconLabel}</span>
+                <span className={cn("flex size-14 shrink-0 items-center justify-center rounded-xl text-base font-semibold", selected ? "bg-white/20 text-white" : SOS_ICON_WELL)}>{item.customIconLabel}</span>
               ) : (
                 <Icon
-                  className={cn("size-12 shrink-0 rounded-lg p-2.5", SOS_ICON_WELL)}
-                  strokeWidth={2}
+                  className={selected ? "size-[46px] shrink-0 text-white" : cn("size-14 shrink-0 rounded-xl p-3", SOS_ICON_WELL)}
+                  strokeWidth={selected ? 2.2 : 2}
                 />
               )}
-              <span className="min-w-0">
-                <span className="block text-[15px] leading-snug font-semibold text-white line-clamp-2">
-                  {item.label}
-                </span>
+              <span className="block text-[16px] leading-snug font-semibold text-white line-clamp-2">
+                {item.label}
               </span>
             </button>
           )

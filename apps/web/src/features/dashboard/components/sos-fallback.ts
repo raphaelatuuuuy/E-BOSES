@@ -1,3 +1,5 @@
+import type { EmergencyQuickQuestion } from "@/features/dashboard/emergency-api"
+
 const SMS_RECIPIENT_PATTERN = /^\+?\d{7,15}$/
 
 const DB_NAME = "eboses-sos"
@@ -45,6 +47,7 @@ export interface SosTriageAnswers {
   peopleAffected?: "one" | "few" | "many" | "unknown"
   injuries?: "yes" | "no" | "unknown"
   detail?: string
+  [key: string]: string | undefined
 }
 
 const PEOPLE_CLAUSE: Record<string, string> = {
@@ -81,15 +84,23 @@ const DETAIL_CLAUSE: Record<string, string> = {
 /** Wizard answers -> the snake_case shape the API and parser store. */
 export function toServerTriage(triage: SosTriageAnswers) {
   const out: Record<string, string> = {}
-  if (triage.peopleAffected) out.people_affected = triage.peopleAffected
-  if (triage.injuries) out.injuries = triage.injuries
-  if (triage.detail) out.detail = triage.detail === "animal_contained" ? "contained" : triage.detail
+  for (const [key, value] of Object.entries(triage)) {
+    if (!value) continue
+    const normalizedKey = key === "peopleAffected" ? "people_affected" : key
+    out[normalizedKey] =
+      normalizedKey === "detail" && value === "animal_contained"
+        ? "contained"
+        : value
+  }
   return out
 }
 
 /** Short plain-language recap for the review screen. */
-export function describeTriage(triage: SosTriageAnswers): string {
-  const parts = triageClauses(triage)
+export function describeTriage(
+  triage: SosTriageAnswers,
+  questions: EmergencyQuickQuestion[] = []
+): string {
+  const parts = triageClauses(triage, questions)
   if (!parts.length) return ""
   const [first, ...rest] = parts
   return [first!.charAt(0).toUpperCase() + first!.slice(1), ...rest].join(", ")
@@ -107,13 +118,34 @@ function article(word: string) {
   return /^[aeiou]/i.test(word) ? "an" : "a"
 }
 
-function triageClauses(triage?: SosTriageAnswers): string[] {
+function triageClauses(
+  triage?: SosTriageAnswers,
+  questions: EmergencyQuickQuestion[] = []
+): string[] {
   if (!triage) return []
-  return [
-    triage.peopleAffected ? PEOPLE_CLAUSE[triage.peopleAffected] : "",
+  const knownKeys = new Set([
+    "peopleAffected",
+    "people_affected",
+    "detail",
+    "injuries",
+  ])
+  const known = [
+    triage.peopleAffected || triage.people_affected
+      ? PEOPLE_CLAUSE[triage.peopleAffected || triage.people_affected!]
+      : "",
     triage.detail ? DETAIL_CLAUSE[triage.detail] : "",
     triage.injuries ? INJURY_CLAUSE[triage.injuries] : "",
   ].filter(Boolean) as string[]
+  const configured = questions
+    .filter((question) => !knownKeys.has(question.key))
+    .map((question) => {
+      const answer = triage[question.key]
+      if (!answer) return ""
+      const choice = question.choices.find((item) => item.value === answer)
+      return `${question.question.toLowerCase()} ${choice?.label ?? answer}`
+    })
+    .filter(Boolean)
+  return [...known, ...configured]
 }
 
 /**
@@ -133,11 +165,13 @@ export function buildEmergencySmsMessage(payload: {
   latitude?: number | null
   longitude?: number | null
   triage?: SosTriageAnswers
+  questions?: EmergencyQuickQuestion[]
   note?: string
 }) {
   const category = categoryNoun(payload.emergencyType)
   const rawArea = (payload.readableArea ?? "").trim()
-  const area = rawArea.length > 160 ? `${rawArea.slice(0, 157).trimEnd()}…` : rawArea
+  const area =
+    rawArea.length > 160 ? `${rawArea.slice(0, 157).trimEnd()}…` : rawArea
   const hasCoordinates =
     typeof payload.latitude === "number" &&
     typeof payload.longitude === "number" &&
@@ -160,10 +194,13 @@ export function buildEmergencySmsMessage(payload: {
     return lines.join("\n")
   }
 
-  const complete = compose(triageClauses(payload.triage), true)
+  const complete = compose(
+    triageClauses(payload.triage, payload.questions),
+    true
+  )
   return complete.length <= 153 * 3
     ? complete
-    : compose(triageClauses(payload.triage), false)
+    : compose(triageClauses(payload.triage, payload.questions), false)
 }
 
 function openSosDb(): Promise<IDBDatabase> {
@@ -175,20 +212,26 @@ function openSosDb(): Promise<IDBDatabase> {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
     request.onupgradeneeded = () => {
       const db = request.result
-      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME, { keyPath: "id" })
+      if (!db.objectStoreNames.contains(STORE_NAME))
+        db.createObjectStore(STORE_NAME, { keyPath: "id" })
     }
     request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error ?? new Error("Could not open SOS queue."))
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not open SOS queue."))
   })
 }
 
-async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+async function withStore<T>(
+  mode: IDBTransactionMode,
+  run: (store: IDBObjectStore) => IDBRequest<T>
+): Promise<T> {
   const db = await openSosDb()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, mode)
     const request = run(tx.objectStore(STORE_NAME))
     request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error ?? new Error("SOS queue failed."))
+    request.onerror = () =>
+      reject(request.error ?? new Error("SOS queue failed."))
     tx.oncomplete = () => db.close()
     tx.onerror = () => {
       db.close()
@@ -199,9 +242,10 @@ async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStor
 
 export async function enqueueSosEmergency(payload: QueuedSosPayload) {
   const existing = await listQueuedSosEmergencies()
-  for (const item of existing.slice(0, Math.max(0, existing.length - 2))) await deleteQueuedSosEmergency(item.id)
+  for (const item of existing.slice(0, Math.max(0, existing.length - 2)))
+    await deleteQueuedSosEmergency(item.id)
   await withStore("readwrite", (store) =>
-    store.put({ ...payload, retryCount: payload.retryCount ?? 0 }),
+    store.put({ ...payload, retryCount: payload.retryCount ?? 0 })
   )
 }
 
@@ -210,7 +254,10 @@ export function listQueuedSosEmergencies() {
 }
 
 export function deleteQueuedSosEmergency(id: string) {
-  return withStore<undefined>("readwrite", (store) => store.delete(id) as IDBRequest<undefined>)
+  return withStore<undefined>(
+    "readwrite",
+    (store) => store.delete(id) as IDBRequest<undefined>
+  )
 }
 
 export function buildPinnedCoordinateAddress(_lat: number, _lng: number) {

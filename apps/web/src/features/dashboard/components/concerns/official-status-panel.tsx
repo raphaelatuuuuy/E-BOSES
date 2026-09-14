@@ -762,10 +762,14 @@ export function OfficialStatusPanelWithDraft({
   report,
   onUpdated,
   onRefresh,
+  variant = "panel",
+  onDismiss,
 }: {
   report: Concern
   onUpdated: (report: Concern) => void
   onRefresh?: () => Promise<void>
+  variant?: "panel" | "dialog"
+  onDismiss?: () => void
 }) {
   const draft = useDecisionDraft(report)
   return (
@@ -774,6 +778,8 @@ export function OfficialStatusPanelWithDraft({
       draft={draft}
       onUpdated={onUpdated}
       onRefresh={onRefresh}
+      variant={variant}
+      onDismiss={onDismiss}
     />
   )
 }

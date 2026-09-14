@@ -41,7 +41,9 @@ export function filterResidentReports(reports: Concern[], filter: string) {
   if (filter === "All") return reports
   if (filter === "Active") {
     return reports.filter(
-      (report) => !isResolvedRecord(report) && !["rejected", "appealed"].includes(report.status)
+      (report) =>
+        !isResolvedRecord(report) &&
+        !["rejected", "appealed"].includes(report.status)
     )
   }
   if (filter === "Resolved") {
@@ -101,7 +103,6 @@ export function ResidentReportsWorkspace({
   onSelect,
   onBack,
   onRefresh,
-  onPublish,
   onLoadMore,
   loadingMore,
   canLoadMore,
@@ -117,7 +118,6 @@ export function ResidentReportsWorkspace({
   onSelect: (report: Concern) => void
   onBack: () => void
   onRefresh: () => Promise<void>
-  onPublish: (report: Concern) => Promise<Concern>
   onLoadMore: () => void
   loadingMore: boolean
   canLoadMore: boolean
@@ -163,7 +163,8 @@ export function ResidentReportsWorkspace({
   const hasExplicitSelection = Boolean(selected)
   const current = selected ?? initialDetail ?? ranked[0]?.concern ?? null
   const closedCase = current
-    ? isResolvedRecord(current) || ["rejected", "appealed"].includes(current.status)
+    ? isResolvedRecord(current) ||
+      ["rejected", "appealed"].includes(current.status)
     : false
   const isOwnReport = current ? user?.id === current.reporter?.id : false
   const canFileAppeal = Boolean(
@@ -240,7 +241,7 @@ export function ResidentReportsWorkspace({
 
   const queuePane = (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="scrollbar-hide flex min-h-0 flex-1 flex-col gap-3 px-4 pt-4 pb-4 lg:overflow-y-auto lg:overscroll-contain max-lg:overflow-visible max-lg:overscroll-auto">
+      <div className="scrollbar-hide flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pt-4 pb-4">
         {error ? (
           <p className="rounded-[16px] border border-severity-critical/40 bg-severity-critical-surface px-3 py-2 text-label text-severity-critical-ink">
             {error}
@@ -297,11 +298,7 @@ export function ResidentReportsWorkspace({
       <div className="min-h-0 flex-1 px-0 pt-0 pb-0 lg:px-4 lg:pt-3 lg:pb-4">
         {current ? (
           <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent lg:rounded-[24px] lg:bg-white lg:ring-1 lg:ring-neutral-200">
-            <ReportDetailHeader
-              report={current}
-              audience="resident"
-              onPublish={onPublish}
-            />
+            <ReportDetailHeader report={current} audience="resident" />
 
             <div className="min-h-0 flex-1 px-0 pt-3 pb-0 lg:px-4 lg:pb-4">
               <ReportChatPanel
@@ -311,7 +308,7 @@ export function ResidentReportsWorkspace({
                 showHistory
                 plain
                 disabled={closedCase}
-                emptyMessage="Message the barangay team about this report — questions, extra photos, or access details stay here."
+                emptyMessage="Ask for updates, questions, extra photos, or access details here."
                 appeals={current.appeals ?? []}
                 canFileAppeal={canFileAppeal}
                 onAppealsChanged={onRefresh}
@@ -445,7 +442,6 @@ export function ResidentReportsWorkspace({
           report={current}
           onBack={onBack}
           onRefresh={onRefresh}
-          onPublish={onPublish}
         />
       ) : null}
     </>

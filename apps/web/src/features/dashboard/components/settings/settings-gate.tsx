@@ -3,9 +3,10 @@
 import { useState } from "react"
 
 import { useAuthSession } from "@/features/auth/auth-session"
-import { isOfficialUser } from "@/features/auth/roles"
+import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { OfficialSettingsDialog } from "@/features/dashboard/components/official/official-account-dialogs"
 import { ResidentSettingsDialog } from "@/features/dashboard/components/resident/resident-account-dialogs"
+import { ResponderSettingsDialog } from "@/features/dashboard/components/responder/account-dialogs"
 import { useSettingsPopGate } from "@/features/dashboard/components/settings/settings-event"
 
 export function SettingsPopGate() {
@@ -18,6 +19,9 @@ export function SettingsPopGate() {
   }
   if (user?.role === "resident") {
     return <ResidentSettingsDialog open onOpenChange={setOpen} />
+  }
+  if (isResponderUser(user)) {
+    return <ResponderSettingsDialog open onOpenChange={setOpen} />
   }
   return null
 }

@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal, InvalidOperation
 
 from rest_framework import serializers
@@ -98,6 +99,7 @@ class EmergencyCategorySerializer(serializers.ModelSerializer):
             "sort_order",
             "is_active",
             "visible_to_residents",
+            "quick_questions",
             "created_at",
             "updated_at",
         )
@@ -133,6 +135,62 @@ class EmergencyCategorySerializer(serializers.ModelSerializer):
 
     def validate_icon_image(self, value):
         return validate_icon_image_file(value)
+
+    def validate_quick_questions(self, value):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError("Quick questions must be valid JSON.") from exc
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Quick questions must be a list.")
+        if len(value) > 12:
+            raise serializers.ValidationError("Use no more than 12 quick questions.")
+
+        normalized = []
+        question_keys = set()
+        for question in value:
+            if not isinstance(question, dict):
+                raise serializers.ValidationError("Each quick question must be an object.")
+            key = str(question.get("key") or "").strip().lower()
+            prompt = str(question.get("question") or "").strip()
+            choices = question.get("choices")
+            if not key or not all(char.isalnum() or char == "_" for char in key):
+                raise serializers.ValidationError(
+                    "Question keys may contain lowercase letters, numbers, and underscores only."
+                )
+            if key in question_keys:
+                raise serializers.ValidationError("Question keys must be unique.")
+            if not prompt or len(prompt) > 200:
+                raise serializers.ValidationError("Each question needs text up to 200 characters.")
+            if not isinstance(choices, list) or not choices or len(choices) > 12:
+                raise serializers.ValidationError("Each question needs 1 to 12 choices.")
+
+            choice_values = set()
+            normalized_choices = []
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    raise serializers.ValidationError("Each answer choice must be an object.")
+                choice_value = str(choice.get("value") or "").strip().lower()
+                choice_label = str(choice.get("label") or "").strip()
+                if not choice_value or not all(
+                    char.isalnum() or char in {"_", "-"} for char in choice_value
+                ):
+                    raise serializers.ValidationError(
+                        "Choice values may contain lowercase letters, numbers, underscores, and hyphens only."
+                    )
+                if choice_value in choice_values:
+                    raise serializers.ValidationError("Choice values must be unique per question.")
+                if not choice_label or len(choice_label) > 120:
+                    raise serializers.ValidationError("Each answer choice needs text up to 120 characters.")
+                choice_values.add(choice_value)
+                normalized_choices.append({"value": choice_value, "label": choice_label})
+
+            question_keys.add(key)
+            normalized.append({"key": key, "question": prompt, "choices": normalized_choices})
+        return normalized
 
 
 class MapDispatchPolicySerializer(serializers.ModelSerializer):
@@ -286,6 +344,7 @@ def emergency_category_is_covered(code, community=None):
         is_active=True,
         department__isnull=False,
         department__is_active=True,
+        department__responds_to_emergencies=True,
     )
     if community is not None:
         queryset = queryset.filter(community=community, department__community=community)

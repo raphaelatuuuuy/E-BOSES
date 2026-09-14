@@ -27,6 +27,7 @@ import {
 } from "@/features/dashboard/api"
 import { geoJsonToLines } from "@/features/dashboard/components/alerts-map/lib"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import { announcementTitle } from "@/features/dashboard/lib/announcement-summary"
 import { advisoryMeta, advisoryMarkerHtml } from "./advisory-tags"
 import {
   emptyArea,
@@ -542,7 +543,7 @@ export function AreaPicker({
             interactive: false,
           },
         })
-          .bindTooltip(announcement.title, tooltip)
+          .bindTooltip(announcementTitle(announcement), tooltip)
           .addTo(layer)
         continue
       }
@@ -563,7 +564,7 @@ export function AreaPicker({
         lineJoin: "round",
         interactive: false,
       })
-        .bindTooltip(announcement.title, tooltip)
+        .bindTooltip(announcementTitle(announcement), tooltip)
         .addTo(layer)
     }
 

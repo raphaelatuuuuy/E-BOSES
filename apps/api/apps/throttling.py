@@ -38,6 +38,11 @@ class LocalCacheRateThrottle(SimpleRateThrottle):
         self.cache = caches["throttling"]
         super().__init__()
 
+    def allow_request(self, request, view):
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+            return True
+        return super().allow_request(request, view)
+
 
 class LocalAnonRateThrottle(LocalCacheRateThrottle, AnonRateThrottle):
     pass

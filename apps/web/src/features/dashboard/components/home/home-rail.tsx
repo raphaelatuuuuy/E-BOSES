@@ -5,7 +5,12 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import type { BarangayEvent } from "@/features/dashboard/api"
 import { EventCalendar } from "@/features/dashboard/components/home/event-calendar"
-import { BARANGAY, FS, RAIL_CHEVRON } from "@/features/dashboard/components/home/home-style"
+import { LiveDot } from "@/features/dashboard/components/home/live-dot"
+import {
+  BARANGAY,
+  FS,
+  RAIL_CHEVRON,
+} from "@/features/dashboard/components/home/home-style"
 
 /**
  * Right-rail cards for the resident Home feed (desktop only — hidden <1024
@@ -18,6 +23,7 @@ import { BARANGAY, FS, RAIL_CHEVRON } from "@/features/dashboard/components/home
  */
 export function HomeRail({
   hasOngoingAlerts,
+  hasCriticalReports,
   barangayActiveEmergencies,
   railMapSrc,
   streetLabel,
@@ -25,6 +31,7 @@ export function HomeRail({
   onCreateReport,
 }: {
   hasOngoingAlerts: boolean
+  hasCriticalReports: boolean
   barangayActiveEmergencies: number
   railMapSrc: string
   streetLabel: string | null
@@ -38,46 +45,50 @@ export function HomeRail({
           to="/dashboard/alerts-map"
           className="flex min-w-0 items-center gap-3 px-3.5 py-3 no-underline transition-colors hover:bg-neutral-50"
         >
-          <span
-            className="rail-live-dot"
-            title={hasOngoingAlerts ? "Ongoing alerts in your barangay" : "Live in your barangay"}
-            aria-hidden
-          >
-            <span className="rail-live-dot__map">
-              <img src={railMapSrc} alt="" loading="lazy" decoding="async" />
-            </span>
-            <span className="rail-live-dot__status-wrap">
-              <span
-                className={cn(
-                  "rail-live-dot__ring",
-                  hasOngoingAlerts && "rail-live-dot__ring--alert",
-                )}
-              />
-              <span
-                className={cn(
-                  "rail-live-dot__ring rail-live-dot__ring--delay",
-                  hasOngoingAlerts && "rail-live-dot__ring--alert",
-                )}
-              />
-              <span
-                className={cn(
-                  "rail-live-dot__status",
-                  hasOngoingAlerts && "rail-live-dot__status--alert",
-                )}
-              />
-            </span>
-          </span>
+          <LiveDot
+            src={railMapSrc}
+            alert={hasOngoingAlerts || hasCriticalReports}
+            label={
+              hasOngoingAlerts
+                ? "Ongoing alerts in your barangay"
+                : hasCriticalReports
+                  ? "Critical reports in your barangay"
+                  : "Live in your barangay"
+            }
+            title={
+              hasOngoingAlerts
+                ? "Ongoing alerts in your barangay"
+                : hasCriticalReports
+                  ? "Critical reports in your barangay"
+                  : "Live in your barangay"
+            }
+          />
           <div className="min-w-0 flex-1">
-            <p className={cn("truncate font-semibold leading-snug text-neutral-900", FS.railTitle)}>
+            <p
+              className={cn(
+                "truncate leading-snug font-semibold text-neutral-900",
+                FS.railTitle
+              )}
+            >
               {BARANGAY}
             </p>
             {hasOngoingAlerts ? (
-              <p className={cn("mt-0.5 truncate font-semibold leading-snug text-sos", FS.meta)}>
+              <p
+                className={cn(
+                  "mt-0.5 truncate leading-snug font-semibold text-sos",
+                  FS.meta
+                )}
+              >
                 {barangayActiveEmergencies} ongoing alert
                 {barangayActiveEmergencies === 1 ? "" : "s"}
               </p>
             ) : streetLabel ? (
-              <p className={cn("mt-0.5 truncate font-normal leading-snug text-neutral-500", FS.meta)}>
+              <p
+                className={cn(
+                  "mt-0.5 truncate leading-snug font-normal text-neutral-500",
+                  FS.meta
+                )}
+              >
                 {streetLabel}
               </p>
             ) : null}
@@ -90,12 +101,17 @@ export function HomeRail({
             hasOngoingAlerts
               ? "text-sos hover:bg-sos/10 hover:text-sos"
               : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-700",
-            FS.railLink,
+            FS.railLink
           )}
         >
-          <span>{hasOngoingAlerts ? "See all ongoing alerts" : "See all alerts"}</span>
+          <span>
+            {hasOngoingAlerts ? "See all ongoing alerts" : "See all alerts"}
+          </span>
           <ChevronRightIcon
-            className={cn(RAIL_CHEVRON, hasOngoingAlerts ? "text-sos" : "text-neutral-500")}
+            className={cn(
+              RAIL_CHEVRON,
+              hasOngoingAlerts ? "text-sos" : "text-neutral-500"
+            )}
             strokeWidth={2}
           />
         </Link>
@@ -117,8 +133,11 @@ export function HomeRail({
           <p className={cn("font-bold text-neutral-900", FS.railTitle)}>
             Report a local concern
           </p>
-          <p className={cn("mt-1 leading-relaxed text-neutral-600", FS.railBody)}>
-            Share issues with neighbors and barangay officials so they can take action.
+          <p
+            className={cn("mt-1 leading-relaxed text-neutral-600", FS.railBody)}
+          >
+            Share issues with neighbors and barangay officials so they can take
+            action.
           </p>
         </div>
         <button
@@ -126,11 +145,14 @@ export function HomeRail({
           onClick={onCreateReport}
           className={cn(
             "flex w-full items-center justify-between border-t border-neutral-300 px-3.5 py-2.5 text-left font-semibold text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700",
-            FS.railLink,
+            FS.railLink
           )}
         >
           <span>Create a report</span>
-          <ChevronRightIcon className={cn(RAIL_CHEVRON, "text-neutral-500")} strokeWidth={2} />
+          <ChevronRightIcon
+            className={cn(RAIL_CHEVRON, "text-neutral-500")}
+            strokeWidth={2}
+          />
         </button>
       </div>
     </aside>

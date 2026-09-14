@@ -14,7 +14,6 @@ import {
   MAP_COLORS as BASE_MAP_COLORS,
   personDotHtml,
 } from "@/features/dashboard/components/map/markers"
-import type { MapLegendRow } from "@/features/dashboard/components/map/map-legend"
 
 export type LayerKey =
   | "boundary"
@@ -33,32 +32,6 @@ export const defaultLayers: Record<LayerKey, boolean> = {
   concerns: true,
   advisories: true,
   acceptance_zone: false,
-}
-
-export type AlertLayerCounts = {
-  concerns: number
-  advisories: number
-}
-
-export function alertLayerRows(
-  counts: AlertLayerCounts
-): MapLegendRow<LayerKey>[] {
-  return [
-    {
-      key: "concerns",
-      label: "Concerns",
-      hint: "Community reports by residents",
-      count: counts.concerns,
-      tone: OFFICIAL_MAP_COLORS.concern,
-    },
-    {
-      key: "advisories",
-      label: "Advisory areas",
-      hint: "Streets a barangay advisory covers",
-      count: counts.advisories,
-      tone: OFFICIAL_MAP_COLORS.advisory,
-    },
-  ]
 }
 
 /**
@@ -154,7 +127,8 @@ export function isAdvisoryExpired(
   if (advisory.status_label === "expired") return true
   if (!advisory.expires_at) return false
   const ts = Date.parse(advisory.expires_at)
-  const now = typeof nowMs === "number" && Number.isFinite(nowMs) ? nowMs : Date.now()
+  const now =
+    typeof nowMs === "number" && Number.isFinite(nowMs) ? nowMs : Date.now()
   return Number.isFinite(ts) && ts < now
 }
 
@@ -163,7 +137,7 @@ export function advisoryDoneColor(
   tagColor: string,
   nowMs?: number | null
 ) {
-  return isAdvisoryExpired(advisory, nowMs) ? BASE_MAP_COLORS.resolved : tagColor
+  return isAdvisoryExpired(advisory, nowMs) ? "#6b7280" : tagColor
 }
 
 export function isActiveEmergency(emergency: { status: string }) {
@@ -228,6 +202,49 @@ export function geoJsonToLines(
   return []
 }
 
+export function joinLineRuns(
+  runs: leaflet.LatLngTuple[][],
+  tolerance = 1e-7
+): leaflet.LatLngTuple[][] {
+  const chains: leaflet.LatLngTuple[][] = []
+  const close = (a: leaflet.LatLngTuple, b: leaflet.LatLngTuple) =>
+    Math.abs(a[0] - b[0]) <= tolerance && Math.abs(a[1] - b[1]) <= tolerance
+  for (const run of runs) {
+    if (run.length < 2) continue
+    const head = run[0]
+    const tail = run[run.length - 1]
+    if (!head || !tail) continue
+    let placed = false
+    for (const chain of chains) {
+      const first = chain[0]
+      const last = chain[chain.length - 1]
+      if (!first || !last) continue
+      if (close(last, head)) {
+        chain.push(...run.slice(1))
+        placed = true
+        break
+      }
+      if (close(last, tail)) {
+        chain.push(...[...run].reverse().slice(1))
+        placed = true
+        break
+      }
+      if (close(first, head)) {
+        chain.unshift(...[...run].reverse().slice(0, -1))
+        placed = true
+        break
+      }
+      if (close(first, tail)) {
+        chain.unshift(...run.slice(0, -1))
+        placed = true
+        break
+      }
+    }
+    if (!placed) chains.push([...run])
+  }
+  return chains
+}
+
 export { MAP_COLORS } from "@/features/dashboard/components/map/markers"
 
 export const OFFICIAL_MAP_COLORS = {
@@ -237,7 +254,7 @@ export const OFFICIAL_MAP_COLORS = {
   responder: "#2563eb",
   responderAssigned: "#4dc4ff",
   official: "#334155",
-  resolved: "#6b7280",
+  resolved: BASE_MAP_COLORS.resolved,
 } as const
 
 export function markerDotHtml(color: string, pulse = false) {

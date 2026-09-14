@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useEffect, useRef } from "react"
 import { IdCardLanyard, Plus } from "lucide-react"
 
 import OcrTemplateBuilderPage from "@/features/ocr/ocr-template-builder-page"
@@ -17,12 +17,21 @@ import {
  * check a place nothing else pointed at. What remains here is configuration —
  * which proof types the barangay accepts and how each one is read.
  */
-export default function OfficialIdProofWorkspacePage() {
+export default function OfficialIdProofWorkspacePage({ embedded = false }: { embedded?: boolean }) {
   usePageTitle("ID & proof setup")
   const ocrRef = useRef<{ startAddProofType: () => void }>(null)
 
+  useEffect(() => {
+    if (!embedded) return
+    const handle = () => ocrRef.current?.startAddProofType()
+    window.addEventListener("configuration-primary-action", handle)
+    return () => window.removeEventListener("configuration-primary-action", handle)
+  }, [embedded])
+
   return (
     <ConfigShell
+      embedded={embedded}
+      hideEmbeddedAction={embedded}
       icon={IdCardLanyard}
       eyebrow="Operations"
       title="ID Documents"

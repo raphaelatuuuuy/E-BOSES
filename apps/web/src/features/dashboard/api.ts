@@ -1,6 +1,4 @@
 import { apiRequest, unwrapList, type ListEnvelope } from "@/lib/api"
-import type { EmergencyAlert } from "./emergency-api"
-
 export type ConcernCategory =
   | "infrastructure"
   | "environment"
@@ -166,6 +164,8 @@ export interface ConcernAiAssessment {
   privacy_scan_required: boolean
   suspected_sensitive_classes: string[]
   urgent_attention: boolean
+  incident_timing?: string
+  current_danger?: boolean
   missing_information: string[]
   recommended_action: ConcernRecommendedAction | ""
   recommendation: string
@@ -380,6 +380,8 @@ export interface Concern {
   update_text: string
   /** Staff member who recorded the resolved update, when available on list rows. */
   resolution_actor?: PublicUser | null
+  resolution_photo?: string | null
+  resolution_photo_count?: number
   visibility: ConcernVisibility
   media: ConcernMedia[]
   status_events: ConcernStatusEvent[]
@@ -481,6 +483,30 @@ export interface CommonRoleSummary {
   events_today: number
 }
 
+export type ResidentReportPeriod = "today" | "week" | "month"
+
+export interface ResidentReportOverviewDay {
+  date: string
+  submitted: number
+  resolved: number
+  critical: number
+}
+
+export interface ResidentReportOverview {
+  period: ResidentReportPeriod
+  label: string
+  comparison_label: string
+  start_date: string
+  end_date: string
+  total: number
+  previous_total: number
+  delta_count: number
+  delta_pct: number | null
+  critical_total: number
+  previous_critical_total: number
+  days: ResidentReportOverviewDay[]
+}
+
 export interface ResidentRoleSummary extends CommonRoleSummary {
   reports_total: number
   reports_active: number
@@ -493,6 +519,18 @@ export interface ResidentRoleSummary extends CommonRoleSummary {
   has_ongoing_emergencies?: boolean
   emergencies_resolved: number
   open_account_requests: number
+
+  community_total: number
+  community_active: number
+  community_in_progress: number
+  community_resolved: number
+  delta_total_pct: number | null
+  delta_active_pct: number | null
+  delta_resolved_pct: number | null
+  week_total: number
+  delta_week_pct: number | null
+  week_days: ResidentReportOverviewDay[]
+  report_overview: ResidentReportOverview
 }
 
 export interface OfficialRoleSummary extends CommonRoleSummary {
@@ -507,9 +545,45 @@ export interface OfficialRoleSummary extends CommonRoleSummary {
   pending_resident_verifications: number
   pending_content_flags: number
   pending_account_requests: number
+  critical_report: OfficialOverviewReport | null
+  community_center: { latitude: number; longitude: number } | null
+}
+
+export interface OfficialUnitSummary {
+  id: number
+  code: string
+  name: string
+  short_name: string
+}
+
+export interface OfficialOverviewReport {
+  id: number
+  /** The overview also presents SOS alerts as report rows. */
+  record_type?: "concern" | "emergency"
+  emergency_id?: number
+  public_id: string
+  tracking_id: string
+  title: string
+  official_title: string
+  summary: string
+  category: ConcernCategory
+  category_ref: {
+    id: number
+    code: string
+    name: string
+    icon_key: string
+    custom_icon_label: string
+  } | null
+  status: ConcernStatus
+  severity: "low" | "moderate" | "high" | "critical"
+  address: string
+  barangay: string
+  assigned_department: OfficialUnitSummary | null
+  created_at: string
 }
 
 export interface ResponderAssignedUnit {
+  id: number
   code: string
   name: string
   short_name: string
@@ -527,12 +601,28 @@ export interface ResponderRoleSummary extends CommonRoleSummary {
   assigned_resolved_emergencies: number
   newly_routed: number
   awaiting_acknowledgement?: number
+  unit: OfficialUnitSummary | null
+  community_name: string
+  unit_totals: {
+    total: number
+    active: number
+    resolved: number
+  }
+  community_totals: {
+    total: number
+    active: number
+    resolved: number
+  }
+  report_overview: ResidentReportOverview
+  recent_reports: OfficialOverviewReport[]
+  critical_report: OfficialOverviewReport | null
 }
 
 export interface Announcement {
   id: number
   title: string
   body: string
+  llm_summary: string
   tag: string
   audience: "all" | "residents" | "responders" | "officials"
   barangay: string
@@ -597,26 +687,18 @@ export interface AnnouncementAreaContext {
 export function createConcern(
   formData: FormData,
   options?: {
-    escalate?: boolean
-    emergencyType?: string
     recurrenceOf?: number
     duplicateOf?: number
   }
 ) {
-  if (options?.escalate) formData.append("auto_escalate", "true")
-  if (options?.escalate && options.emergencyType)
-    formData.append("emergency_type", options.emergencyType)
   if (options?.recurrenceOf)
     formData.append("recurrence_of", String(options.recurrenceOf))
   if (options?.duplicateOf)
     formData.append("duplicate_of", String(options.duplicateOf))
-  return apiRequest<Concern & { escalated_alert?: EmergencyAlert }>(
-    "/concerns/",
-    {
-      method: "POST",
-      body: formData,
-    }
-  )
+  return apiRequest<Concern>("/concerns/", {
+    method: "POST",
+    body: formData,
+  })
 }
 
 export interface ConcernResolvedMatch {
@@ -625,13 +707,6 @@ export interface ConcernResolvedMatch {
   summary: string
   resolved_at: string | null
   preview_url: string
-}
-
-export interface ConcernEmergencyTriage {
-  is_emergency: boolean
-  matched_type: string
-  reason: string
-  escalation_offered: boolean
 }
 
 export interface ConcernPhotoVerdict {
@@ -679,12 +754,9 @@ export interface ConcernPrecheckResult {
   category?: string
   category_label?: string
   public_feed_allowed?: boolean
-  auto_escalate?: boolean
-  emergency_type?: string
   description_required?: boolean
   location_required?: boolean
   photo_feedback: string
-  emergency_triage?: ConcernEmergencyTriage | null
   resolved_match?: ConcernResolvedMatch | null
   result?: {
     classification?: string
@@ -705,13 +777,10 @@ export function precheckConcern(formData: FormData) {
 }
 
 export function checkConcernMedia(formData: FormData) {
-  return apiRequest<ConcernMediaCheckResult>(
-    "/concerns/media/check/",
-    {
-      method: "POST",
-      body: formData,
-    }
-  )
+  return apiRequest<ConcernMediaCheckResult>("/concerns/media/check/", {
+    method: "POST",
+    body: formData,
+  })
 }
 
 export interface ConcernMediaCheckFile {
@@ -761,8 +830,15 @@ export function listMyConcerns(
   return listMyConcernsPage(status, dateFrom, dateTo).then(unwrapList)
 }
 
-export function listAssignedConcerns() {
-  return apiRequest<Concern[]>("/concerns/assigned/").then(unwrapList)
+export function listAssignedConcerns(scope: "active" | "all" = "active") {
+  const query = scope === "all" ? "?scope=all" : ""
+  return apiRequest<Concern[]>(`/concerns/assigned/${query}`).then(unwrapList)
+}
+
+export function listUnitConcerns() {
+  return apiRequest<Concern[]>("/concerns/assigned/?scope=unit").then(
+    unwrapList
+  )
 }
 
 export function listManagedConcernsPage(
@@ -816,13 +892,6 @@ export function getConcern(id: number | string) {
       ? `/concerns/${id}/`
       : `/concerns/by-public-id/${id}/`
   return apiRequest<Concern>(path)
-}
-
-export function publishConcern(id: number) {
-  return apiRequest<Concern>(`/concerns/${id}/publish/`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  })
 }
 
 export interface ConcernStatusUpdatePayload {
@@ -1127,12 +1196,17 @@ export function getDashboardSummary() {
   return apiRequest<DashboardSummary>("/concerns/summary/")
 }
 
-export function getResidentDashboardSummary() {
-  return apiRequest<ResidentRoleSummary>("/dashboard/resident/summary/")
+export function getResidentDashboardSummary(
+  period: ResidentReportPeriod = "week"
+) {
+  return apiRequest<ResidentRoleSummary>(
+    `/dashboard/resident/summary/?period=${period}`
+  )
 }
 
-export function getOfficialDashboardSummary() {
-  return apiRequest<OfficialRoleSummary>("/dashboard/official/summary/")
+export function getOfficialDashboardSummary(unitId?: number | null) {
+  const query = unitId == null ? "" : `?unit_id=${encodeURIComponent(unitId)}`
+  return apiRequest<OfficialRoleSummary>(`/dashboard/official/summary/${query}`)
 }
 
 export interface AnalyticsSeriesPoint {
@@ -1193,10 +1267,34 @@ export interface OfficialAnalytics {
     median_response_minutes: number | null
   }
   attention: AnalyticsAttentionRow[]
+  unit: OfficialUnitSummary | null
+  community_name: string
+  unit_totals: {
+    total: number
+    active: number
+    resolved: number
+  }
+  community_totals: {
+    total: number
+    active: number
+    resolved: number
+  }
+  report_overview: ResidentReportOverview
+  recent_reports: OfficialOverviewReport[]
+  critical_report: OfficialOverviewReport | null
 }
 
-export function getOfficialAnalytics() {
-  return apiRequest<OfficialAnalytics>("/dashboard/official/analytics/")
+export function getOfficialAnalytics(options?: {
+  unitId?: number | null
+  period?: ResidentReportPeriod
+}) {
+  const params = new URLSearchParams()
+  if (options?.unitId != null) params.set("unit_id", String(options.unitId))
+  if (options?.period) params.set("period", options.period)
+  const query = params.toString()
+  return apiRequest<OfficialAnalytics>(
+    `/dashboard/official/analytics/${query ? `?${query}` : ""}`
+  )
 }
 
 export interface BarangayUnit {
@@ -1471,6 +1569,8 @@ export interface LiveMapConcern {
   severity_assessed?: boolean
   preview_url: string
   media_count: number
+  resolution_preview_url?: string | null
+  resolution_photo_count?: number
 }
 
 export interface LiveMapEmergency {
@@ -1561,6 +1661,7 @@ export interface LiveMapAdvisory {
   id: number
   title: string
   body: string
+  llm_summary: string
   tag: string
   urgency: string
   is_pinned: boolean
@@ -1800,6 +1901,8 @@ export interface PublicReportMapConcern {
   id: number
   community: CommunitySummary
   title: string
+  /** Original resident-submitted description; summary is generated separately. */
+  description: string
   summary: string
   category: string
   category_label: string
@@ -1809,7 +1912,17 @@ export interface PublicReportMapConcern {
   latitude: number
   longitude: number
   reporter_label: string
+  reporter: PublicUser
+  comments: ConcernComment[]
+  comment_count: number
   preview_url: string | null
+  resolution_evidence: Pick<
+    ConcernResolutionEvidence,
+    "preview_url" | "original_filename" | "mime_type"
+  >[]
+  resolved_at: string | null
+  severity?: "low" | "moderate" | "high" | "critical"
+  severity_assessed?: boolean
   created_at: string
   updated_at: string
   kind: "concern"
@@ -1831,6 +1944,16 @@ export interface PublicReportMapEmergency {
   kind: "emergency"
 }
 
+export interface PublicReportMapAnnouncement extends Omit<
+  Announcement,
+  "latitude" | "longitude"
+> {
+  community: PublicReportMapCommunity
+  latitude: number | null
+  longitude: number | null
+  kind: "announcement"
+}
+
 export interface PublicReportMapSnapshot {
   communities: PublicReportMapCommunity[]
   map: {
@@ -1844,10 +1967,12 @@ export interface PublicReportMapSnapshot {
     } | null
   }
   concerns: PublicReportMapConcern[]
+  announcements: PublicReportMapAnnouncement[]
   emergencies: PublicReportMapEmergency[]
   summary: {
     public_concerns: number
     public_emergencies: number
+    public_announcements: number
     alerts: number
     communities: number
   }
@@ -1871,7 +1996,7 @@ export interface StreetViewCoverageResult {
 
 export function getStreetViewCoverage(
   coord: { lat: number; lng: number },
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ) {
   const query = new URLSearchParams({
     latitude: coord.lat.toFixed(6),
@@ -1880,7 +2005,7 @@ export function getStreetViewCoverage(
   return apiRequest<StreetViewCoverageResult>(
     `/public/street-view/coverage/?${query.toString()}`,
     { signal },
-    { auth: false, refreshOnUnauthorized: false },
+    { auth: false, refreshOnUnauthorized: false }
   )
 }
 
@@ -1894,7 +2019,7 @@ export interface StreetViewImageResult {
 
 export function getStreetViewImage(
   coord: { lat: number; lng: number },
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ) {
   const query = new URLSearchParams({
     latitude: coord.lat.toFixed(5),
@@ -1903,7 +2028,7 @@ export function getStreetViewImage(
   return apiRequest<StreetViewImageResult>(
     `/public/street-view/image/?${query.toString()}`,
     { signal },
-    { auth: false, refreshOnUnauthorized: false, timeoutMs: 60000 },
+    { auth: false, refreshOnUnauthorized: false, timeoutMs: 60000 }
   )
 }
 

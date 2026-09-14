@@ -6,11 +6,9 @@ import { cn } from "@workspace/ui/lib/utils"
 import {
   deleteManagedAnnouncement,
   getAnnouncementAreaContext,
-  listContentFlags,
   listManagedAnnouncements,
   type Announcement,
   type AnnouncementAreaContext,
-  type ContentFlag,
 } from "@/features/dashboard/api"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
@@ -31,10 +29,9 @@ interface Stat {
 }
 
 export default function OfficialCommunityContentPage() {
-  usePageTitle("Community Content")
+  usePageTitle("Community Announcements")
 
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
-  const [flags, setFlags] = useState<ContentFlag[]>([])
   const [areaContext, setAreaContext] = useState<AnnouncementAreaContext | null>(null)
   const [loading, setLoading] = useState(true)
   const [composerOpen, setComposerOpen] = useState(false)
@@ -48,16 +45,14 @@ export default function OfficialCommunityContentPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [nextAnnouncements, nextFlags, nextContext] = await Promise.all([
+      const [nextAnnouncements, nextContext] = await Promise.all([
         listManagedAnnouncements(),
-        listContentFlags(),
         getAnnouncementAreaContext().catch(() => null),
       ])
       setAnnouncements(nextAnnouncements)
-      setFlags(nextFlags)
       setAreaContext(nextContext)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load community content.")
+      toast.error(error instanceof Error ? error.message : "Could not load community announcements.")
     } finally {
       setLoading(false)
     }
@@ -79,14 +74,12 @@ export default function OfficialCommunityContentPage() {
     const published = announcements.filter((item) => item.is_published).length
     const scheduled = announcements.filter((item) => item.status_label === "scheduled").length
     const drafts = announcements.filter((item) => !item.is_published).length
-    const pending = flags.filter((flag) => flag.status === "submitted").length
     return [
       { label: "Published", value: published },
       { label: "Scheduled", value: scheduled },
       { label: "Drafts", value: drafts },
-      { label: "Flagged concerns", value: flags.length, alarm: pending > 0 },
     ]
-  }, [announcements, flags])
+  }, [announcements])
 
   function openNew() {
     setEditTarget(null)
@@ -131,7 +124,7 @@ export default function OfficialCommunityContentPage() {
         <ConfigBreadcrumb
           trail={[
             { label: "Concerns", to: "/dashboard/reports" },
-            { label: "Community Content" },
+            { label: "Community Announcements" },
           ]}
         />
 
@@ -142,11 +135,11 @@ export default function OfficialCommunityContentPage() {
             </span>
             <div className="min-w-0">
               <h1 className="text-page-title text-balance text-brand-navy">
-                Community Content
+                Community Announcements
               </h1>
               <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
-                Post advisories, mark the streets they affect, and review flagged
-                content in one place.
+                Create and manage advisories, schedules, affected areas, and
+                resident-facing updates.
               </p>
             </div>
           </div>
@@ -182,10 +175,8 @@ export default function OfficialCommunityContentPage() {
           <div className="mt-12">
             <ContentList
               items={items}
-              flags={flags}
               areaContext={areaContext}
               onEdit={openEdit}
-              onFlagsChange={setFlags}
               onDelete={(id) => {
                 const target = announcements.find((item) => item.id === id)
                 if (target) setDeleteTarget(target)

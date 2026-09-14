@@ -97,6 +97,7 @@ def assigned_unit_for(user):
         return None
 
     return {
+        "id": department.pk,
         "code": department.code,
         "name": department.name,
         "short_name": department.short_name or department.name,

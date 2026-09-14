@@ -1,6 +1,5 @@
 import { useState } from "react"
-import { CheckIcon, PhoneIcon, Share2Icon } from "lucide-react"
-import { toast } from "sonner"
+import { PhoneIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -13,11 +12,6 @@ import {
 } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { concernSeverityOf } from "@/features/dashboard/components/record/concern-adapter"
 import { unitShortTag } from "@/features/dashboard/components/concerns/concern-display"
-import {
-  canPublishConcern,
-  canShareConcern,
-  shareConcernReport,
-} from "@/features/dashboard/lib/share-report"
 
 function submittedAt(value: string) {
   const date = new Date(value)
@@ -31,78 +25,33 @@ function submittedAt(value: string) {
   }).format(date)
 }
 
-/**
- * "Share to public" icon button, rendered in the container header beside
- * the submitted date (see ReportDetailHeader).
- */
-export function ShareConcernButton({
-  report,
-  onPublish,
-}: {
-  report: Concern
-  onPublish?: (report: Concern) => Promise<Concern>
-}) {
-  const [shared, setShared] = useState(false)
-  const publishing = canPublishConcern(report)
-
-  async function handleShare() {
-    try {
-      const shareableReport =
-        publishing && onPublish ? await onPublish(report) : report
-      const didShare = await shareConcernReport(shareableReport)
-      if (didShare) {
-        setShared(true)
-        window.setTimeout(() => setShared(false), 1800)
-      }
-    } catch {
-      toast.error("Could not share this report publicly.")
-    }
-  }
-
-  const canShareAction =
-    canShareConcern(report) || (publishing && Boolean(onPublish))
-  if (!canShareAction) return null
-
-  return (
-    <button
-      type="button"
-      onClick={() => void handleShare()}
-      title={publishing ? "Share to public" : "Share report"}
-      aria-label={publishing ? "Share to public" : "Share report"}
-      className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-600 ring-1 ring-neutral-300 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:outline-none"
-    >
-      {shared ? (
-        <CheckIcon className="size-4" aria-hidden="true" />
-      ) : (
-        <Share2Icon className="size-4" aria-hidden="true" />
-      )}
-    </button>
-  )
-}
-
 export function ReportDetailHeader({
   report,
   audience = "resident",
-  onPublish,
 }: {
   report: Concern
   audience?: "resident" | "official"
-  onPublish?: (report: Concern) => Promise<Concern>
 }) {
   const fullName = concernReporterName(report)
+  const isGuestReport =
+    Boolean(report.is_anonymous) ||
+    fullName.trim().toLowerCase() === "community reporter"
   const unit =
     report.validation_status === "accepted"
       ? (report.assigned_department ??
         report.community_incident?.assigned_unit ??
         null)
       : null
-  const showAssignedUnit = audience === "resident" && Boolean(unit)
+  const showAssignedUnit =
+    audience === "resident" && Boolean(unit) && !isGuestReport
   const identityName = showAssignedUnit ? unit?.name : fullName
-  const identityLabel = showAssignedUnit
-    ? unit?.description?.trim() ||
-      report.category_ref?.description?.trim() ||
-      "Assigned response unit"
-    : "Resident"
+  const identityLabel = isGuestReport
+    ? "Anonymous"
+    : showAssignedUnit
+      ? unit?.description?.trim() ||
+        report.category_ref?.description?.trim() ||
+        "Assigned response unit"
+      : "Resident"
   const reporterPhone = report.reporter?.phone_number?.trim() || ""
   const [calling, setCalling] = useState(false)
   const { user } = useAuthSession()
@@ -144,11 +93,6 @@ export function ReportDetailHeader({
             >
               <PhoneIcon className="size-4" aria-hidden="true" />
             </button>
-          ) : null}
-          {/* Residents never get the call button, so their share icon takes
-              the left corner instead of crowding the date on the right. */}
-          {audience === "resident" ? (
-            <ShareConcernButton report={report} onPublish={onPublish} />
           ) : null}
         </div>
         <div className="flex items-center gap-2">

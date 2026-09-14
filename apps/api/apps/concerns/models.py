@@ -547,6 +547,7 @@ class Announcement(models.Model):
     )
     target_departments = models.ManyToManyField(Department, blank=True, related_name="announcements")
     body = models.TextField()
+    llm_summary = models.CharField(max_length=300, blank=True)
     tag = models.CharField(max_length=40, default="Barangay")
     audience = models.CharField(max_length=24, choices=Audience.choices, default=Audience.ALL)
     barangay = models.CharField(max_length=120, default="Marikina Heights")
@@ -751,11 +752,6 @@ class ConcernClassificationConfiguration(models.Model):
     label→category table for officials to maintain.
     """
 
-    class MismatchAction(models.TextChoices):
-        AUTO_CORRECT = "auto_correct", "Use detected category"
-        REJECT = "reject", "Reject automatically"
-        RESUBMIT = "request_resubmission", "Request resubmission"
-
     class ReportDuplicateAction(models.TextChoices):
         WARN = "warn", "Warn resident"
         BLOCK = "block", "Block submission"
@@ -815,7 +811,6 @@ class ConcernClassificationConfiguration(models.Model):
     report_duplicate_similarity_threshold = models.FloatField(default=0.88)
     report_duplicate_location_precision = models.PositiveSmallIntegerField(default=4)
     minimum_description_length = models.PositiveSmallIntegerField(default=20)
-    mismatch_action = models.CharField(max_length=32, choices=MismatchAction.choices, default=MismatchAction.AUTO_CORRECT)
     duplicate_detection_enabled = models.BooleanField(default=True)
     resolved_match_detection_enabled = models.BooleanField(default=True)
     resolved_match_lookback_days = models.PositiveIntegerField(default=90)

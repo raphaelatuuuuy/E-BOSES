@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -13,11 +14,66 @@ from apps.sms.parsing import parse_emergency_sms
 from apps.sms.router import Reply, _send, handle_inbound
 
 from .models import Community, EmergencyAlert, MapDispatchPolicy
+from .serializers import EmergencyCategorySerializer
 from .sms_intake import create_alert_from_sms
 
 
 SOS_NUMBER = "09640746068"
 SOS_E164 = "+639640746068"
+
+
+class EmergencyCategoryQuestionTests(TestCase):
+    def setUp(self):
+        self.community = Community.objects.filter(status=Community.Status.ACTIVE).order_by("pk").first()
+        self.assertIsNotNone(self.community)
+
+    def test_questions_are_saved_and_returned_as_category_configuration(self):
+        questions = [
+            {
+                "key": "people_affected",
+                "question": "How many people?",
+                "choices": [
+                    {"value": "one", "label": "One"},
+                    {"value": "many", "label": "Many"},
+                ],
+            }
+        ]
+        serializer = EmergencyCategorySerializer(
+            data={"code": "configured_test", "label": "Configured test", "quick_questions": questions}
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        category = serializer.save(community=self.community)
+
+        self.assertEqual(EmergencyCategorySerializer(category).data["quick_questions"], questions)
+        form_serializer = EmergencyCategorySerializer(
+            data={"code": "configured_form_test", "label": "Configured form test", "quick_questions": json.dumps(questions)}
+        )
+        self.assertTrue(form_serializer.is_valid(), form_serializer.errors)
+
+    def test_question_keys_and_choice_values_must_be_unique(self):
+        serializer = EmergencyCategorySerializer(
+            data={
+                "code": "invalid_test",
+                "label": "Invalid test",
+                "quick_questions": [
+                    {
+                        "key": "same",
+                        "question": "First",
+                        "choices": [{"value": "yes", "label": "Yes"}],
+                    },
+                    {
+                        "key": "same",
+                        "question": "Second",
+                        "choices": [{"value": "yes", "label": "Yes"}],
+                    },
+                ],
+            }
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("quick_questions", serializer.errors)
+
+
 class OfflineSosContractTests(TestCase):
     def setUp(self):
         cache.clear()
@@ -32,9 +88,14 @@ class OfflineSosContractTests(TestCase):
         response = self.client.get("/api/public/offline-sos-config/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["smsNumber"], SOS_NUMBER)
-        self.assertEqual(response.data["version"], 2)
+        self.assertEqual(response.data["version"], 3)
         self.assertIn("boundaryGeometry", response.data["community"])
         self.assertIn("streets", response.data["community"])
+        categories = response.data["community"]["categories"]
+        self.assertTrue(categories)
+        fire = next(category for category in categories if category["code"] == "fire")
+        self.assertEqual(fire["quick_questions"][0]["key"], "people_affected")
+        self.assertTrue(fire["quick_questions"][0]["choices"])
         self.assertTrue(response.data["communities"])
         for street in response.data["community"]["streets"]:
             self.assertIn("paths", street)

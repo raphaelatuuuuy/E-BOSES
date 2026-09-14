@@ -12,13 +12,33 @@ interface DialogProps {
   children: ReactNode
   containerClassName?: string
   mobileSheet?: boolean
+  mobileSheetInitialMode?: "max" | "expanded"
+  /** Let short mobile dialogs fit their content instead of taking a snap height. */
+  mobileSheetFitContent?: boolean
+  /** Let short desktop dialogs fit their content instead of using the default minimum height. */
+  desktopFitContent?: boolean
+  /** Override the mobile sheet chrome background (e.g. dark sheets). */
+  sheetClassName?: string
 }
 
-export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerClassName, mobileSheet }: DialogProps) {
+export function Dialog({
+  open,
+  onClose,
+  maxW = "max-w-lg",
+  children,
+  containerClassName,
+  mobileSheet,
+  mobileSheetInitialMode = "expanded",
+  mobileSheetFitContent = false,
+  desktopFitContent = false,
+  sheetClassName,
+}: DialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches,
+  const [isMobile, setIsMobile] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 1023px)").matches
   )
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1023px)")
@@ -31,21 +51,24 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
 
   const sheet = useBottomSheetSnap({
     enabled: open && useSheet,
-    initialMode: "expanded",
+    initialMode: mobileSheetInitialMode,
     onSettle: () => {
       if (sheet.mode === "hidden") onClose()
     },
   })
+  const { snapTo } = sheet
 
   useEffect(() => {
-    if (useSheet && open) sheet.snapTo("expanded")
-  }, [open, useSheet])
+    if (useSheet && open) snapTo(mobileSheetInitialMode)
+  }, [open, snapTo, useSheet, mobileSheetInitialMode])
 
   useEffect(() => {
     if (!open) return
     const prev = document.body.style.overflow
     document.body.style.overflow = "hidden"
-    return () => { document.body.style.overflow = prev }
+    return () => {
+      document.body.style.overflow = prev
+    }
   }, [open])
 
   useEffect(() => {
@@ -63,8 +86,8 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
     open ? (
       <div
         className={cn(
-          "fixed inset-0 flex items-center justify-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200",
-          containerClassName ?? "z-[200]",
+          "motion-safe:animate-in motion-safe:fade-in fixed inset-0 flex items-center justify-center motion-safe:duration-200",
+          containerClassName ?? "z-[200]"
         )}
       >
         {/* Overlay */}
@@ -79,10 +102,11 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
           <div
             ref={contentRef}
             className={cn(
-              "absolute inset-x-0 bottom-0 z-10 flex flex-col overflow-hidden rounded-t-2xl border border-neutral-200 border-b-0 bg-background shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
-              !sheet.dragging && "transition-[height] duration-200 ease-out",
+              "absolute inset-x-0 bottom-0 z-10 flex flex-col overflow-hidden rounded-t-2xl border border-b-0 border-neutral-200 bg-background shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
+              sheetClassName,
+              !sheet.dragging && "transition-[height] duration-200 ease-out"
             )}
-            style={{ height: sheet.height }}
+            style={mobileSheetFitContent ? undefined : { height: sheet.height }}
           >
             {/* Drag handle */}
             <div
@@ -90,11 +114,16 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
               onPointerMove={sheet.onHandlePointerMove}
               onPointerUp={sheet.onHandlePointerUp}
               onPointerCancel={sheet.onHandlePointerUp}
-              className="flex shrink-0 touch-none cursor-grab flex-col items-center bg-white px-3 pb-1 pt-2 active:cursor-grabbing"
+              className="flex shrink-0 cursor-grab touch-none flex-col items-center bg-transparent px-3 pt-2 pb-1 active:cursor-grabbing"
             >
               <span className="mb-1 h-1.5 w-11 rounded-full bg-neutral-300" />
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div
+              className={cn(
+                "scrollbar-hide relative min-h-0 overflow-y-auto overscroll-contain",
+                mobileSheetFitContent ? "flex-none" : "flex-1"
+              )}
+            >
               {children}
             </div>
           </div>
@@ -103,12 +132,13 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
           <div
             ref={contentRef}
             className={cn(
-              "z-10 flex w-full flex-col overflow-hidden bg-background",
+              "relative z-10 flex w-full flex-col overflow-hidden bg-background",
               "fixed inset-0 md:relative md:max-h-[90vh] md:rounded-2xl md:border md:border-border md:shadow-2xl",
-              "md:resize md:overflow-auto dialog-resize-grip md:min-w-[420px] md:min-h-[380px]",
+              "dialog-resize-grip scrollbar-hide md:min-w-[420px] md:resize md:overflow-auto",
+              !desktopFitContent && "md:min-h-[380px]",
               "motion-safe:transition-[max-width] motion-safe:duration-200 motion-safe:ease-out",
               "motion-safe:md:animate-in motion-safe:md:fade-in motion-safe:md:zoom-in-95 motion-safe:md:duration-200 motion-safe:md:ease-out",
-              maxW,
+              maxW
             )}
             style={{ scrollbarWidth: "none" }}
           >
@@ -117,11 +147,14 @@ export function Dialog({ open, onClose, maxW = "max-w-lg", children, containerCl
         )}
       </div>
     ) : null,
-    document.body,
+    document.body
   )
 }
 
-export function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
+export function DialogHeader({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
   return (
     <div
       className={cn("shrink-0 border-b border-border/50 px-6 py-4", className)}
@@ -130,17 +163,26 @@ export function DialogHeader({ className, ...props }: React.ComponentProps<"div"
   )
 }
 
-export function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
+export function DialogBody({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("scrollbar-hide flex-1 overflow-y-auto px-6 py-5 space-y-5", className)}
+      className={cn(
+        "scrollbar-hide flex-1 space-y-5 overflow-y-auto px-6 py-5",
+        className
+      )}
       style={{ scrollbarWidth: "none" }}
       {...props}
     />
   )
 }
 
-export function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
+export function DialogFooter({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
   return (
     <div
       className={cn("shrink-0 border-t border-border/50 px-6 py-4", className)}
@@ -149,18 +191,34 @@ export function DialogFooter({ className, ...props }: React.ComponentProps<"div"
   )
 }
 
-export function DialogTitle({ className, ...props }: React.ComponentProps<"h2">) {
+export function DialogTitle({
+  className,
+  ...props
+}: React.ComponentProps<"h2">) {
   return (
-    <h2 className={cn("text-lg font-semibold text-foreground", className)} {...props} />
+    <h2
+      className={cn("text-lg font-semibold text-foreground", className)}
+      {...props}
+    />
   )
 }
 
-export function DialogCloseButton({ onClose }: { onClose: () => void }) {
+export function DialogCloseButton({
+  onClose,
+  className,
+}: {
+  onClose: () => void
+  className?: string
+}) {
   return (
     <button
       type="button"
       onClick={onClose}
-      className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      aria-label="Close"
+      className={cn(
+        "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+        className
+      )}
     >
       <XIcon className="size-4" />
     </button>

@@ -12,6 +12,7 @@ export type AlertCardModel = {
   status: string | null
   snippet: string
   snippetLabel?: string | null
+  accent?: { soft: string; color: string } | null
   priority?: {
     label: string
     icon: ReactNode
@@ -19,6 +20,8 @@ export type AlertCardModel = {
   }
   actionLabel: string | null
   resolved?: boolean
+  /** Critical concerns use the same red alert treatment as emergencies. */
+  critical?: boolean
 }
 
 export function AlertCard({
@@ -27,6 +30,7 @@ export function AlertCard({
   expanded,
   onOpen,
   onAction,
+  fullSnippet = false,
   showRealIconWhenClosed: _showRealIconWhenClosed,
 }: {
   model: AlertCardModel
@@ -34,16 +38,27 @@ export function AlertCard({
   expanded: boolean
   onOpen: () => void
   onAction?: () => void
+  fullSnippet?: boolean
   showRealIconWhenClosed?: boolean
 }) {
   const { closed } = model
+  const accent = !closed && model.kind === "advisory" ? model.accent : null
+  const iconTone = accent
+    ? undefined
+    : model.critical
+      ? "text-severity-critical-ink"
+      : closed
+        ? "text-status-closed-ink"
+        : model.kind === "emergency"
+          ? "text-sos"
+          : "text-accent"
 
   return (
     <div
       className={cn(
         "rounded-2xl border bg-white transition-colors",
         expanded
-          ? "border-neutral-300 bg-neutral-50 shadow-sm"
+          ? "border-neutral-300 bg-status-closed-surface shadow-sm"
           : "border-neutral-200"
       )}
     >
@@ -52,77 +67,69 @@ export function AlertCard({
         onClick={onOpen}
         className="w-full px-3 py-3 text-left sm:px-3.5"
       >
-        <div className="flex items-start gap-2.5 sm:gap-3">
-          <span
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="flex items-start justify-between gap-2">
+            <p className="min-w-0 flex-1 text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
+              <span
+                className={cn(
+                  "mr-1.5 inline-flex size-5 shrink-0 items-center justify-center align-[-4px]",
+                  iconTone
+                )}
+                style={accent ? { color: accent.color } : undefined}
+                aria-hidden="true"
+              >
+                {icon}
+              </span>
+              {model.title}
+            </p>
+            {model.priority ? (
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold sm:text-[12px]",
+                  model.priority.className
+                )}
+                title={model.priority.label}
+              >
+                {model.priority.icon}
+                {model.priority.label}
+              </span>
+            ) : null}
+          </div>
+          <p
             className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-full",
-              closed
-                ? "bg-neutral-100 text-neutral-500"
-                : model.kind === "emergency"
-                  ? "bg-severity-critical-surface text-sos"
-                  : "bg-brand-orange-soft text-accent"
+              "mt-1 text-[11px] text-neutral-500 sm:text-[12px]",
+              !expanded && "truncate"
             )}
           >
-            {icon}
-          </span>
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <div className="flex items-start justify-between gap-2">
-              <p className="min-w-0 flex-1 text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
-                {model.title}
-              </p>
-              {model.priority ? (
-                <span
-                  className={cn(
-                    "inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold sm:text-[12px]",
-                    model.priority.className
-                  )}
-                  title={model.priority.label}
-                >
-                  {model.priority.icon}
-                  {model.priority.label}
-                </span>
-              ) : closed ? (
-                <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
-                  Resolved
-                </span>
-              ) : null}
-            </div>
+            {model.meta}
+          </p>
+          {model.status ? (
             <p
               className={cn(
-                "mt-1 text-[11px] text-neutral-500 sm:text-[12px]",
+                "mt-0.5 text-[11px] font-semibold text-neutral-700 sm:text-[12px]",
                 !expanded && "truncate"
               )}
             >
-              {model.meta}
+              {model.status}
             </p>
-            {model.status ? (
+          ) : null}
+          {model.snippet ? (
+            <div className="mt-1.5">
+              {model.snippetLabel ? (
+                <p className="mb-0.5 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
+                  {model.snippetLabel}
+                </p>
+              ) : null}
               <p
                 className={cn(
-                  "mt-0.5 text-[11px] font-semibold text-neutral-700 sm:text-[12px]",
-                  !expanded && "truncate"
+                  "text-[12px] leading-snug break-words text-neutral-600 sm:text-[13px]",
+                  !expanded && !fullSnippet && "line-clamp-2"
                 )}
               >
-                {model.status}
+                {model.snippet}
               </p>
-            ) : null}
-            {model.snippet ? (
-              <div className="mt-1.5">
-                {model.snippetLabel ? (
-                  <p className="mb-0.5 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
-                    {model.snippetLabel}
-                  </p>
-                ) : null}
-                <p
-                  className={cn(
-                    "text-[12px] leading-snug break-words text-neutral-600 sm:text-[13px]",
-                    !expanded && "line-clamp-2"
-                  )}
-                >
-                  {model.snippet}
-                </p>
-              </div>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </div>
       </button>
 

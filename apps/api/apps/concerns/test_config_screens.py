@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 
 from apps.capabilities import MANAGE_USERS
 from apps.concerns.models import Department, Designation, Position
-from apps.emergencies.models import EmergencyCategory
+from apps.emergencies.models import EmergencyCategory, EmergencyTypeRoleMap
 
 User = get_user_model()
 
@@ -124,6 +124,23 @@ class ConfigurationHubTests(APITestCase):
         self.assertTrue(dispatch["needs_attention"])
         for label in EmergencyCategory.objects.filter(is_active=True).values_list("label", flat=True):
             self.assertIn(label, dispatch["detail"])
+
+    def test_dispatch_card_recognizes_a_unit_declaration_without_a_role_map(self):
+        crime = EmergencyCategory.objects.get(code="crime")
+        unit = Department.objects.get(code="bpso-tanod")
+        unit.responds_to_emergencies = True
+        unit.emergency_types = [crime.code]
+        unit.save(update_fields=["responds_to_emergencies", "emergency_types", "updated_at"])
+
+        EmergencyTypeRoleMap.objects.filter(
+            community=crime.community,
+            emergency_type=crime.code,
+        ).delete()
+        response = self.client.get("/api/config/summary/")
+        dispatch = response.data["sections"]["dispatch"]
+
+        self.assertFalse(dispatch["needs_attention"])
+        self.assertEqual(dispatch["detail"], "Every type has a responding unit")
 
 
 class UnitScreenTests(APITestCase):

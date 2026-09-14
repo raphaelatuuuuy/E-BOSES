@@ -55,7 +55,7 @@ export function ResponderNotificationsPanel({
 
   const config = useMemo<NotificationsConfig>(
     () => ({
-      heading: "Dispatch updates",
+      heading: "Notifications",
       filters: FILTERS,
       dark: false,
       groupOf: (item) => (categoryOf(item) === "dispatch" ? "dispatch" : null),
@@ -65,7 +65,7 @@ export function ResponderNotificationsPanel({
       onOpen: (item) => {
         if (item.safety_limited || item.type === "witness_alert") return
         if (item.emergency_id) {
-          navigate(`/dashboard/responders/dispatch?alert=${item.emergency_id}`)
+          navigate(`/dashboard/reports?alert=${item.emergency_id}`)
           return
         }
         if (item.action_url) {

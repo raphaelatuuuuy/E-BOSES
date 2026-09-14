@@ -17,12 +17,12 @@ from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
+from apps.throttling import LocalAnonRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.models import ResidentProfile, User
 from apps.concerns.ai.street_imagery import fetch_latest_street_imagery, nearest_street_panorama
-from apps.concerns.models import Concern, ConcernMedia
+from apps.concerns.models import Announcement, Concern, ConcernComment, ConcernMedia, ConcernResolutionEvidence, ConcernStatusEvent
 from apps.community_scope import PRIMARY_COMMUNITY_CODE
 from apps.media_urls import concern_media_preview_url
 from apps.emergencies.description import description_for_display
@@ -36,7 +36,7 @@ CACHE_SECONDS = 300
 COMMUNITY_REQUEST_RECIPIENT = "eboses@gmail.com"
 NETWORK_FALLBACK_CENTER = {"latitude": 14.5995, "longitude": 120.9842, "zoom": 12}
 SOS_SMS_NUMBER = "09640746068"
-OFFLINE_SOS_CONFIG_VERSION = 2
+OFFLINE_SOS_CONFIG_VERSION = 3
 
 CLOSED_EMERGENCY_STATUSES = (
     EmergencyAlert.Status.RESOLVED,
@@ -98,6 +98,7 @@ def _public_community_payload(community):
 def build_public_report_map_payload():
     """Return only accepted, resident-safe map records across active areas."""
     from apps.concerns.serializers import public_street_address
+    from apps.concerns.severity import severity_label, severity_level
     from apps.emergencies.views import ACTIVE_STATUSES
 
     active_communities = list(
@@ -131,8 +132,20 @@ def build_public_report_map_payload():
             latitude__isnull=False,
             longitude__isnull=False,
         )
-        .filter(Q(category_ref__isnull=True) | Q(category_ref__public_feed_allowed=True))
-        .select_related("community", "category_ref")
+        .filter(
+            # Guest submissions are community-visible by policy once accepted,
+            # even when their configured category is not resident-feed enabled.
+            Q(category_ref__isnull=True)
+            | Q(category_ref__public_feed_allowed=True)
+            | Q(is_anonymous=True)
+        )
+        .select_related(
+            "community",
+            "category_ref",
+            "reporter",
+            "reporter__resident_profile",
+            "ai_assessment",
+        )
         .prefetch_related(
             Prefetch(
                 "media",
@@ -142,20 +155,98 @@ def build_public_report_map_payload():
                     mime_type__startswith="image/",
                 ).order_by("uploaded_at", "pk"),
                 to_attr="public_preview_media",
-            )
+            ),
+            Prefetch(
+                "comments",
+                queryset=ConcernComment.objects.filter(
+                    status=ConcernComment.Status.VISIBLE,
+                    parent__isnull=True,
+                )
+                .select_related("author", "author__resident_profile", "attachment")
+                .prefetch_related(
+                    Prefetch(
+                        "replies",
+                        queryset=ConcernComment.objects.filter(
+                            status=ConcernComment.Status.VISIBLE,
+                        ).select_related("author", "author__resident_profile", "attachment"),
+                    )
+                ),
+                to_attr="public_comments",
+            ),
+            Prefetch(
+                "resolution_evidence",
+                queryset=ConcernResolutionEvidence.objects.filter(
+                    mime_type__startswith="image/",
+                ).order_by("created_at", "pk"),
+                to_attr="public_resolution_evidence",
+            ),
+            Prefetch(
+                "status_events",
+                queryset=ConcernStatusEvent.objects.filter(
+                    status=Concern.Status.RESOLVED,
+                ).order_by("-created_at", "-pk"),
+                to_attr="public_resolved_events",
+            ),
         )
         .order_by("-updated_at", "-pk")[:300]
     )
     for concern in concern_rows:
+        from apps.concerns.serializers import ConcernCommentSerializer, PublicUserSerializer
+
         category = concern.category_ref
         summary = (concern.summary or concern.description or "").strip()[:280]
         preview_media = next(iter(concern.public_preview_media), None)
+        public_reporter = PublicUserSerializer(concern.reporter).data
+        reporter_label = "Community Reporter" if concern.is_anonymous else (
+            public_reporter["full_name"]
+            if getattr(concern.reporter, "resident_profile", None)
+            or concern.reporter.get_full_name().strip()
+            else "Community resident"
+        )
+        comments = ConcernCommentSerializer(concern.public_comments, many=True).data
+        if concern.is_anonymous:
+            anonymous_author = {
+                "id": 0,
+                "full_name": "Community Reporter",
+                "initials": "CR",
+                "role": "resident",
+                "last_seen_at": None,
+                "street": "",
+                "barangay": concern.community.name,
+            }
+            for comment, serialized in zip(concern.public_comments, comments):
+                if comment.author_id == concern.reporter_id:
+                    serialized["author"] = anonymous_author
+                for reply, serialized_reply in zip(comment.replies.all(), serialized["replies"]):
+                    if reply.author_id == concern.reporter_id:
+                        serialized_reply["author"] = anonymous_author
+        is_resolved = concern.status == Concern.Status.RESOLVED
+        severity = severity_label(concern)
+        _severity_level, severity_assessed = severity_level(concern)
+        resolution_items = (
+            [
+                {
+                    "preview_url": f"/api/concerns/resolution-evidence/{item.pk}/preview/",
+                    "original_filename": item.original_filename,
+                    "mime_type": item.mime_type,
+                }
+                for item in concern.public_resolution_evidence
+            ]
+            if is_resolved
+            else []
+        )
+        resolved_event = next(iter(concern.public_resolved_events), None)
         concerns.append(
             {
                 "id": concern.pk,
                 "community": by_id[concern.community_id],
                 "title": concern.official_title.strip() or concern.title,
+                # The accepted public map may show the resident's original
+                # words separately from the generated summary in the client.
+                "description": (concern.description or "").strip()[:2000],
                 "summary": summary,
+                "severity": severity,
+                "severity_assessed": severity_assessed,
                 "category": category.code if category else concern.category,
                 "category_label": category.name if category else concern.get_category_display(),
                 "icon_key": category.icon_key if category else "tag",
@@ -165,11 +256,62 @@ def build_public_report_map_payload():
                 # the resident's original seven-decimal pin.
                 "latitude": round(float(concern.latitude), 4),
                 "longitude": round(float(concern.longitude), 4),
-                "reporter_label": "Community Reporter" if concern.is_anonymous else "Community resident",
+                "reporter_label": reporter_label,
+                "reporter": (
+                    {
+                        **public_reporter,
+                        "full_name": reporter_label,
+                        "avatar": "",
+                    }
+                    if not concern.is_anonymous
+                    else {
+                        "id": 0,
+                        "full_name": "Community Reporter",
+                        "initials": "CR",
+                        "role": "resident",
+                        "last_seen_at": None,
+                        "avatar": "",
+                        "street": "",
+                        "barangay": concern.community.name,
+                    }
+                ),
+                "comments": comments,
+                "comment_count": sum(1 + len(comment.replies.all()) for comment in concern.public_comments),
                 "preview_url": concern_media_preview_url(preview_media.pk) if preview_media else None,
+                "resolution_evidence": resolution_items,
+                "resolved_at": resolved_event.created_at if resolved_event else None,
                 "created_at": concern.created_at,
                 "updated_at": concern.updated_at,
                 "kind": "concern",
+            }
+        )
+
+    from apps.concerns.serializers import AnnouncementSerializer
+
+    announcement_rows = (
+        Announcement.objects.filter(
+            community_id__in=community_ids,
+            is_published=True,
+            audience__in={Announcement.Audience.ALL, Announcement.Audience.RESIDENTS},
+        )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+        .select_related("community")
+        .order_by("-is_pinned", "-published_at", "-pk")[:100]
+    )
+    announcements = []
+    for announcement in announcement_rows:
+        serialized = AnnouncementSerializer(announcement).data
+        announcements.append(
+            {
+                **serialized,
+                "community": by_id[announcement.community_id],
+                "latitude": round(float(announcement.latitude), 4)
+                if announcement.latitude is not None
+                else None,
+                "longitude": round(float(announcement.longitude), 4)
+                if announcement.longitude is not None
+                else None,
+                "kind": "announcement",
             }
         )
 
@@ -251,11 +393,13 @@ def build_public_report_map_payload():
             "bounds": combined_bounds,
         },
         "concerns": concerns,
+        "announcements": announcements,
         "emergencies": emergencies,
         "summary": {
             "public_concerns": len(concerns),
             "public_emergencies": len(emergencies),
-            "alerts": len(concerns) + len(emergencies),
+            "public_announcements": len(announcements),
+            "alerts": len(concerns) + len(emergencies) + len(announcements),
             "communities": len(community_payloads),
         },
         "generated_at": timezone.now(),
@@ -272,7 +416,7 @@ class PublicReportMapView(APIView):
         return Response(build_public_report_map_payload())
 
 
-class PublicStreetViewCoverageThrottle(AnonRateThrottle):
+class PublicStreetViewCoverageThrottle(LocalAnonRateThrottle):
     """Keep anonymous panorama lookups bounded and cacheable."""
 
     scope = "public_street_view_coverage"
@@ -330,7 +474,7 @@ class PublicStreetViewCoverageView(APIView):
         return Response(payload)
 
 
-class PublicStreetViewImageThrottle(AnonRateThrottle):
+class PublicStreetViewImageThrottle(LocalAnonRateThrottle):
     """Keep the more expensive panorama image endpoint bounded."""
 
     scope = "public_street_view_image"
@@ -472,8 +616,15 @@ def build_offline_sos_config(_community=None):
             })
     categories = list(
         EmergencyCategory.objects.filter(
-            community=community, is_active=True, visible_to_residents=True
-        ).order_by("sort_order", "label").values("code", "label", "subtext")
+            community=community, is_active=True
+        ).order_by("sort_order", "label").values(
+            "code",
+            "label",
+            "subtext",
+            "icon_key",
+            "custom_icon_label",
+            "quick_questions",
+        )
     )
     return {
         "version": OFFLINE_SOS_CONFIG_VERSION,
@@ -507,10 +658,10 @@ class PublicOfflineSosConfigView(APIView):
     authentication_classes = []
 
     def get(self, request):
-        payload = cache.get("public:offline-sos-config:v2")
+        payload = cache.get("public:offline-sos-config:v3")
         if payload is None:
             payload = build_offline_sos_config()
-            cache.set("public:offline-sos-config:v2", payload, 300)
+            cache.set("public:offline-sos-config:v3", payload, 300)
         return Response(payload)
 
 # PSA geography, not a business rule: these seventeen local government units
@@ -724,7 +875,7 @@ class PublicCommunityBoundaryView(APIView):
         )
 
 
-class CommunityRequestThrottle(AnonRateThrottle):
+class CommunityRequestThrottle(LocalAnonRateThrottle):
     """Per-IP ceiling. The rate is pinned here rather than in settings so a
     public write endpoint can never be left unthrottled by a config edit."""
 

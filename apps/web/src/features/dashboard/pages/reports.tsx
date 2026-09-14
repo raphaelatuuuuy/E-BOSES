@@ -26,7 +26,6 @@ import {
   listAssignedConcerns,
   listManagedConcernsPage,
   listMyConcernsPage,
-  publishConcern,
   type Concern,
   type PublicUser,
 } from "@/features/dashboard/api"
@@ -35,6 +34,7 @@ import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
 import {
   ConcernQueueItem,
   avatarTone,
+  concernReporterName,
 } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { ReportDetailHeader } from "@/features/dashboard/components/concerns/report-detail-header"
 import { ReportUpdatesPane } from "@/features/dashboard/components/concerns/report-updates-pane"
@@ -174,7 +174,7 @@ const filterMeta: Record<
   },
   "In Progress": {
     icon: ClockIcon,
-    bg: "bg-[#f97316]",
+    bg: "bg-brand-blue",
     subtext: "Active concerns",
   },
   Resolved: {
@@ -243,6 +243,21 @@ function filterOfficialReports(
       ].some((value) => value?.toLowerCase().includes(q))
     return matchesOfficialFilter(report, filter) && matchesSearch
   })
+}
+
+function OfficialReportsEmptyState() {
+  return (
+    <div className="rounded-[24px] bg-white p-8 text-center text-foreground ring-1 ring-neutral-200">
+      <SearchIcon
+        className="mx-auto size-8 text-neutral-300"
+        strokeWidth={1.8}
+        aria-hidden="true"
+      />
+      <p className="mt-3 text-[14px] font-normal text-neutral-500">
+        No reports match this search.
+      </p>
+    </div>
+  )
 }
 
 function OfficialConcernDashboard({
@@ -383,6 +398,10 @@ function OfficialConcernDashboard({
   const closedCase = current
     ? isResolvedRecord(current) || current.status === "rejected"
     : false
+  const isGuestReport = current
+    ? Boolean(current.is_anonymous) ||
+      concernReporterName(current).trim().toLowerCase() === "community reporter"
+    : false
 
   const refreshCurrentReport = useCallback(async () => {
     await onRefresh()
@@ -396,22 +415,23 @@ function OfficialConcernDashboard({
     }
   }, [current, onRefresh, onUpdated])
 
-  const chatTabContent = current ? (
-    <ReportChatPanel
-      key={`official-chat-${current.id}`}
-      concernId={current.id}
-      open
-      showHistory
-      plain
-      disabled={closedCase}
-      emptyMessage="Ask the resident for anything you need — a clearer photo, an exact landmark, or a time you can visit."
-      appeals={current.appeals ?? []}
-      canDecideAppeals={audience === "official"}
-      onAppealsChanged={refreshCurrentReport}
-      onMessageSent={refreshCurrentReport}
-      className="h-full"
-    />
-  ) : null
+  const chatTabContent =
+    current && !isGuestReport ? (
+      <ReportChatPanel
+        key={`official-chat-${current.id}`}
+        concernId={current.id}
+        open
+        showHistory
+        plain
+        disabled={closedCase}
+        emptyMessage="Ask the resident for anything you need — a clearer photo, an exact landmark, or a time you can visit."
+        appeals={current.appeals ?? []}
+        canDecideAppeals={audience === "official"}
+        onAppealsChanged={refreshCurrentReport}
+        onMessageSent={refreshCurrentReport}
+        className="h-full"
+      />
+    ) : null
 
   const filterDropdown = (
     <>
@@ -533,9 +553,7 @@ function OfficialConcernDashboard({
         ))}
         {activeFilter === "Emergencies" ? (
           queueAlerts.length === 0 ? (
-            <div className="rounded-[24px] bg-white p-8 text-center text-[14px] font-normal text-foreground ring-1 ring-neutral-200">
-              No emergencies in this queue.
-            </div>
+            <OfficialReportsEmptyState />
           ) : null
         ) : ranked.length > 0 ? (
           ranked.map((entry) => (
@@ -544,13 +562,10 @@ function OfficialConcernDashboard({
               entry={entry}
               active={!selectedAlert && current?.id === entry.concern.id}
               onSelect={() => onSelect(entry.concern)}
-              tintBy={filterMode}
             />
           ))
         ) : queueAlerts.length > 0 ? null : (
-          <div className="rounded-[24px] bg-white p-8 text-center text-[14px] font-normal text-foreground ring-1 ring-neutral-200">
-            No concerns match this queue.
-          </div>
+          <OfficialReportsEmptyState />
         )}
       </div>
     </div>
@@ -666,6 +681,7 @@ function OfficialConcernDashboard({
     </div>
   ) : null
 
+  const showDesktopRecordPane = !isLgUp || !isGuestReport
   const panes: OpsPaneSpec[] = [
     {
       id: "queue",
@@ -676,13 +692,17 @@ function OfficialConcernDashboard({
       label: "Incoming queue",
       node: queuePane,
     },
-    {
-      id: "record",
-      role: "detail",
-      min: 460,
-      label: selectedAlert ? "Report details" : "Concern information",
-      node: selectedAlert ? alertRecordPane : recordPane,
-    },
+    ...(showDesktopRecordPane
+      ? [
+          {
+            id: "record",
+            role: "detail" as const,
+            min: 460,
+            label: selectedAlert ? "Report details" : "Concern information",
+            node: selectedAlert ? alertRecordPane : recordPane,
+          },
+        ]
+      : []),
   ]
 
   if (selectedAlert) {
@@ -746,11 +766,13 @@ function OfficialConcernDashboard({
         onMobileDetailClose={closeCenterDetail}
         panes={panes}
         fullHeightAside
-        fullHeightDetail={Boolean(selectedAlert || (current && !selectedAlert))}
+        fullHeightDetail={Boolean(
+          selectedAlert || (current && !selectedAlert && showDesktopRecordPane)
+        )}
         className="ops-plain bg-transparent"
         onListResize={setQueueWidth}
         bar={
-          <header className="relative flex h-16 shrink-0 items-center justify-between gap-4 px-4">
+          <header className="relative mt-5 flex h-16 shrink-0 items-center justify-between gap-4 px-4 lg:mt-0">
             <label
               className="flex h-12 flex-1 items-center gap-2 rounded-full bg-white pr-1.5 pl-4 ring-1 ring-neutral-300 focus-within:ring-2 focus-within:ring-neutral-500 focus-within:ring-offset-2 lg:flex-none"
               style={{
@@ -1148,12 +1170,6 @@ export default function ReportsPage() {
     setSelectedReport(next.public_id)
   }
 
-  async function publishReport(report: Concern) {
-    const next = await publishConcern(report.id)
-    updateReport(next)
-    return next
-  }
-
   if (isStaffWorkspace) {
     return (
       <OfficialConcernDashboard
@@ -1225,7 +1241,6 @@ export default function ReportsPage() {
       onSelect={selectReport}
       onBack={closeReportDetails}
       onRefresh={refreshSelectedReport}
-      onPublish={publishReport}
       onLoadMore={() => void loadMoreReports()}
       loadingMore={loadingMore}
       canLoadMore={nextReportPage != null}

@@ -361,7 +361,7 @@ export function Sidebar() {
   const navItems = nav.items.filter((item) =>
     hasCapability(user?.capabilities, item.capability)
   )
-  const badges = useOfficialBadges(isOfficialRole)
+  const { badges } = useOfficialBadges(isOfficialRole)
 
   // Unread notifications ride on the account block.
   const { unreadCount } = useNotifications()
@@ -469,13 +469,16 @@ export function Sidebar() {
               CAPABILITIES.dispatchEmergencies
             )
             const emergencyConcernLive =
-              (isOfficialRole || isResponderRole) &&
+              isOfficialRole &&
               item.key === "concerns" &&
-              (isOfficialRole
-                ? canSeeEmergencyQueue && emergenciesLive > 0
-                : dispatchLive > 0)
+              canSeeEmergencyQueue &&
+              emergenciesLive > 0
+            const responderAlertLive =
+              isResponderRole && item.key === "alerts-map" && dispatchLive > 0
             const alarm =
-              isAlarmItem(item.key, badgeForItemValue) || emergencyConcernLive
+              isAlarmItem(item.key, badgeForItemValue) ||
+              emergencyConcernLive ||
+              responderAlertLive
             return (
               <li key={item.key}>
                 <SidebarRow
@@ -491,8 +494,12 @@ export function Sidebar() {
                   }
                   relatedIcons={relatedIcons[item.key]}
                   onHover={() => setOpen(false)}
-                  icon={emergencyConcernLive ? TriangleAlert : undefined}
-                  plainAlarmIcon={emergencyConcernLive}
+                   icon={
+                     emergencyConcernLive || responderAlertLive
+                       ? TriangleAlert
+                       : undefined
+                   }
+                   plainAlarmIcon={emergencyConcernLive || responderAlertLive}
                 />
               </li>
             )
@@ -575,9 +582,12 @@ export function Sidebar() {
                   type="button"
                   onClick={() => void handleSignOut()}
                   disabled={signingOut}
-                  className={cn(accountItemClass, "disabled:opacity-60")}
+                  className={cn(
+                    accountItemClass,
+                    "bg-brand-orange text-white hover:bg-brand-orange-strong hover:text-white disabled:opacity-60",
+                  )}
                 >
-                  <LogOutIcon className={accountIconClass} strokeWidth={1.8} />
+                  <LogOutIcon className="size-4 shrink-0 text-white" strokeWidth={1.8} />
                   <span className="min-w-0 flex-1 text-left font-medium whitespace-nowrap">
                     {signingOut ? "Signing out…" : "Sign out"}
                   </span>

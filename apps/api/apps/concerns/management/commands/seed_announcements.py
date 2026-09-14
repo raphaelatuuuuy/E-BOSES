@@ -39,6 +39,7 @@ class Command(BaseCommand):
             announcement = Announcement.objects.create(
                 title=spec["title"],
                 body=spec["body"],
+                llm_summary=spec["llm_summary"],
                 tag=spec["tag"],
                 urgency=spec["urgency"],
                 audience=spec.get("audience", Announcement.Audience.ALL),

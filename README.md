@@ -52,6 +52,8 @@
 
 **E-Boses** is a web-based, mobile-responsive barangay civic engagement and emergency coordination platform designed for **Barangay Marikina Heights, Marikina City**.
 
+For the capstone presentation, see the [demo account roster](docs/demo/DEMO-ACCOUNTS.md) and [FEAT1–FEAT8 demonstration guide](docs/demo/FEAT1-FEAT8-DEMO-GUIDE.md).
+
 The system helps digitize and structure how residents report community concerns, monitor report status, and send emergency alerts to barangay responders.
 
 ## Current Status

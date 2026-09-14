@@ -13,23 +13,22 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react"
 import {
+  Check,
   ChevronLeftIcon,
   CircleAlertIcon,
   HomeIcon,
   LeafIcon,
   LoaderCircleIcon,
+  LocateFixedIcon,
   MapPinIcon,
   MegaphoneIcon,
-  MinusIcon,
-  FootprintsIcon,
-  PlusIcon,
   SearchIcon,
   SignalHighIcon,
-  SignalIcon,
   SignalLowIcon,
   SignalMediumIcon,
   ShieldCheckIcon,
   TrafficConeIcon,
+  TriangleAlertIcon,
 } from "lucide-react"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { useNavigate } from "react-router-dom"
@@ -63,12 +62,23 @@ import {
   concernTitleText,
   streetLabelFromAddress,
 } from "@/features/dashboard/components/feed-post-text"
-import { advisoryMeta } from "@/features/dashboard/components/community-content/advisory-tags"
+import {
+  advisoryLabel,
+  advisoryMeta,
+} from "@/features/dashboard/components/community-content/advisory-tags"
 import { AnnouncementComments } from "@/features/dashboard/components/home/announcement-comments"
+import { AnnouncementSummary } from "@/features/dashboard/components/home/announcement-summary"
+import {
+  announcementSummary,
+  announcementTitle,
+  formatAnnouncementDateTime,
+} from "@/features/dashboard/lib/announcement-summary"
+import { streetSegment } from "@/features/dashboard/lib/location-text"
 import {
   EmergencyDetailPanel,
   EmergencyPreviewCard,
 } from "@/features/dashboard/components/resident-map/emergency-strip"
+import { AlertsSearchRow } from "@/features/dashboard/components/alerts-map/alerts-search-row"
 import {
   ResidentLeafletMap,
   type MapApi,
@@ -82,16 +92,7 @@ import {
   MapWeatherCard,
   MapWeatherIcon,
 } from "@/features/dashboard/components/map-weather"
-import {
-  MapLegend,
-  type MapLegendRow,
-} from "@/features/dashboard/components/map/map-legend"
-import { MapFilterChips } from "@/features/dashboard/components/map/filter-chips"
-import { MAP_COLORS } from "@/features/dashboard/components/alerts-map/lib"
-import {
-  defaultResidentLayers,
-  type ResidentMapLayers,
-} from "@/features/dashboard/lib/resident-map-layers"
+import { defaultResidentLayers } from "@/features/dashboard/lib/resident-map-layers"
 import { usePageTitle } from "@/hooks/use-page-title"
 import {
   NETWORK_FALLBACK_CENTER,
@@ -113,14 +114,7 @@ import { websocketTicket, websocketUrl } from "@/lib/api"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 
 type ChipKey = "all" | (string & {})
-type CategoryChip = { key: string; label: string }
 const BARANGAY = "Community"
-
-const MODE_CHIPS: CategoryChip[] = [
-  { key: "all", label: "All" },
-  { key: "concerns", label: "Concerns" },
-  { key: "announcements", label: "Announcements" },
-]
 
 /**
  * Map badge labels — same groups as My reports filters
@@ -169,13 +163,13 @@ function priorityVisual(value?: string | null) {
   if (!(severity in { critical: true, high: true, moderate: true, low: true }))
     return null
   const icon = {
-    critical: SignalIcon,
+    critical: TriangleAlertIcon,
     high: SignalHighIcon,
     moderate: SignalMediumIcon,
     low: SignalLowIcon,
   }[severity as "critical" | "high" | "moderate" | "low"]
   const tone = {
-    critical: "text-severity-critical-ink",
+    critical: "text-severity-critical-map-ink",
     high: "text-severity-high-ink",
     moderate: "text-severity-moderate-ink",
     low: "text-severity-low-ink",
@@ -208,27 +202,6 @@ function CategoryIcon({
 }
 /* eslint-enable react-hooks/static-components */
 
-function ResidentFilterRows({
-  chip,
-  loading,
-  onSelect,
-}: {
-  chip: string
-  loading: boolean
-  onSelect: (key: string) => void
-}) {
-  return (
-    <MapFilterChips
-      tone="light"
-      chips={MODE_CHIPS}
-      chip={chip}
-      loading={loading}
-      onSelect={onSelect}
-      className="min-w-0 flex-1"
-    />
-  )
-}
-
 /** Compact list preview (Nextdoor first part) — category icon, not media image */
 function FeedPreviewCard({
   post,
@@ -250,11 +223,15 @@ function FeedPreviewCard({
   const st = statusLabel(post.status)
   const dist = formatDistance(distance)
   const ago = timeAgo(post.created_at)
+  const street =
+    streetSegment(post.address) ||
+    streetLabelFromAddress(post.address) ||
+    post.community.name
   const body = concernBodyText(post).replace(/\s+/g, " ").trim()
-  const title =
-    (post.notification_subject?.trim() || concernTitleText(post))
-      .replace(/\s+/g, " ")
-      .trim() || "Report"
+  const title = concernTitleText(post).replace(/\s+/g, " ").trim() || "Report"
+  const critical =
+    (post.severity ?? "").toLowerCase() === "critical" ||
+    Number(post.priority_score ?? 0) >= 3000
   const summary = post.summary?.replace(/\s+/g, " ").trim() || ""
   const normalise = (value: string) =>
     value
@@ -280,7 +257,7 @@ function FeedPreviewCard({
       className={cn(
         "rounded-2xl border bg-white transition-colors",
         expanded
-          ? "border-neutral-300 bg-neutral-50 shadow-sm"
+          ? "border-neutral-300 bg-status-closed-surface shadow-sm"
           : "border-neutral-200"
       )}
     >
@@ -289,71 +266,62 @@ function FeedPreviewCard({
         onClick={onOpen}
         className="w-full px-3 py-3 text-left sm:px-3.5"
       >
-        <div className="flex items-start gap-2.5 sm:gap-3">
-          <span
-            className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-full sm:size-10",
-              st.tone === "closed"
-                ? "bg-neutral-100 text-neutral-500"
-                : "bg-orange-50 text-orange-500"
-            )}
-          >
-            <CategoryIcon
-              category={post.category}
-              iconKey={post.category_ref?.icon_key}
-              className="size-5"
-            />
-          </span>
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <div className="flex items-start justify-between gap-2">
-              <p className="min-w-0 flex-1 truncate text-[13px] font-bold text-neutral-900 sm:text-[14px]">
-                {(() => {
-                  if (!title) return "Report"
-                  if (title.length <= 64) return title
-                  const slice = title.slice(0, 64)
-                  const atWord = slice.replace(/\s+\S*$/, "").trim()
-                  return `${(atWord.length >= 24 ? atWord : slice).trim()}...`
-                })()}
-              </p>
-              {st.tone === "closed" ? (
-                <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
-                  {st.label}
-                </span>
-              ) : st.tone === "appealed" ? (
-                <span className="shrink-0 text-[11px] font-semibold text-neutral-600 sm:text-[12px]">
-                  {st.label}
-                </span>
-              ) : priority && PriorityIcon ? (
-                <span
-                  className={cn(
-                    "inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold sm:text-[12px]",
-                    priority.tone
-                  )}
-                  title={priority.label}
-                >
-                  <PriorityIcon className="size-3.5 shrink-0" strokeWidth={2} />
-                  {priority.label}
-                </span>
-              ) : null}
-            </div>
-            <p className="mt-0.5 flex items-center gap-x-1.5 text-[11px] text-neutral-500 sm:text-[12px]">
-              <span>{post.community.name}</span>
-              <span aria-hidden>·</span>
-              <span>{[dist, ago].filter(Boolean).join(" · ")}</span>
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="flex items-start justify-between gap-2">
+            <p className="min-w-0 flex-1 text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
+              {critical ? (
+                <TriangleAlertIcon
+                  className="mr-1.5 inline size-[18px] align-[-3px] text-sos"
+                  strokeWidth={2.2}
+                />
+              ) : st.tone === "closed" ? (
+                <Check
+                  className="mr-1.5 inline size-[18px] align-[-3px] text-emerald-600"
+                  strokeWidth={2.5}
+                />
+              ) : (
+                <CategoryIcon
+                  category={post.category}
+                  iconKey={post.category_ref?.icon_key}
+                  className="mr-1.5 inline size-[18px] align-[-3px] text-brand-orange"
+                />
+              )}
+              {title || "Report"}
             </p>
-            {snippet ? (
-              <div className="mt-1.5">
-                {snippetLabel ? (
-                  <p className="mb-0.5 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
-                    {snippetLabel}
-                  </p>
-                ) : null}
-                <p className="line-clamp-2 text-[12px] leading-snug break-words text-neutral-600 sm:text-[13px]">
-                  {snippet}
-                </p>
-              </div>
+            {st.tone === "appealed" ? (
+              <span className="shrink-0 text-[11px] font-semibold text-neutral-600 sm:text-[12px]">
+                {st.label}
+              </span>
+            ) : priority && PriorityIcon ? (
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold sm:text-[12px]",
+                  priority.tone
+                )}
+                title={priority.label}
+              >
+                <PriorityIcon className="size-3.5 shrink-0" strokeWidth={2} />
+                {priority.label}
+              </span>
             ) : null}
           </div>
+          <p className="mt-0.5 flex items-center gap-x-1.5 text-[11px] text-neutral-500 sm:text-[12px]">
+            <span>{street}</span>
+            <span aria-hidden>·</span>
+            <span>{[dist, ago].filter(Boolean).join(" · ")}</span>
+          </p>
+          {snippet ? (
+            <div className="mt-1.5">
+              {snippetLabel ? (
+                <p className="mb-0.5 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
+                  {snippetLabel}
+                </p>
+              ) : null}
+              <p className="text-[12px] leading-snug break-words whitespace-pre-wrap text-neutral-600 sm:text-[13px]">
+                {snippet}
+              </p>
+            </div>
+          ) : null}
         </div>
       </button>
 
@@ -379,7 +347,7 @@ function FeedPreviewCard({
  * Same header, same meta format and same neutral icon well as the feed
  * carousel, so one announcement does not read as two different objects
  * depending on where it is seen. No urgency badge and no street chips: the
- * source, the date and the streets are one plain line.
+ * source, date, and raw body stay close to the announcement title.
  */
 function AnnouncementListItem({
   announcement,
@@ -393,19 +361,13 @@ function AnnouncementListItem({
   onWrite: () => void
 }) {
   const TagIcon = advisoryMeta(announcement.tag).icon
-  const place =
-    announcement.place_label ||
-    (announcement.affected_streets?.length
-      ? announcement.affected_streets.join(" · ")
-      : "")
-  const ago = timeAgo(announcement.created_at)
 
   return (
     <div
       className={cn(
         "rounded-2xl border bg-white transition-colors",
         expanded
-          ? "border-neutral-300 bg-neutral-50 shadow-sm"
+          ? "border-neutral-300 bg-status-closed-surface shadow-sm"
           : "border-neutral-200"
       )}
     >
@@ -414,23 +376,22 @@ function AnnouncementListItem({
         onClick={onOpen}
         className="w-full px-3 py-3 text-left sm:px-3.5"
       >
-        <div className="flex items-start gap-2.5 sm:gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-600 sm:size-10">
-            <TagIcon className="size-4 sm:size-5" strokeWidth={1.9} />
-          </span>
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
-              {announcement.title}
-            </p>
-            <p className="mt-1 text-[11px] text-neutral-500 sm:text-[12px]">
-              {[place, ago].filter(Boolean).join(" · ")}
-            </p>
-            {announcement.body ? (
-              <p className="mt-1.5 line-clamp-2 text-[12px] leading-snug break-words text-neutral-600 sm:text-[13px]">
-                {announcement.body}
-              </p>
-            ) : null}
-          </div>
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <p className="mt-0.5 text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
+            <TagIcon
+              className="mr-1.5 inline size-[18px] align-[-3px] text-severity-low"
+              strokeWidth={2}
+              aria-hidden
+            />
+            {announcementTitle(announcement)}
+          </p>
+          <p className="mt-1 text-[11px] text-neutral-500 sm:text-[12px]">
+            {advisoryLabel(announcement.tag)} ·{" "}
+            {timeAgo(announcement.updated_at)}
+          </p>
+          <p className="mt-1.5 text-[12px] leading-snug break-words whitespace-pre-wrap text-neutral-600 sm:text-[13px]">
+            {announcementSummary(announcement)}
+          </p>
         </div>
       </button>
 
@@ -443,7 +404,7 @@ function AnnouncementListItem({
           }}
           className="flex h-9 w-full items-center justify-center rounded-full border border-neutral-300 bg-white px-3 text-[12px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50 sm:text-[13px]"
         >
-          View the concern
+          View the advisory
         </button>
       </div>
     </div>
@@ -461,11 +422,7 @@ function AnnouncementDetailPanel({
   focusComment: boolean
 }) {
   const TagIcon = advisoryMeta(announcement.tag).icon
-  const place =
-    announcement.place_label ||
-    (announcement.affected_streets?.length
-      ? announcement.affected_streets.join(" · ")
-      : "")
+  const [commentsOpen, setCommentsOpen] = useState(true)
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900">
@@ -479,28 +436,23 @@ function AnnouncementDetailPanel({
           <ChevronLeftIcon className="size-5" strokeWidth={2.25} />
         </button>
         <p className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold text-neutral-600">
-          Announcement
+          Advisory
         </p>
       </div>
 
-      <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
+      <div
+        className={`scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 ${commentsOpen ? "pb-6" : "pb-0"}`}
+      >
         <div className="flex items-start gap-3">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-600">
-            <TagIcon className="size-6" strokeWidth={1.9} />
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-severity-low-surface text-severity-low">
+            <TagIcon className="size-6" strokeWidth={1.9} aria-hidden />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[15px] font-semibold text-neutral-900">
-              Barangay Hall
-            </p>
-            <p className="mt-0.5 text-meta text-neutral-500">
-              {[announcement.date_label, place].filter(Boolean).join(" · ")}
+            <p className="mt-0.5 text-[15px] font-semibold break-words text-neutral-900">
+              {announcement.title}
             </p>
           </div>
         </div>
-
-        <h2 className="mt-5 text-section break-words text-neutral-900">
-          {announcement.title}
-        </h2>
 
         {announcement.image_url ? (
           <img
@@ -511,20 +463,38 @@ function AnnouncementDetailPanel({
         ) : null}
 
         {announcement.body ? (
-          <p className="mt-4 text-read leading-relaxed break-words whitespace-pre-wrap text-neutral-800">
-            {announcement.body}
-          </p>
+          <div className="mt-4 space-y-1">
+            <p className="text-meta text-neutral-500">
+              Posted on {formatAnnouncementDateTime(announcement)}
+            </p>
+            <p className="text-[16px] leading-relaxed break-words whitespace-pre-wrap text-neutral-800">
+              {announcement.body}
+            </p>
+          </div>
         ) : null}
 
-        <div className="mt-6">
+        <AnnouncementSummary announcement={announcement} className="mt-2" />
+
+        <div>
           <AnnouncementComments
             announcementId={announcement.id}
             autoFocusComposer={focusComment}
+            defaultOpen
+            onOpenChange={setCommentsOpen}
           />
         </div>
       </div>
     </div>
   )
+}
+
+function withPinCoords(prev: Concern, full: Concern): Concern {
+  const merged = { ...prev, ...full }
+  if (!hasMapCoords(full)) {
+    merged.latitude = prev.latitude
+    merged.longitude = prev.longitude
+  }
+  return merged
 }
 
 export default function ResidentAlertsMapPage() {
@@ -571,6 +541,8 @@ export default function ResidentAlertsMapPage() {
   const [filterLoading, setFilterLoading] = useState(false)
   const [error, setError] = useState("")
   const [chip, setChip] = useState<ChipKey>("all")
+  const [alertQuery, setAlertQuery] = useState("")
+  const [alertFilterOpen, setAlertFilterOpen] = useState(false)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [selectedEmergencyId, setSelectedEmergencyId] = useState<number | null>(
     null
@@ -591,6 +563,24 @@ export default function ResidentAlertsMapPage() {
   )
   const mapApiRef = useRef<MapApi | null>(null)
   const isDesktop = useIsDesktop()
+  const advisorySheetRef = useRef<HTMLDivElement>(null)
+  const advisoryDragRef = useRef<{
+    id: number
+    startY: number
+    startH: number
+  } | null>(null)
+  const [advisoryDragH, setAdvisoryDragH] = useState<number | null>(null)
+  const filtersHeadRef = useRef<HTMLDivElement>(null)
+  const rowsScrollRef = useRef<HTMLUListElement>(null)
+  const [listH, setListH] = useState<number | null>(null)
+  useEffect(() => {
+    setAdvisoryDragH(null)
+  }, [selectedAnnouncementId])
+  const sheetDetailOpen =
+    selectedId != null ||
+    selectedEmergencyId != null ||
+    selectedAnnouncementId != null ||
+    expandLoading
   /** Mobile sheet: full list, peek preview bar, or fully tucked while using the map */
   const {
     snaps: sheetSnaps,
@@ -608,9 +598,9 @@ export default function ResidentAlertsMapPage() {
         ? Math.round(Math.min(window.innerHeight * 0.55, 520))
         : 420,
     onSettle: () => mapApiRef.current?.invalidateSize(),
+    maxH: sheetDetailOpen ? undefined : listH,
   })
   const [weatherOpen, setWeatherOpen] = useState(false)
-  const [svPick, setSvPick] = useState(false)
   const [locating, setLocating] = useState(false)
   /** Desktop left alerts panel collapsed vs open. */
   const [alertsOpen, setAlertsOpen] = useState(true)
@@ -958,7 +948,7 @@ export default function ResidentAlertsMapPage() {
     return { lat: selectedCenter.latitude, lng: selectedCenter.longitude }
   }, [userPos, selectedBoundary, selectedCenter])
 
-  const [layers, setLayers] = useState<ResidentMapLayers>(defaultResidentLayers)
+  const layers = defaultResidentLayers
 
   const filtered = useMemo(() => {
     if (!layers.concerns) return [] as Concern[]
@@ -976,7 +966,8 @@ export default function ResidentAlertsMapPage() {
     if (!layers.concerns) return [] as ResidentMapEmergency[]
     // “Concerns” is the complete report queue. Keep emergency/critical SOS
     // rows in this view alongside ordinary resident concerns.
-    if (chip !== "all" && chip !== "concerns" && chip !== "posts") return [] as ResidentMapEmergency[]
+    if (chip !== "all" && chip !== "concerns" && chip !== "posts")
+      return [] as ResidentMapEmergency[]
     if (!activeCommunityId) return [] as ResidentMapEmergency[]
     return emergencies.filter(
       (emergency) => emergency.community.id === activeCommunityId
@@ -1012,7 +1003,9 @@ export default function ResidentAlertsMapPage() {
       ...filtered.map((item) => ({
         kind: "concern" as const,
         item,
-        group: ["resolved", "partially_resolved", "rejected"].includes(item.status)
+        group: ["resolved", "partially_resolved", "rejected"].includes(
+          item.status
+        )
           ? 1
           : 0,
         priority: concernPriorityRank(item),
@@ -1030,6 +1023,46 @@ export default function ResidentAlertsMapPage() {
       (a, b) => a.group - b.group || b.priority - a.priority || b.time - a.time
     )
   }, [filtered, filteredEmergencies, visibleAnnouncements])
+
+  const visibleAlerts = useMemo(() => {
+    const q = alertQuery.trim().toLowerCase()
+    if (!q) return orderedAlerts
+    const matches = (values: Array<unknown>) =>
+      values.some(
+        (value) => typeof value === "string" && value.toLowerCase().includes(q)
+      )
+    return orderedAlerts.filter((row) => {
+      if (row.kind === "emergency") {
+        const emergency = row.item
+        return matches([
+          emergency.type,
+          emergency.type_label,
+          emergency.note,
+          emergency.display_description,
+          emergency.ai_summary,
+          emergency.address,
+          emergency.barangay,
+        ])
+      }
+      if (row.kind === "concern") {
+        const post = row.item
+        return matches([
+          post.title,
+          post.description,
+          post.address,
+          post.barangay,
+          post.tracking_id,
+        ])
+      }
+      const announcement = row.item
+      return matches([
+        announcement.title,
+        announcement.body,
+        announcement.barangay,
+        announcement.tag,
+      ])
+    })
+  }, [orderedAlerts, alertQuery])
 
   const distanceFor = useCallback(
     (post: Concern) => {
@@ -1057,7 +1090,6 @@ export default function ResidentAlertsMapPage() {
     setFocusComment(write)
     setWeatherOpen(false)
     setAlertsOpen(true)
-    if (!isDesktop) snapSheetTo("expanded")
   }
 
   async function openPost(id: number, write = false) {
@@ -1087,7 +1119,7 @@ export default function ResidentAlertsMapPage() {
       setExpandedPost(detailed)
       // Keep list in sync with lightweight fields
       setPosts((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, ...detailed } : p))
+        prev.map((p) => (p.id === id ? withPinCoords(p, detailed) : p))
       )
     } catch {
       const fallback = posts.find((p) => p.id === id) ?? null
@@ -1112,6 +1144,57 @@ export default function ResidentAlertsMapPage() {
     // of the selected detail and must remain visible while the list reopens.
     setAlertsOpen(true)
     if (!isDesktop) snapSheetTo("expanded")
+  }
+
+  function onAdvisoryHandleDown(event: ReactPointerEvent<HTMLDivElement>) {
+    const el = advisorySheetRef.current
+    if (el == null) return
+    event.preventDefault()
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      /* already released */
+    }
+    const startH = el.offsetHeight
+    advisoryDragRef.current = {
+      id: event.pointerId,
+      startY: event.clientY,
+      startH,
+    }
+    setAdvisoryDragH(startH)
+  }
+
+  function onAdvisoryHandleMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = advisoryDragRef.current
+    if (!drag || drag.id !== event.pointerId) return
+    setAdvisoryDragH(
+      Math.min(
+        drag.startH,
+        Math.max(56, drag.startH + (drag.startY - event.clientY))
+      )
+    )
+  }
+
+  function onAdvisoryHandleUp(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = advisoryDragRef.current
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch {
+      /* already released */
+    }
+    advisoryDragRef.current = null
+    if (drag && drag.id === event.pointerId) {
+      const h = Math.min(
+        drag.startH,
+        Math.max(56, drag.startH + (drag.startY - event.clientY))
+      )
+      if (drag.startH - h > 90) {
+        setAdvisoryDragH(null)
+        closePost()
+        return
+      }
+    }
+    setAdvisoryDragH(null)
   }
 
   function toggleOrOpen(alreadySelected: boolean, open: () => void) {
@@ -1224,7 +1307,9 @@ export default function ResidentAlertsMapPage() {
     try {
       const full = await getConcern(id)
       setExpandedPost(full)
-      setPosts((prev) => prev.map((p) => (p.id === id ? full : p)))
+      setPosts((prev) =>
+        prev.map((p) => (p.id === id ? withPinCoords(p, full) : p))
+      )
     } catch {
       /* keep current */
     }
@@ -1255,22 +1340,30 @@ export default function ResidentAlertsMapPage() {
   const mapItemCount =
     filtered.length + filteredEmergencies.length + visibleAnnouncements.length
 
-  const legendRows: MapLegendRow<keyof ResidentMapLayers>[] = [
-    {
-      key: "concerns",
-      label: "Concerns",
-      hint: "Community reports by residents",
-      count: filtered.length + filteredEmergencies.length,
-      tone: MAP_COLORS.concern,
-    },
-    {
-      key: "advisories",
-      label: "Advisory areas",
-      hint: "Streets, areas and barangay-wide notices",
-      count: visibleAnnouncements.length,
-      tone: MAP_COLORS.advisory,
-    },
-  ]
+  useEffect(() => {
+    const head = filtersHeadRef.current
+    const rows = rowsScrollRef.current
+    if (head == null || rows == null) return
+    const h = head.offsetHeight + rows.scrollHeight + 8 + 16 + 24
+    setListH((prev) => (prev == null || Math.abs(prev - h) > 2 ? h : prev))
+  }, [
+    chip,
+    alertQuery,
+    filterLoading,
+    weatherOpen,
+    weather,
+    mapItemCount,
+    posts.length,
+    emergencies.length,
+    announcements.length,
+    orderedAlerts.length,
+    sheetMode,
+    sheetHeight,
+    selectedId,
+    selectedEmergencyId,
+    selectedAnnouncementId,
+    expandLoading,
+  ])
 
   if (loading && posts.length === 0 && emergencies.length === 0) {
     return (
@@ -1298,6 +1391,7 @@ export default function ResidentAlertsMapPage() {
         />
       ) : selectedAnnouncement ? (
         <AnnouncementDetailPanel
+          key={selectedAnnouncement.id}
           announcement={selectedAnnouncement}
           onBack={closePost}
           focusComment={focusComment}
@@ -1326,9 +1420,9 @@ export default function ResidentAlertsMapPage() {
             </div>
             <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
               <FeedPostCard
+                key={expandedPost.id}
                 post={expandedPost}
                 sessionUser={sessionUserAsPublic}
-                commentsExpanded
                 focusCommentOnMount={focusComment}
                 className="border-0 shadow-none"
                 onVote={async (p) => {
@@ -1410,10 +1504,13 @@ export default function ResidentAlertsMapPage() {
           </div>
 
           <div className="relative shrink-0 px-3 pb-2 sm:pb-3">
-            <ResidentFilterRows
+            <AlertsSearchRow
+              query={alertQuery}
+              onQuery={setAlertQuery}
+              filterOpen={alertFilterOpen}
+              onToggleFilter={() => setAlertFilterOpen((value) => !value)}
               chip={weatherOpen ? "" : chip}
-              loading={filterLoading}
-              onSelect={(key) => void applyChip(key)}
+              onSelectChip={(key) => void applyChip(key)}
             />
           </div>
 
@@ -1443,7 +1540,7 @@ export default function ResidentAlertsMapPage() {
                 }
                 title={
                   chip === "announcements"
-                    ? "No announcements yet"
+                    ? "No advisories yet"
                     : "No concerns on the map"
                 }
                 body={
@@ -1452,9 +1549,27 @@ export default function ResidentAlertsMapPage() {
                     : "Concerns with a location appear here."
                 }
               />
+            ) : visibleAlerts.length === 0 ? (
+              <div className="flex flex-col items-center px-6 py-10 text-center">
+                <SearchIcon
+                  className="size-8 text-neutral-300"
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                />
+                <p className="mt-3 text-[14px] text-neutral-500">
+                  No alerts match this search.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setAlertQuery("")}
+                  className="mt-2 text-[14px] font-semibold text-brand-orange"
+                >
+                  Clear search
+                </button>
+              </div>
             ) : (
               <ul className="flex flex-col gap-2">
-                {orderedAlerts.map((row) => {
+                {visibleAlerts.map((row) => {
                   if (row.kind === "emergency") {
                     return (
                       <li key={`em-${row.item.id}`}>
@@ -1548,7 +1663,6 @@ export default function ResidentAlertsMapPage() {
             )
           }}
           onMapInteract={collapseSheetForMap}
-          onStreetViewPickChange={setSvPick}
           onReady={(api) => {
             mapApiRef.current = api
           }}
@@ -1584,8 +1698,7 @@ export default function ResidentAlertsMapPage() {
         </div>
       ) : null}
 
-      {/* One control column, same order and geometry as the official map:
-          Home, Locate, Zoom, then weather. */}
+      {/* One control column, shared order and icon language across maps. */}
       <div
         className={cn(
           "absolute z-30 flex flex-col items-end gap-2",
@@ -1608,74 +1721,11 @@ export default function ResidentAlertsMapPage() {
               onClick={goMyLocation}
               loading={locating}
             >
-              <MapPinIcon className="size-5" strokeWidth={1.9} />
-            </MapControlButton>
-            <MapControlButton
-              tone="light"
-              divider
-              label="Zoom in"
-              onClick={() => mapApiRef.current?.zoomIn()}
-            >
-              <PlusIcon className="size-5" strokeWidth={2.1} />
-            </MapControlButton>
-            <MapControlButton
-              tone="light"
-              divider
-              label="Zoom out"
-              onClick={() => mapApiRef.current?.zoomOut()}
-            >
-              <MinusIcon className="size-5" strokeWidth={2.1} />
-            </MapControlButton>
-            <MapControlButton
-              tone="light"
-              divider
-              label={
-                svPick
-                  ? "Cancel Street View pick"
-                  : "Drag me onto the map or click, then pick a spot for Street View"
-              }
-              active={svPick}
-              draggable
-              onDragStart={(event) => {
-                event.dataTransfer.setData("text/plain", "street-view")
-                event.dataTransfer.effectAllowed = "copy"
-                if (!svPick) mapApiRef.current?.toggleStreetViewPick()
-              }}
-              onClick={() => mapApiRef.current?.toggleStreetViewPick()}
-            >
-              <FootprintsIcon className="size-5" strokeWidth={1.9} />
+              <LocateFixedIcon className="size-5" strokeWidth={1.9} />
             </MapControlButton>
           </MapControlStack>
         </div>
-
-        {svPick ? (
-          <div className="pointer-events-none absolute top-[calc(100%+8px)] right-0 w-max max-w-[min(15rem,calc(100vw-1.5rem))] rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-neutral-700 shadow-md">
-            Click the map to start Street View · Esc cancels
-          </div>
-        ) : null}
       </div>
-
-      {/* Below the map, clear of the control column, so the layer legend never
-          covers the barangay. */}
-      {mapMeta ? (
-        <div
-          className={cn(
-            "absolute z-30 flex flex-col items-end",
-            isDesktop
-              ? "right-4 bottom-4"
-              : "right-3 bottom-[calc(56px+0.75rem)]"
-          )}
-        >
-          <MapLegend
-            tone="light"
-            rows={legendRows}
-            active={layers}
-            onToggle={(key) =>
-              setLayers((current) => ({ ...current, [key]: !current[key] }))
-            }
-          />
-        </div>
-      ) : null}
 
       {isDesktop ? (
         alertsOpen ? (
@@ -1731,21 +1781,44 @@ export default function ResidentAlertsMapPage() {
       ) : (
         /* Mobile draggable sheet — solid white so map content never shows through */
         <div
+          ref={advisorySheetRef}
           className={cn(
             "absolute right-0 bottom-0 left-0 z-40 flex flex-col overflow-hidden rounded-t-3xl border border-b-0 border-neutral-200 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
-            !sheetDragging && "transition-[height] duration-200 ease-out"
+            !sheetDragging &&
+              advisoryDragH == null &&
+              "transition-[height] duration-200 ease-out"
           )}
-          style={{ height: sheetHeight, maxHeight: "92svh" }}
+          style={
+            selectedAnnouncementId != null && advisoryDragH == null
+              ? { maxHeight: "92svh" }
+              : { height: advisoryDragH ?? sheetHeight, maxHeight: "92svh" }
+          }
           role="dialog"
           aria-label="Alerts sheet"
         >
-          {/* Drag handle — pointer capture for smooth drag */}
+          {/* Drag handle — advisory hugs content and only drags down to dismiss */}
           <div
             className="flex shrink-0 cursor-grab touch-none flex-col items-center bg-white px-3 pt-2 pb-1 active:cursor-grabbing"
-            onPointerDown={onSheetHandlePointerDown}
-            onPointerMove={onSheetHandlePointerMove}
-            onPointerUp={onSheetHandlePointerUp}
-            onPointerCancel={onSheetHandlePointerUp}
+            onPointerDown={
+              selectedAnnouncementId != null
+                ? onAdvisoryHandleDown
+                : onSheetHandlePointerDown
+            }
+            onPointerMove={
+              selectedAnnouncementId != null
+                ? onAdvisoryHandleMove
+                : onSheetHandlePointerMove
+            }
+            onPointerUp={
+              selectedAnnouncementId != null
+                ? onAdvisoryHandleUp
+                : onSheetHandlePointerUp
+            }
+            onPointerCancel={
+              selectedAnnouncementId != null
+                ? onAdvisoryHandleUp
+                : onSheetHandlePointerUp
+            }
             aria-label="Drag sheet"
           >
             <span className="mb-1 h-1.5 w-11 rounded-full bg-neutral-300" />
@@ -1765,11 +1838,15 @@ export default function ResidentAlertsMapPage() {
             const showFull =
               selectedId != null ||
               selectedEmergencyId != null ||
+              selectedAnnouncementId != null ||
               expandLoading ||
               sheetMode === "expanded" ||
               sheetHeight >= (snaps.peek + snaps.expanded) / 2
             const showDetail =
-              selectedId != null || selectedEmergencyId != null || expandLoading
+              selectedId != null ||
+              selectedEmergencyId != null ||
+              selectedAnnouncementId != null ||
+              expandLoading
             return (
               <div
                 className={cn(
@@ -1779,7 +1856,10 @@ export default function ResidentAlertsMapPage() {
               >
                 {/* Filters always visible in preview + list (not on expanded detail) */}
                 {!showDetail ? (
-                  <div className="shrink-0 bg-white px-3 pt-0.5 pb-2">
+                  <div
+                    ref={filtersHeadRef}
+                    className="relative shrink-0 bg-white px-3 pt-0.5 pb-2"
+                  >
                     <div className="mb-2 flex items-center gap-2.5">
                       <button
                         type="button"
@@ -1809,10 +1889,15 @@ export default function ResidentAlertsMapPage() {
                       </button>
                       {!isDesktop ? weatherToggle : null}
                     </div>
-                    <ResidentFilterRows
+                    <AlertsSearchRow
+                      query={alertQuery}
+                      onQuery={setAlertQuery}
+                      filterOpen={alertFilterOpen}
+                      onToggleFilter={() =>
+                        setAlertFilterOpen((value) => !value)
+                      }
                       chip={weatherOpen ? "" : chip}
-                      loading={filterLoading}
-                      onSelect={(key) => void applyChip(key)}
+                      onSelectChip={(key) => void applyChip(key)}
                     />
                   </div>
                 ) : null}
@@ -1871,13 +1956,13 @@ export default function ResidentAlertsMapPage() {
                     ) : (
                       <p className="pb-3 text-center text-[13px] text-neutral-500">
                         {chip === "announcements"
-                          ? "No announcements yet"
+                          ? "No advisories yet"
                           : "No alerts with a location"}
                       </p>
                     )}
                   </div>
                 ) : showDetail ? (
-                  <div className="h-full min-h-0 overflow-y-auto overscroll-contain touch-pan-y bg-white">
+                  <div className="h-full min-h-0 touch-pan-y overflow-y-auto overscroll-contain bg-white">
                     {panelBody}
                   </div>
                 ) : (
@@ -1908,7 +1993,7 @@ export default function ResidentAlertsMapPage() {
                         }
                         title={
                           chip === "announcements"
-                            ? "No announcements yet"
+                            ? "No advisories yet"
                             : "No concerns on the map"
                         }
                         body={
@@ -1917,9 +2002,27 @@ export default function ResidentAlertsMapPage() {
                             : "Concerns with a location appear here."
                         }
                       />
+                    ) : visibleAlerts.length === 0 ? (
+                      <div className="flex flex-col items-center px-6 py-10 text-center">
+                        <SearchIcon
+                          className="size-8 text-neutral-300"
+                          strokeWidth={1.8}
+                          aria-hidden="true"
+                        />
+                        <p className="mt-3 text-[14px] text-neutral-500">
+                          No alerts match this search.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setAlertQuery("")}
+                          className="mt-2 text-[14px] font-semibold text-brand-orange"
+                        >
+                          Clear search
+                        </button>
+                      </div>
                     ) : (
-                      <ul className="flex flex-col gap-2">
-                        {orderedAlerts.map((row) => {
+                      <ul ref={rowsScrollRef} className="flex flex-col gap-2">
+                        {visibleAlerts.map((row) => {
                           if (row.kind === "emergency") {
                             return (
                               <li key={`em-${row.item.id}`}>

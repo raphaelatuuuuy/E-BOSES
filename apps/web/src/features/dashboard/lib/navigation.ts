@@ -6,7 +6,8 @@ import {
   ChartColumn,
   HomeIcon,
   MapPinnedIcon,
-  MoreHorizontalIcon,
+  MegaphoneIcon,
+  NewspaperIcon,
   UserCircleIcon,
   UsersIcon,
 } from "lucide-react"
@@ -97,6 +98,14 @@ const residentHome: NavItemConfig = {
   isActive: isResidentHomeActive,
 }
 
+const residentFeed: NavItemConfig = {
+  key: "feed",
+  label: "Feed",
+  to: "/dashboard/feed",
+  icon: NewspaperIcon,
+  isActive: (pathname) => matches(pathname, "/dashboard/feed"),
+}
+
 const residentAlerts: NavItemConfig = {
   key: "alerts",
   label: "Alerts",
@@ -113,17 +122,17 @@ const residentReports: NavItemConfig = {
   isActive: (pathname) => matches(pathname, "/dashboard/reports"),
 }
 
-const residentReportsMobile: NavItemConfig = {
-  ...residentReports,
-  label: "Reports",
+const residentAlertsMobile: NavItemConfig = {
+  ...residentAlerts,
+  label: "Alerts",
 }
 
 const residentNav: RoleNavConfig = {
-  items: [residentHome, residentAlerts, residentReports],
+  items: [residentHome, residentFeed, residentAlerts, residentReports],
   footer: [],
 
-  // Mirrors current mobile-nav.tsx order: Home, Reports, Alerts.
-  mobileItems: [residentHome, residentReportsMobile, residentAlerts],
+  // Mirrors current mobile-nav.tsx order: Home, Feed, Map.
+  mobileItems: [residentHome, residentFeed, residentAlertsMobile],
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +178,7 @@ const officialConcerns: NavItemConfig = {
 
 const officialCommunity: NavItemConfig = {
   key: "community",
-  label: "Community",
+  label: "Announcements",
   to: "/dashboard/community-content",
   icon: UsersIcon,
   isActive: (pathname) => matches(pathname, "/dashboard/community-content"),
@@ -200,24 +209,35 @@ const officialNotifications: NavItemConfig = {
   isActive: (pathname) => matches(pathname, "/dashboard/notifications"),
 }
 
-const officialProfile: NavItemConfig = {
-  key: "profile",
-  label: "Profile",
-  to: "/dashboard/profile",
-  icon: UserCircleIcon,
-  isActive: (pathname) => matches(pathname, "/dashboard/profile"),
-}
-
 // The mobile pill gives each tab ~72px, so the long sidebar labels are
 // shortened rather than allowed to wrap or clip.
-const officialOperationsMapMobile: NavItemConfig = { ...officialOperationsMap, label: "Alerts" }
+const officialOperationsMapMobile: NavItemConfig = {
+  ...officialOperationsMap,
+  label: "Alerts",
+  // The live map is readable by every official; geography is only required
+  // for changing its configuration.
+  capability: undefined,
+}
 
-const officialMoreItems: NavItemConfig[] = [
-  officialCommunity,
-  officialConfiguration,
-  officialNotifications,
-  officialProfile,
-]
+const officialOverviewMobile: NavItemConfig = {
+  ...officialOverview,
+  label: "Home",
+  icon: HomeIcon,
+}
+
+const officialFeedMobile: NavItemConfig = {
+  key: "feed",
+  label: "Feed",
+  to: "/dashboard/feed",
+  icon: NewspaperIcon,
+  isActive: (pathname) => matches(pathname, "/dashboard/feed"),
+}
+
+const officialCommunityMobile: NavItemConfig = {
+  ...officialCommunity,
+  label: "Announce",
+  icon: MegaphoneIcon,
+}
 
 const officialNav: RoleNavConfig = {
   items: [
@@ -234,15 +254,18 @@ const officialNav: RoleNavConfig = {
     officialNotifications,
   ],
   mobileItems: [
-    officialOverview,
+    officialOverviewMobile,
+    officialFeedMobile,
     officialOperationsMapMobile,
-    officialConcerns,
+    officialCommunityMobile,
   ],
   more: {
-    label: "More",
-    icon: MoreHorizontalIcon,
-    items: officialMoreItems,
-    isActive: (pathname) => officialMoreItems.some((item) => item.isActive(pathname)),
+    label: "Config",
+    icon: BoltIcon,
+    // The official mobile tab is a direct destination, not an overflow sheet.
+    // Keep the shape for shared navigation typing and desktop consumers.
+    items: [officialConfiguration],
+    isActive: (pathname) => officialConfiguration.isActive(pathname),
   },
 }
 
@@ -276,6 +299,14 @@ const responderConcerns: NavItemConfig = {
   isActive: (pathname) => matches(pathname, "/dashboard/reports"),
 }
 
+const responderFeed: NavItemConfig = {
+  key: "feed",
+  label: "Feed",
+  to: "/dashboard/feed",
+  icon: NewspaperIcon,
+  isActive: (pathname) => matches(pathname, "/dashboard/feed"),
+}
+
 const responderProfile: NavItemConfig = {
   key: "profile",
   label: "Profile",
@@ -293,7 +324,7 @@ const responderNotifications: NavItemConfig = {
 }
 
 const responderNav: RoleNavConfig = {
-  items: [responderAlerts, responderConcerns],
+  items: [responderOverview, responderAlerts, responderConcerns, responderFeed],
   footer: [],
   // Personal destinations, revealed by the account block: Profile first,
   // Notifications below it (both open as dialogs on desktop).
@@ -302,9 +333,9 @@ const responderNav: RoleNavConfig = {
     responderNotifications,
   ],
   mobileItems: [
-    responderOverview,
+    { ...responderOverview, label: "Home", icon: HomeIcon },
     { ...responderAlerts, label: "Alerts" },
-    responderConcerns,
+    responderFeed,
   ],
 }
 

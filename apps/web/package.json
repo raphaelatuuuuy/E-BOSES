@@ -8,12 +8,19 @@
     "certs": "mkcert -install && mkcert localhost 127.0.0.1 10.35.187.164 172.24.208.1 172.23.32.1",
     "build": "tsc -b && vite build",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test src/features/dashboard/components/sos-fallback.test.mjs src/features/dashboard/components/emergency-tracking-state.test.mjs src/features/dashboard/components/record/severity.test.mjs src/features/classification/route-preview-map.test.mjs",
+    "test": "node --experimental-strip-types --test src/features/auth/recent-accounts.test.mjs src/features/dashboard/components/sos-fallback.test.mjs src/features/dashboard/components/emergency-tracking-state.test.mjs src/features/dashboard/components/record/severity.test.mjs src/features/classification/route-preview-map.test.mjs",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "cap:sync": "npm run build -- --mode capacitor && cap sync android",
+    "cap:open:android": "cap open android",
+    "cap:run:android": "npm run build -- --mode capacitor && cap sync android && cap run android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/geolocation": "^8.2.2",
+    "@capacitor/push-notifications": "^8.1.2",
     "@gsap/react": "^2.1.2",
     "@mui/icons-material": "^9.3.1",
     "@react-three/fiber": "^9.6.1",
@@ -29,6 +36,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
     "@eslint/js": "^10",
     "@tailwindcss/vite": "^4",
     "@types/node": "^24",

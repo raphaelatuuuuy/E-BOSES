@@ -1,10 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import {
-  LocateFixedIcon,
-  MinusIcon,
-  NavigationIcon,
-  PlusIcon,
-} from "lucide-react"
+import { LocateFixedIcon, NavigationIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
@@ -271,6 +266,7 @@ export function ResponderLeafletMap({
             imageUrl: concern.category_ref?.icon_image_url,
             customLabel: concern.category_ref?.custom_icon_label,
             status: concern.status,
+            severity: concern.severity ?? null,
             selected: picked,
           }),
           iconSize: [box, box],
@@ -443,13 +439,7 @@ export function ResponderLeafletMap({
         }
       `}</style>
 
-      {/* One control object, not three.
-          Locate, zoom-in and zoom-out used to float as a lone pill plus a
-          two-up grid, which together with the queue rail put four separate
-          clusters over a map that is often only 360px tall — the crowding the
-          user reported. They are now a single joined stack with hairline
-          dividers: same three actions, one thing to look at.
-
+      {/* One joined control object.
           Bottom-right below `sm`: on a phone held one-handed the top corners
           are the hardest place to reach, and these are the controls a
           responder uses while moving. */}
@@ -471,20 +461,6 @@ export function ResponderLeafletMap({
             onClick={() => setFollow((current) => !current)}
           >
             <NavigationIcon className="size-5" />
-          </MapStackButton>
-          <MapStackDivider />
-          <MapStackButton
-            label="Zoom in"
-            onClick={() => mapRef.current?.zoomIn()}
-          >
-            <PlusIcon className="size-5" />
-          </MapStackButton>
-          <MapStackDivider />
-          <MapStackButton
-            label="Zoom out"
-            onClick={() => mapRef.current?.zoomOut()}
-          >
-            <MinusIcon className="size-5" />
           </MapStackButton>
         </MapControlStack>
       </div>

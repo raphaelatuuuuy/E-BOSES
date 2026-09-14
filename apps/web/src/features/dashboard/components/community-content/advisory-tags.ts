@@ -9,6 +9,8 @@ import {
   ZapIcon,
   type LucideIcon,
 } from "lucide-react"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
 
 import { glyphPinHtml, glyphPinSize, type MarkerTone } from "@/features/dashboard/components/map/markers"
 
@@ -20,6 +22,12 @@ import { glyphPinHtml, glyphPinSize, type MarkerTone } from "@/features/dashboar
 export const ADVISORY_COLOR = "#f2a03d"
 export const ADVISORY_SOFT = "#fdf3e3"
 
+export const ANNOUNCEMENT_ACCENT = {
+  color: "#1f6c98",
+  soft: "#eaf2f8",
+  ink: "#14455f",
+}
+
 export interface AdvisoryTagMeta {
   /** Stored value of Announcement.tag. */
   value: string
@@ -30,6 +38,10 @@ export interface AdvisoryTagMeta {
   svgStrokeWidth: number
   /** Map + marker colour for this tag. */
   color: string
+  /** Tinted background paired with the tag colour. */
+  soft: string
+  /** Darker tag shade for text on the tinted background. */
+  ink: string
 }
 
 export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
@@ -43,6 +55,8 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
     ],
     svgStrokeWidth: 2,
     color: "#0ea5e9",
+    soft: "#e8f6fd",
+    ink: "#075985",
   },
   {
     value: "Electric outage",
@@ -53,6 +67,8 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
     ],
     svgStrokeWidth: 2,
     color: "#d97706",
+    soft: "#fdf1e2",
+    ink: "#92400e",
   },
   {
     value: "Road closure",
@@ -66,6 +82,8 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
     ],
     svgStrokeWidth: 2,
     color: "#ea580c",
+    soft: "#fdeee4",
+    ink: "#9a3412",
   },
   {
     value: "Flooding",
@@ -78,6 +96,8 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
     ],
     svgStrokeWidth: 2,
     color: "#2563eb",
+    soft: "#e9effd",
+    ink: "#1e40af",
   },
   {
     value: "Health advisory",
@@ -89,6 +109,8 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
     ],
     svgStrokeWidth: 2,
     color: "#10b981",
+    soft: "#e6f7ef",
+    ink: "#065f46",
   },
   {
     value: "Community event",
@@ -102,6 +124,8 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
     ],
     svgStrokeWidth: 2,
     color: "#16a34a",
+    soft: "#e9f7ee",
+    ink: "#166534",
   },
   {
     value: "Safety notice",
@@ -114,6 +138,8 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
     ],
     svgStrokeWidth: 2,
     color: "#8b5cf6",
+    soft: "#f0eafd",
+    ink: "#5b21b6",
   },
   {
     value: "General advisory",
@@ -125,6 +151,8 @@ export const ADVISORY_TAGS: AdvisoryTagMeta[] = [
     ],
     svgStrokeWidth: 2,
     color: "#f2a03d",
+    soft: "#fdf3e3",
+    ink: "#92400e",
   },
 ]
 
@@ -148,6 +176,24 @@ export function advisoryLabel(tag: string | null | undefined): string {
   return match?.label ?? raw
 }
 
+const ADVISORY_GLYPH_CACHE = new Map<string, string>()
+
+/** Static SVG of the tag's own Lucide icon — the same component the detail sheet renders. */
+export function advisoryGlyphHtml(
+  tag: string | null | undefined,
+  px = 24
+): string {
+  const meta = advisoryMeta(tag)
+  const key = `${meta.value}|${px}`
+  const cached = ADVISORY_GLYPH_CACHE.get(key)
+  if (cached) return cached
+  const html = renderToStaticMarkup(
+    createElement(meta.icon, { size: px, strokeWidth: meta.svgStrokeWidth })
+  )
+  ADVISORY_GLYPH_CACHE.set(key, html)
+  return html
+}
+
 /** Leaflet divIcon markup — the same circle-with-glyph every map record uses. */
 export function advisoryMarkerHtml(
   tag: string | null | undefined,
@@ -159,6 +205,7 @@ export function advisoryMarkerHtml(
   const meta = advisoryMeta(tag)
   return glyphPinHtml({
     paths: meta.svgPaths,
+    content: advisoryGlyphHtml(tag),
     color: colorOverride ?? meta.color,
     size,
     selected,

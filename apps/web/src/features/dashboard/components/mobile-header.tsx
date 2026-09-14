@@ -1,10 +1,16 @@
 import { useState } from "react"
 import { Link } from "react-router-dom"
 
-import { cn } from "@workspace/ui/lib/utils"
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { isResponderUser } from "@/features/auth/roles"
+import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
+import { useOfficialBadges } from "@/features/dashboard/hooks/use-official-badges"
+import { useOfficialUnitScope } from "@/features/dashboard/hooks/use-official-unit"
+import {
+  LiveDot,
+  liveDotAriaLabel,
+} from "@/features/dashboard/components/home/live-dot"
+import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
 import { OfficialMobileChrome } from "@/features/dashboard/components/official/official-account-dialogs"
 import {
   ResponderNotificationsButton,
@@ -12,9 +18,8 @@ import {
 } from "@/features/dashboard/components/responder/account-dialogs"
 
 /**
- * Staff (official/responder) sticky mobile header — brand logo + bell +
- * avatar. Residents use their own mobile chrome (search lives in the page
- * body).
+ * Staff (official/responder) sticky mobile header — resident-style live rail
+ * dot + community name, with staff inbox and avatar controls.
  *
  * Both staff roles use light chrome and their own account dialogs.
  */
@@ -50,34 +55,51 @@ export function StaffMobileHeader({
   homeTo: string
 }) {
   const { user } = useAuthSession()
-  const communityName = user?.barangay || "E-Boses community"
+  const communityName = (user?.barangay || "Your community").replace(
+    /^Barangay\s+/i,
+    "",
+  )
   const responder = isResponderUser(user)
+  const official = isOfficialUser(user)
+  const { selectedUnitId } = useOfficialUnitScope(official ? user : null)
+  const { badges, criticalReport, communityCenter } = useOfficialBadges(
+    official,
+    selectedUnitId,
+  )
+  const activeAlertCount =
+    (badges.emergencies ?? 0) + (criticalReport ? 1 : 0)
+  const hasActiveAlerts = activeAlertCount > 0
+  const railLatitude = communityCenter?.latitude ?? 14.5995
+  const railLongitude = communityCenter?.longitude ?? 120.9842
 
   return (
     <header
-      className={cn(
-        "sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b px-3",
-        "border-shell-border bg-white",
-      )}
+      className="sticky top-0 z-40 mt-5 flex h-14 shrink-0 items-center gap-2 bg-white px-3"
     >
-      <Link to={homeTo} className="flex min-w-0 items-center gap-2 no-underline">
-        <img
-          src="/contents/logo.webp"
-          alt={`Boses ${communityName}`}
-          className="size-8 shrink-0 object-contain"
-        />
-        <div className="flex flex-col">
-          <span className="truncate text-[22px] font-bold leading-none tracking-tight text-brand-orange">
-            Boses
-          </span>
-          <span
-            className="mt-0.5 text-[11px] font-bold leading-tight tracking-wide text-brand-navy"
-          >
-            {communityName}
-          </span>
-        </div>
+      <LiveDot
+        src={railLiveMapSrc(railLatitude, railLongitude)}
+        alert={hasActiveAlerts}
+        label={liveDotAriaLabel(
+          communityName,
+          hasActiveAlerts,
+          activeAlertCount,
+        )}
+        title={
+          criticalReport
+            ? `Critical report: ${criticalReport.official_title || criticalReport.title}`
+            : hasActiveAlerts
+              ? `${activeAlertCount} active alert${activeAlertCount === 1 ? "" : "s"}`
+              : undefined
+        }
+        to="/dashboard/alerts-map"
+      />
+      <Link
+        to={homeTo}
+        className="min-w-0 flex-1 truncate text-[16px] font-bold tracking-tight text-neutral-900 no-underline"
+      >
+        {communityName}
       </Link>
-      <div className="flex items-center gap-0.5">
+      <div className="flex shrink-0 items-center gap-0.5">
         {responder ? (
           <ResponderMobileChrome />
         ) : (

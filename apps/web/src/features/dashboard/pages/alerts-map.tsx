@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
-  AlertTriangleIcon,
+  Check,
   ChevronLeftIcon,
   CircleAlertIcon,
   CloudSunIcon,
   LeafIcon,
-  MegaphoneIcon,
   SearchIcon,
   ShieldCheckIcon,
   SignalHighIcon,
-  SignalIcon,
   SignalLowIcon,
   SignalMediumIcon,
   TrafficConeIcon,
+  TriangleAlertIcon,
 } from "lucide-react"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 
@@ -36,17 +35,26 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 
 import { streetOnly } from "@/features/dashboard/lib/location-text"
+import {
+  announcementSummary,
+  announcementTitle,
+} from "@/features/dashboard/lib/announcement-summary"
 import { timeAgo } from "@/features/dashboard/lib/format"
-import { responderUnitLabel } from "@/features/dashboard/lib/people"
-import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
-import { advisoryLabel } from "@/features/dashboard/components/community-content/advisory-tags"
+import {
+  concernBodyText,
+  concernTitleText,
+} from "@/features/dashboard/components/feed-post-text"
+import {
+  ANNOUNCEMENT_ACCENT,
+  advisoryLabel,
+  advisoryMeta,
+} from "@/features/dashboard/components/community-content/advisory-tags"
 import {
   MapWeatherIcon,
   useMapWeather,
 } from "@/features/dashboard/components/map-weather"
-import { MapFilterChips } from "@/features/dashboard/components/map/filter-chips"
+import { AlertsSearchRow } from "@/features/dashboard/components/alerts-map/alerts-search-row"
 import {
-  ALERT_FEED_CHIPS,
   AlertsFeed,
   type AlertFeedRow,
 } from "@/features/dashboard/components/alerts-map/alerts-feed"
@@ -61,7 +69,6 @@ import {
   defaultLayers,
   emptyLiveMapSnapshot,
   mergeUpdate,
-  type LayerKey,
   type Selection,
 } from "@/features/dashboard/components/alerts-map/lib"
 
@@ -176,6 +183,7 @@ const SELECTION_LABEL: Record<"emergency" | "concern", string> = {
   concern: "Concern",
 }
 
+/* eslint-disable react-hooks/static-components -- resolveIconByKey returns a stable module-level Lucide component, never a new one */
 function ConcernIcon({
   category,
   iconKey,
@@ -195,6 +203,7 @@ function ConcernIcon({
     return <ShieldCheckIcon className={className} strokeWidth={1.9} />
   return <SearchIcon className={className} strokeWidth={1.9} />
 }
+/* eslint-enable react-hooks/static-components */
 
 function titleCase(value: string) {
   const words = value.replace(/_/g, " ").trim()
@@ -206,18 +215,18 @@ function readableSeverity(value?: string | null) {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
-function priorityBadge(value?: string | null) {
+function priorityBadge(value?: string | null, criticalUsesSignal = false) {
   const severity = (value || "").toLowerCase()
   if (!(severity in { critical: true, high: true, moderate: true, low: true }))
     return null
   const Icon = {
-    critical: SignalIcon,
+    critical: criticalUsesSignal ? SignalHighIcon : TriangleAlertIcon,
     high: SignalHighIcon,
     moderate: SignalMediumIcon,
     low: SignalLowIcon,
   }[severity as "critical" | "high" | "moderate" | "low"]
   const tone = {
-    critical: "text-severity-critical-ink",
+    critical: "text-severity-critical-map-ink",
     high: "text-severity-high-ink",
     moderate: "text-severity-moderate-ink",
     low: "text-severity-low-ink",
@@ -252,30 +261,40 @@ function normaliseMapCopy(value: string) {
     .toLowerCase()
 }
 
+function withoutCommunitySuffix(value: string) {
+  return value
+    .replace(
+      /(?:,|\s+in)\s+(?:Marikina Heights|Marist Village)(?=$|[.,])/i,
+      ""
+    )
+    .replace(/\s{2,}/g, " ")
+    .trim()
+}
+
 function concernMapCopy(concern: {
   title: string
   notification_subject?: string
   summary?: string
   description?: string
 }) {
-  const title = (
-    concern.notification_subject ||
-    concern.title ||
-    "Report"
-  ).trim()
-  const summary = (concern.summary || concern.description || "").trim()
-  const duplicate =
-    Boolean(summary) && normaliseMapCopy(title) === normaliseMapCopy(summary)
+  const title = withoutCommunitySuffix(
+    concernTitleText(concern).replace(/\s+/g, " ").trim() || "Report"
+  )
+  const body = concernBodyText(concern).replace(/\s+/g, " ").trim()
+  const summary = (concern.summary || "").replace(/\s+/g, " ").trim()
+  const generatedSummary =
+    summary &&
+    normaliseMapCopy(summary) !== normaliseMapCopy(title) &&
+    normaliseMapCopy(summary) !== normaliseMapCopy(body)
+      ? summary
+      : ""
+  const snippet =
+    generatedSummary ||
+    (normaliseMapCopy(body) !== normaliseMapCopy(title) ? body : "")
   return {
     title,
-    snippet: duplicate ? "" : summary,
-    snippetLabel: duplicate
-      ? null
-      : concern.summary
-        ? null
-        : summary
-          ? "Report description"
-          : null,
+    snippet,
+    snippetLabel: summary ? null : snippet ? "Report description" : null,
   }
 }
 
@@ -288,7 +307,6 @@ export default function AlertsMapPage() {
   const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<LiveMapSnapshot | null>(null)
   const [homeCommunityId, setHomeCommunityId] = useState<string | null>(null)
-  const [layers, setLayers] = useState(defaultLayers)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [selected, setSelected] = useState<Selection>(() => {
     const alertId = Number(
@@ -300,6 +318,8 @@ export default function AlertsMapPage() {
   })
   const [feedChip, setFeedChip] = useState<string>("all")
   const [weatherOpen, setWeatherOpen] = useState(false)
+  const [alertQuery, setAlertQuery] = useState("")
+  const [alertFilterOpen, setAlertFilterOpen] = useState(false)
   const [communityFilter, setCommunityFilter] = useState("all")
   const [weatherReady, setWeatherReady] = useState(false)
 
@@ -535,12 +555,6 @@ export default function AlertsMapPage() {
   }, [snapshot, resolvedRecords, communityFilter, homeCommunityId])
   const mapSelectedStreetNames = useMemo(() => new Set<string>(), [])
 
-  const toggleLayer = useCallback((key: LayerKey) => {
-    setLayers((current) => ({ ...current, [key]: !current[key] }))
-  }, [])
-
-  const resetLayers = useCallback(() => setLayers(defaultLayers), [])
-
   const selectOnMap = useCallback(
     (next: Selection) => {
       const concern =
@@ -568,8 +582,8 @@ export default function AlertsMapPage() {
       ) {
         navigate(
           next.kind === "concern"
-            ? `/dashboard/reports/${next.id}`
-            : `/dashboard/reports?alert=${next.id}`
+            ? `/dashboard/overview?report=${next.id}`
+            : `/dashboard/overview?alert=${next.id}`
         )
         return
       }
@@ -607,38 +621,13 @@ export default function AlertsMapPage() {
     )
   }, [])
 
-  const concernCommunities = useMemo(
-    () =>
-      new Map(
-        snapshot?.public_concerns.map((item) => [
-          item.id,
-          item.community.name,
-        ]) ?? []
-      ),
-    [snapshot]
-  )
-  const emergencyCommunities = useMemo(
-    () =>
-      new Map(
-        snapshot?.public_emergencies.map((item) => [
-          item.id,
-          item.community.name,
-        ]) ?? []
-      ),
-    [snapshot]
-  )
-
   const feedRows = useMemo<AlertFeedRow[]>(() => {
     if (!snapshot) return []
     const rows: Array<
       AlertFeedRow & { rank: number; priorityRank: number; time: number }
     > = []
-    const streetOf = (record: {
-      address?: string | null
-      barangay?: string | null
-    }) =>
-      streetOnly(record.address?.trim()) ||
-      (record.barangay ? `In ${record.barangay}` : "")
+    const streetOf = (record: { address?: string | null }) =>
+      streetOnly(record.address?.trim())
 
     // Concerns is the operational reports view. It includes both routine
     // concerns and critical/emergency reports so staff never have to inspect
@@ -647,12 +636,14 @@ export default function AlertsMapPage() {
       for (const emergency of visibleEmergencies) {
         const live = isActiveEmergency(emergency)
         const street = streetOf(emergency)
-        const assignment = emergency.current_assignment
-        const unit = responderUnitLabel(assignment?.responder.responder_unit)
         rows.push({
           key: `emergency-${emergency.id}`,
           selection: { kind: "emergency", id: emergency.id },
-          icon: <AlertTriangleIcon className="size-5" strokeWidth={1.9} />,
+          icon: live ? (
+            <TriangleAlertIcon className="size-5 text-sos" strokeWidth={2.2} />
+          ) : (
+            <Check className="size-5 text-emerald-600" strokeWidth={2.5} />
+          ),
           rank: live ? 0 : 1,
           priorityRank: live ? 3 : 0,
           time: new Date(emergency.created_at).getTime(),
@@ -663,33 +654,19 @@ export default function AlertsMapPage() {
             closed: !live,
             resolved: !isActiveEmergency(emergency),
             title: `${titleCase(emergency.type)} emergency${
-              emergency.address?.trim() || emergency.barangay?.trim()
-                ? ` around ${emergency.address?.trim() || emergency.barangay.trim()}`
-                : ""
+              street ? ` around ${street}` : ""
             }`,
-            meta: [
-              emergencyCommunities.get(emergency.id),
-              street,
-              timeAgo(emergency.created_at),
-            ]
+            meta: [street, timeAgo(emergency.created_at)]
               .filter(Boolean)
               .join(" · "),
-            status: assignment
-              ? [
-                  assignment.responder.full_name,
-                  unit,
-                  titleCase(assignment.status),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")
-              : null,
+            status: null,
             priority: live
-              ? (priorityBadge("critical") ?? undefined)
+              ? (priorityBadge("critical", true) ?? undefined)
               : undefined,
             snippet: emergency.display_description || emergency.note || "",
-            actionLabel: "Open full report",
+            actionLabel: "View full report",
           },
-          onAction: () => navigate(`/dashboard/reports?alert=${emergency.id}`),
+          onAction: () => navigate(`/dashboard/overview?alert=${emergency.id}`),
         })
       }
     }
@@ -702,7 +679,19 @@ export default function AlertsMapPage() {
         rows.push({
           key: `concern-${concern.id}`,
           selection: { kind: "concern", id: concern.id },
-          icon: <ConcernIcon category={concern.category} iconKey={concern.category_ref?.icon_key} className="size-5" />,
+          icon:
+            (concern.severity ?? concern.priority ?? "").toLowerCase() ===
+            "critical" ? (
+              <TriangleAlertIcon className="size-5 text-sos" strokeWidth={2.2} />
+            ) : closed ? (
+              <Check className="size-5 text-emerald-600" strokeWidth={2.5} />
+            ) : (
+              <ConcernIcon
+                category={concern.category}
+                iconKey={concern.category_ref?.icon_key}
+                className="size-5"
+              />
+            ),
           rank: closed ? 1 : 0,
           priorityRank: concernPriorityRank(
             concern.severity ?? concern.priority
@@ -714,37 +703,36 @@ export default function AlertsMapPage() {
             live: false,
             closed,
             title: copy.title,
-            meta: [
-              concernCommunities.get(concern.id),
-              concernCategoryLabel(concern),
-              street,
-              timeAgo(concern.created_at),
-            ]
+            critical:
+              (concern.severity ?? concern.priority ?? "").toLowerCase() ===
+              "critical",
+            meta: [street, timeAgo(concern.created_at)]
               .filter(Boolean)
               .join(" · "),
-            status: concern.reporter.full_name,
+            status: null,
             priority:
               concern.severity_assessed && concern.severity
-                ? (priorityBadge(concern.severity) ?? undefined)
+                ? (priorityBadge(concern.severity, true) ?? undefined)
                 : undefined,
             snippet: copy.snippet,
             snippetLabel: copy.snippetLabel,
-            actionLabel: "Open full report",
+            actionLabel: "View full report",
           },
-          onAction: () => navigate(`/dashboard/reports/${concern.id}`),
+          onAction: () => navigate(`/dashboard/overview?report=${concern.id}`),
         })
       }
     }
 
-    if (feedChip === "announcements") {
+    if (feedChip === "all" || feedChip === "announcements") {
       const nowMs = snapshot?.generated_at
         ? Date.parse(snapshot.generated_at)
         : undefined
       for (const advisory of snapshot.advisories ?? []) {
         const startsAt = advisory.starts_at
+        const TagIcon = advisoryMeta(advisory.tag).icon
         rows.push({
           key: `advisory-${advisory.id}`,
-          icon: <MegaphoneIcon className="size-5" strokeWidth={1.9} />,
+          icon: <TagIcon className="size-5" strokeWidth={1.9} />,
           rank: 4,
           priorityRank: 0,
           time: startsAt ? new Date(startsAt).getTime() : 0,
@@ -753,7 +741,11 @@ export default function AlertsMapPage() {
             id: advisory.id,
             live: false,
             closed: isAdvisoryExpired(advisory, nowMs),
-            title: advisory.title,
+            title: announcementTitle(advisory),
+            accent: {
+              soft: ANNOUNCEMENT_ACCENT.soft,
+              color: ANNOUNCEMENT_ACCENT.color,
+            },
             meta: [
               advisoryLabel(advisory.tag),
               advisory.affected_streets.length
@@ -764,10 +756,10 @@ export default function AlertsMapPage() {
               .filter(Boolean)
               .join(" · "),
             status: null,
-            snippet: advisory.body || "",
-            actionLabel: "Open in Community",
+            snippet: announcementSummary(advisory),
+            actionLabel: "View in feed",
           },
-          onAction: () => navigate("/dashboard/community-content"),
+          onAction: () => navigate("/dashboard/feed"),
         })
       }
     }
@@ -776,23 +768,40 @@ export default function AlertsMapPage() {
       (a, b) =>
         a.rank - b.rank || b.priorityRank - a.priorityRank || b.time - a.time
     )
-    return rows.slice(0, 50)
+
+    const query = alertQuery.trim().toLowerCase()
+    if (!query) return rows.slice(0, 50)
+    const matches = (values: unknown[]) =>
+      values.some(
+        (value) =>
+          typeof value === "string" && value.toLowerCase().includes(query)
+      )
+    return rows
+      .filter((row) =>
+        matches([
+          row.model.title,
+          row.model.meta,
+          row.model.status,
+          row.model.snippet,
+          row.model.snippetLabel,
+        ])
+      )
+      .slice(0, 50)
   }, [
     snapshot,
     visibleEmergencies,
     visibleConcerns,
     feedChip,
     navigate,
-    concernCommunities,
-    emergencyCommunities,
+    alertQuery,
   ])
 
-  const mapCounts = useMemo(() => {
-    return {
-      concerns: visibleConcerns.length + visibleEmergencies.length,
-      advisories: (snapshot?.advisories ?? []).length,
-    }
-  }, [snapshot, visibleConcerns, visibleEmergencies])
+  const mapAlertCount =
+    feedChip === "announcements"
+      ? snapshot?.advisories?.length ?? 0
+      : visibleConcerns.length +
+        visibleEmergencies.length +
+        (feedChip === "all" ? (snapshot?.advisories?.length ?? 0) : 0)
 
   const areaName =
     snapshot?.map.boundary.name ||
@@ -806,22 +815,6 @@ export default function AlertsMapPage() {
   // and the list swapped for the record in place.
   const panelBody = (
     <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900">
-      <div className="shrink-0 bg-white px-3 pt-2 pb-2">
-        <MapFilterChips
-          className="min-w-0"
-          tone="light"
-          chips={ALERT_FEED_CHIPS}
-          chip={weatherOpen ? "" : feedChip}
-          onSelect={(key) => {
-            setFeedChip(key)
-            setWeatherOpen(false)
-            // A filter choice is a request for the matching list, not a
-            // request to keep showing the previously opened alert detail.
-            clearSelection()
-          }}
-          label="Alert types"
-        />
-      </div>
       {selected ? (
         <>
           <div className="flex shrink-0 items-center gap-1 px-2 pt-3 pb-1">
@@ -852,12 +845,52 @@ export default function AlertsMapPage() {
       ) : (
         <AlertsFeed
           areaName={areaName}
-          total={feedRows.length}
+          total={mapAlertCount}
           rows={feedRows}
           onSelect={selectOnMap}
           weatherMode={weatherOpen}
           weatherToggle={weatherButton}
           weather={weather}
+          showFullSnippet
+          listToolbar={
+            <div className="relative shrink-0 bg-white px-3 pb-2">
+              <AlertsSearchRow
+                query={alertQuery}
+                onQuery={setAlertQuery}
+                filterOpen={alertFilterOpen}
+                onToggleFilter={() =>
+                  setAlertFilterOpen((value) => !value)
+                }
+                chip={weatherOpen ? "" : feedChip}
+                onSelectChip={(key) => {
+                  setFeedChip(key)
+                  setWeatherOpen(false)
+                  clearSelection()
+                }}
+              />
+            </div>
+          }
+          emptyState={
+            alertQuery.trim() ? (
+              <div className="flex flex-col items-center px-6 py-10 text-center">
+                <SearchIcon
+                  className="size-8 text-neutral-300"
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                />
+                <p className="mt-3 text-[14px] text-neutral-500">
+                  No alerts match this search.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setAlertQuery("")}
+                  className="mt-2 text-[14px] font-semibold text-brand-orange"
+                >
+                  Clear search
+                </button>
+              </div>
+            ) : null
+          }
         />
       )}
     </div>
@@ -873,19 +906,15 @@ export default function AlertsMapPage() {
     // Shipping only one of them collapses the map to zero height on the other
     // breakpoint, which is what rendered the map area as blank.
     <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-white">
-      {/* Mounted before the fetch resolves: tiles, controls and the legend are
-          the map's own chrome and do not need a single record to be useful.
-          The snapshot only fills them in. */}
+      {/* Mounted before the fetch resolves so the map's own chrome does not
+          need a single record to be useful. The snapshot only fills it in. */}
       <AlertsLeafletMap
         snapshot={filteredSnapshot}
-        layers={layers}
+        layers={defaultLayers}
         selected={selected}
         selectedStreetNames={mapSelectedStreetNames}
         onSelect={selectOnMap}
-        onToggleLayer={toggleLayer}
-        onResetLayers={resetLayers}
         onMapInteract={collapseSheetForMap}
-        counts={mapCounts}
       />
 
       {/* Desktop: the feed floats over the map instead of cutting a rail. */}
@@ -928,9 +957,9 @@ export default function AlertsMapPage() {
       <button
         type="button"
         onClick={() =>
-          navigate(isResponder ? "/dashboard/reports" : "/dashboard/overview")
+          navigate("/dashboard/overview")
         }
-        aria-label={isResponder ? "Back to reports" : "Back to the overview"}
+        aria-label="Back to the overview"
         className="absolute top-3 left-3 z-[600] flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white/95 text-neutral-900 shadow-md backdrop-blur transition-colors hover:bg-neutral-100 lg:hidden"
       >
         <ChevronLeftIcon className="size-5" strokeWidth={2.2} />
@@ -963,7 +992,7 @@ export default function AlertsMapPage() {
           {sheet.height <= sheet.snaps().hidden + 8 ? (
             <p className="pb-1 text-[13px] font-semibold text-neutral-700">
               Alerts in {areaName}
-              {feedRows.length > 0 ? ` · ${feedRows.length}` : ""}
+              {mapAlertCount > 0 ? ` · ${mapAlertCount}` : ""}
             </p>
           ) : null}
         </div>

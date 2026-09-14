@@ -1,8 +1,8 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
-import { createPortal } from "react-dom"
 import { toast } from "sonner"
-import { ArrowLeftIcon, CheckIcon, PhoneIcon, XIcon } from "lucide-react"
+import { AlertTriangleIcon, ArrowLeftIcon, PhoneIcon } from "lucide-react"
 import { ApiError } from "@/lib/api"
+import { SosTakeover } from "@/features/dashboard/components/sos/sos-takeover"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -28,6 +28,7 @@ import {
   type SosTriageAnswers,
 } from "@/features/dashboard/components/sos-fallback"
 import {
+  acceptedSosLocation,
   friendlyLocationMessage,
   SosLocationStep,
   type SosLocationValue,
@@ -37,14 +38,24 @@ import {
   emergencies,
   emergencyOptionsFromCategories,
 } from "@/features/dashboard/components/sos/emergency-catalog"
-import { SosDetailsStep, SOS_MAX_FILES, sosPhotoError } from "@/features/dashboard/components/sos/details-step"
+import {
+  SosDetailsStep,
+  SOS_MAX_FILES,
+  sosPhotoError,
+} from "@/features/dashboard/components/sos/details-step"
 import {
   SosTriageStep,
-  hasDetailQuestion,
+  hasUnansweredQuestions,
+  questionsForCategory,
 } from "@/features/dashboard/components/sos/triage-step"
 import { SosConfirmStep } from "@/features/dashboard/components/sos/confirm-step"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
-import { SOS_SMS_NUMBER } from "@/features/dashboard/components/sos/offline-sos-config"
+import {
+  offlineCategoriesFromConfig,
+  refreshOfflineSosConfig,
+  SOS_SMS_NUMBER,
+} from "@/features/dashboard/components/sos/offline-sos-config"
+import type { Hotline } from "@/features/dashboard/components/sos/duty-hours-dialog"
 
 const OFFLINE_SUBMIT_ERROR =
   "You’re offline. Reconnect to send online, or use the SMS backup below."
@@ -59,15 +70,14 @@ const WIZARD_STEPS: WizardStep[] = [
   "countdown",
 ]
 
-const WIZARD_LABELS = ["Type", "Details", "Location", "Review"] as const
-const WIZARD_STEP_COUNT = WIZARD_LABELS.length
+const WIZARD_STEP_COUNT = 4
 
 function stepTitle(step: WizardStep) {
   if (step === "category") return "What’s the emergency?"
   if (step === "triage") return "Quick questions"
   if (step === "location") return "Confirm your location"
   if (step === "review") return "Review & send"
-  return "Sending alert"
+  return "Ongoing"
 }
 
 function stepIndex(step: WizardStep) {
@@ -86,6 +96,7 @@ function SosShell({
   showBack,
   onBack,
   footer,
+  progress,
   resetKey,
   children,
 }: {
@@ -96,6 +107,7 @@ function SosShell({
   showBack?: boolean
   onBack?: () => void
   footer?: ReactNode
+  progress?: ReactNode
   /** Step identity — scrolls the body back to the top whenever it changes. */
   resetKey?: unknown
   children: ReactNode
@@ -108,24 +120,6 @@ function SosShell({
   useEffect(() => {
     bodyRef.current?.scrollTo({ top: 0 })
   }, [resetKey])
-
-  useEffect(() => {
-    if (!open) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose()
-    }
-    document.addEventListener("keydown", onKey)
-    return () => document.removeEventListener("keydown", onKey)
-  }, [open, onClose])
 
   useEffect(() => {
     if (!open) return
@@ -148,39 +142,19 @@ function SosShell({
 
   if (typeof document === "undefined" || !open) return null
 
-  return createPortal(
-    <div className="fixed inset-0 z-[400] flex items-end justify-center sm:items-center sm:p-4">
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={onClose}
-        className="motion-safe:animate-in motion-safe:fade-in absolute inset-0 bg-black/50 motion-safe:duration-200"
-      />
-
+  return (
+    <SosTakeover
+      open={open}
+      onClose={onClose}
+      labelledBy={titleId}
+      describedBy={subtitle ? subtitleId : undefined}
+      className="bg-brand-navy text-white"
+    >
       <div
         ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={subtitle ? subtitleId : undefined}
-        className={cn(
-          "relative z-10 flex w-full flex-col overflow-hidden border border-white/10 bg-brand-navy text-white shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
-          "max-h-[92dvh] rounded-t-[28px] sm:h-auto sm:max-h-[min(92dvh,760px)] sm:max-w-[440px] sm:rounded-[28px]",
-          "md:max-h-[min(92dvh,820px)] md:min-h-[420px]",
-          "md:w-[min(480px,92vw)] md:max-w-[min(720px,94vw)] md:min-w-[420px]",
-          // CSS `resize` only works on a box that is not overflow:visible, so
-          // the drag-to-resize grip forces overflow:auto on the panel itself.
-          // That paints a second scrollbar down the dialog even though the body
-          // below has its own scroller. Hide the panel's — the body keeps the
-          // scrolling, the grip keeps working.
-          "dialog-resize-grip scrollbar-hide md:resize",
-          "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200"
-        )}
+        className="mx-auto flex h-full min-h-0 w-full max-w-2xl flex-col overflow-hidden"
       >
-        <div className="flex shrink-0 flex-col items-center px-5 pt-2 pb-1">
-          <span aria-hidden className="mb-1 h-1.5 w-11 shrink-0 rounded-full bg-white/25 sm:hidden" />
-        </div>
-        <div className="flex shrink-0 items-center gap-2 px-5 pt-1 pb-4">
+        <div className="flex shrink-0 items-center gap-2 px-5 pt-[max(1rem,env(safe-area-inset-top))] pb-4">
           {showBack ? (
             <button
               type="button"
@@ -211,18 +185,8 @@ function SosShell({
               </p>
             ) : null}
           </div>
-
-          <div className="-mr-2 flex shrink-0 items-center gap-0.5">
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="flex size-10 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
-            >
-              <XIcon className="size-6" strokeWidth={2} />
-            </button>
-          </div>
         </div>
+        {progress ? <div className="shrink-0 px-5 pb-3">{progress}</div> : null}
 
         <div
           ref={bodyRef}
@@ -237,8 +201,7 @@ function SosShell({
           </div>
         ) : null}
       </div>
-    </div>,
-    document.body
+    </SosTakeover>
   )
 }
 
@@ -251,26 +214,44 @@ function SosShell({
  */
 export function SosWizard({
   open,
+  online,
   onClose,
   onSubmitted,
+  hotlines = [],
 }: {
   open: boolean
+  online: boolean
   onClose: () => void
   onSubmitted: (alert: EmergencyAlert) => void
+  hotlines?: Hotline[]
 }) {
   const { user } = useAuthSession()
   const [step, setStep] = useState<WizardStep>("category")
   const [emergencyCategories, setEmergencyCategories] = useState<
     EmergencyCategory[]
-  >([])
+  >(() => offlineCategoriesFromConfig())
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void listEmergencyCategories()
-      .then((items) => {
-        if (!cancelled) setEmergencyCategories(items)
-      })
-      .catch(() => {})
+
+    // Start both sources together. The authenticated endpoint is authoritative
+    // online; the versioned public cache is the source that keeps the wizard
+    // useful when the connection is gone or the authenticated request fails.
+    const categoryRequest = listEmergencyCategories()
+    const configRequest = refreshOfflineSosConfig()
+    void Promise.allSettled([categoryRequest, configRequest]).then(
+      ([categoryResult, configResult]) => {
+        if (cancelled) return
+        if (categoryResult.status === "fulfilled") {
+          setEmergencyCategories(categoryResult.value)
+          return
+        }
+        if (configResult.status === "fulfilled") {
+          const categories = offlineCategoriesFromConfig(configResult.value)
+          if (categories.length) setEmergencyCategories(categories)
+        }
+      }
+    )
     return () => {
       cancelled = true
     }
@@ -278,6 +259,7 @@ export function SosWizard({
   const [emergency, setEmergency] = useState<EmergencyType | "">("")
   const [note, setNote] = useState("")
   const [location, setLocation] = useState<SosLocationValue | null>(null)
+  const [locationVisited, setLocationVisited] = useState(false)
   const [triage, setTriage] = useState<SosTriageAnswers>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [submitError, setSubmitError] = useState("")
@@ -286,11 +268,11 @@ export function SosWizard({
   const [mediaError, setMediaError] = useState<string | null>(null)
   const [checkingMedia, setCheckingMedia] = useState(false)
   const [dispatchCountdown, setDispatchCountdown] = useState(5)
-  const [isOnline, setIsOnline] = useState(() =>
-    typeof navigator === "undefined" ? true : navigator.onLine
-  )
+  const isOnline = online
   const [statusAnnouncement, setStatusAnnouncement] = useState("")
   const clientRequestIdRef = useRef(crypto.randomUUID())
+  const submitAbortRef = useRef<AbortController | null>(null)
+  const cancelRequestedRef = useRef(false)
 
   function buildEmergencyFormData(payload: {
     clientRequestId: string
@@ -395,7 +377,7 @@ export function SosWizard({
   }
 
   async function retryQueuedEmergencies() {
-    if (!navigator.onLine) return
+    if (!isOnline) return
     const [queued, active] = await Promise.all([
       listQueuedSosEmergencies().catch(() => []),
       getActiveEmergency().catch(() => null),
@@ -440,29 +422,22 @@ export function SosWizard({
   })
 
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true)
-      setSubmitError((current) =>
-        current === OFFLINE_SUBMIT_ERROR ? "" : current
-      )
-      setStatusAnnouncement(
-        "Connection restored. You can send the emergency alert online."
-      )
-      void retryQueuedRef.current()
-    }
-    const handleOffline = () => {
-      setIsOnline(false)
-      setStatusAnnouncement(
-        "You are offline. Your SOS details are saved on this screen."
-      )
-    }
-    window.addEventListener("online", handleOnline)
-    window.addEventListener("offline", handleOffline)
-    return () => {
-      window.removeEventListener("online", handleOnline)
-      window.removeEventListener("offline", handleOffline)
-    }
-  }, [])
+    queueMicrotask(() => {
+      if (isOnline) {
+        setSubmitError((current) =>
+          current === OFFLINE_SUBMIT_ERROR ? "" : current
+        )
+        setStatusAnnouncement(
+          "Connection restored. You can send the emergency alert online."
+        )
+        void retryQueuedRef.current()
+      } else {
+        setStatusAnnouncement(
+          "You are offline. Your SOS details are saved on this screen."
+        )
+      }
+    })
+  }, [isOnline])
 
   useEffect(() => {
     if (open) void retryQueuedEmergencies()
@@ -475,6 +450,7 @@ export function SosWizard({
     setEmergency("")
     setNote("")
     setLocation(null)
+    setLocationVisited(false)
     setTriage({})
     setFieldErrors({})
     setSubmitError("")
@@ -497,7 +473,6 @@ export function SosWizard({
       setStatusAnnouncement(
         "Emergency alert cancelled before sending. Your details are still available."
       )
-      toast.info("Alert cancelled before sending.")
       return
     }
     resetWizard()
@@ -530,16 +505,16 @@ export function SosWizard({
       return
     }
     if (step === "triage") {
-      const needDetail = hasDetailQuestion(emergency || "")
-      if (
-        !triage.peopleAffected ||
-        !triage.injuries ||
-        (needDetail && !triage.detail)
-      ) {
+      const questions = questionsForCategory(
+        emergency || "",
+        typeMeta?.quickQuestions
+      )
+      if (hasUnansweredQuestions(triage, questions)) {
         setFieldErrors({ triage: "Answer all the questions to continue." })
         return
       }
       setFieldErrors({})
+      setLocationVisited(true)
       setStep("location")
       return
     }
@@ -549,12 +524,7 @@ export function SosWizard({
         setFieldErrors({ location: "Choose a location on the map." })
         return
       }
-      if (
-        isOnline &&
-        (!selectedLocation.locationCheck ||
-          !selectedLocation.locationCheck.accepted ||
-          selectedLocation.locationCheck.status === "far")
-      ) {
+      if (isOnline && !acceptedSosLocation(selectedLocation)) {
         setFieldErrors({
           location: friendlyLocationMessage(selectedLocation.locationCheck),
         })
@@ -577,9 +547,8 @@ export function SosWizard({
   }
 
   async function submitEmergency() {
-    if (!location || !emergency) return
-    if (!navigator.onLine) {
-      setIsOnline(false)
+    if (!location || !emergency || submitting) return
+    if (!isOnline) {
       setStep("review")
       setSubmitError(OFFLINE_SUBMIT_ERROR)
       setStatusAnnouncement(OFFLINE_SUBMIT_ERROR)
@@ -592,6 +561,9 @@ export function SosWizard({
     }
     setSubmitError("")
     setMediaError(null)
+    const submitController = new AbortController()
+    submitAbortRef.current = submitController
+    cancelRequestedRef.current = false
     setSubmitting(true)
     setStatusAnnouncement("Sending the emergency alert now.")
     try {
@@ -609,7 +581,7 @@ export function SosWizard({
         media: mediaFiles,
       })
 
-      const alert = await createEmergency(formData)
+      const alert = await createEmergency(formData, submitController.signal)
       if (note.trim()) {
         await sendEmergencyChat(alert.id, note.trim(), null).catch(() => {
           toast.warning(
@@ -625,6 +597,7 @@ export function SosWizard({
       if (alert.media_warnings?.length) toast.warning(alert.media_warnings[0])
       onSubmitted(alert)
     } catch (error) {
+      if (cancelRequestedRef.current || submitController.signal.aborted) return
       try {
         const active = await getActiveEmergency()
         if (active && isActiveAlert(active)) {
@@ -660,9 +633,25 @@ export function SosWizard({
         toast.warning("Could not save the SOS queue on this browser.")
       }
     } finally {
+      if (submitAbortRef.current === submitController) {
+        submitAbortRef.current = null
+      }
+      cancelRequestedRef.current = false
       setSubmitting(false)
       setDispatchCountdown(5)
     }
+  }
+
+  function cancelCountdown() {
+    if (submitting) {
+      cancelRequestedRef.current = true
+      submitAbortRef.current?.abort()
+    }
+    setStep("review")
+    setDispatchCountdown(5)
+    setStatusAnnouncement(
+      "Emergency alert cancelled before sending. Your details are still available."
+    )
   }
 
   async function enqueueCurrentEmergency() {
@@ -704,6 +693,10 @@ export function SosWizard({
     ? emergencyOptionsFromCategories(emergencyCategories)
     : emergencies
   const typeMeta = emergencyOptions.find((e) => e.value === emergency)
+  const activeQuestions = questionsForCategory(
+    emergency || "",
+    typeMeta?.quickQuestions
+  )
   // Built even without a map fix: an emergency with only a described area is
   // still a valid SMS, and the backend saves and routes it.
   const smsBody = buildEmergencySmsMessage({
@@ -714,6 +707,7 @@ export function SosWizard({
     latitude: location?.lat ?? null,
     longitude: location?.lng ?? null,
     triage,
+    questions: activeQuestions,
     note,
   })
   const emergencySmsHref = buildEmergencySmsHref(SOS_SMS_NUMBER, smsBody)
@@ -735,17 +729,26 @@ export function SosWizard({
   const locationCanContinue = Boolean(
     location &&
     isSosLocationReady(location) &&
-      (!isOnline ||
-      Boolean(
-        location.locationCheck?.accepted &&
-          location.locationCheck.status !== "far"
-      ))
+    (!isOnline || acceptedSosLocation(location))
   )
 
   const wizardFooter =
     step !== "countdown" ? (
-      <div className="flex gap-2">
-        {step !== "category" ? (
+      <>
+        {step === "review" ? (
+          <div className="mb-3 flex items-start gap-3 rounded-[18px] border border-sos/40 bg-sos/15 px-4 py-3">
+            <AlertTriangleIcon
+              className="mt-0.5 size-5 shrink-0 text-sos-bright"
+              strokeWidth={2}
+              aria-hidden="true"
+            />
+            <p className="text-[13px] leading-5 font-medium text-sos-bright">
+              False or misleading alerts are logged and repeated abuse can
+              suspend your account.
+            </p>
+          </div>
+        ) : null}
+        <div className="flex gap-2">
           <button
             type="button"
             onClick={goBack}
@@ -753,49 +756,61 @@ export function SosWizard({
           >
             Back
           </button>
-        ) : null}
-        {step === "review" && useSmsDelivery && emergencySmsHref ? (
-          <a
-            href={emergencySmsHref}
-            onClick={announceSmsFallback}
-            className="flex h-[52px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
-          >
-            <PhoneIcon className="size-4" aria-hidden="true" />
-            Send Alert
-          </a>
-        ) : (
-          <button
-            type="button"
-            onClick={goNext}
-            disabled={step === "location" && !locationCanContinue}
-            className={cn(
-              "h-[52px] flex-[1.4] rounded-full text-[16px] font-semibold text-white transition-all active:scale-[0.99]",
-              step === "review"
-                ? "bg-sos hover:opacity-90"
-                : "bg-brand-orange hover:bg-brand-orange-strong",
-              "disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40 disabled:active:scale-100"
+          {step === "review" && useSmsDelivery && emergencySmsHref ? (
+            <a
+              href={emergencySmsHref}
+              onClick={announceSmsFallback}
+              className="flex h-[52px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
+            >
+              <PhoneIcon className="size-4" aria-hidden="true" />
+              Send Alert
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={goNext}
+              disabled={
+                (step === "category" && !emergency) ||
+                (step === "triage" &&
+                  hasUnansweredQuestions(triage, activeQuestions)) ||
+                (step === "location" && !locationCanContinue)
+              }
+              className={cn(
+                "h-[52px] flex-[1.4] rounded-full text-[16px] font-semibold text-white transition-all active:scale-[0.99]",
+                step === "review"
+                  ? "bg-sos hover:opacity-90"
+                  : "bg-brand-orange hover:bg-brand-orange-strong",
+                "disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40 disabled:active:scale-100"
+              )}
+            >
+              {step === "review" ? "Send SOS" : "Next"}
+            </button>
+          )}
+        </div>
+        {step === "category" ? (
+          <p className="mt-3 text-center text-[13px] text-white/50">
+            Prefer to talk?{" "}
+            {hotlines[0]?.number ? (
+              <a
+                href={`tel:${(hotlines[0]?.number ?? "").replace(/[^+\d]/g, "")}`}
+                className="font-bold text-brand-orange"
+              >
+                Call the barangay hotline directly.
+              </a>
+            ) : (
+              "Call the barangay hotline directly."
             )}
-          >
-            {step === "review" ? "Send SOS" : "Next"}
-          </button>
-        )}
-      </div>
+          </p>
+        ) : null}
+      </>
     ) : (
       <div className="flex gap-2">
         <button
           type="button"
-          onClick={() => {
-            setStep("review")
-            setDispatchCountdown(5)
-            setStatusAnnouncement(
-              "Emergency alert cancelled before sending. Your details are still available."
-            )
-            toast.info("Alert cancelled before sending.")
-          }}
-          disabled={submitting}
+          onClick={cancelCountdown}
           className="h-[52px] flex-1 rounded-full border border-sos/50 bg-sos/15 text-[16px] font-semibold text-sos-bright transition-colors hover:bg-sos/25 disabled:opacity-60"
         >
-          {submitting ? "Sending…" : "Cancel"}
+          {submitting ? "Cancel sending" : "Cancel"}
         </button>
         <button
           type="button"
@@ -837,69 +852,34 @@ export function SosWizard({
         showBack={step !== "category" && step !== "countdown"}
         onBack={goBack}
         footer={wizardFooter}
-        resetKey={step}
-      >
-        {step !== "countdown" ? (
-          <div className="mt-1 mb-5">
-            <div className="mb-3 flex items-center justify-between gap-1">
-              {WIZARD_LABELS.map((label, i) => {
-                const n = i + 1
-                const current = Math.min(stepIndex(step), WIZARD_STEP_COUNT)
-                const done = n < current
-                const active = n === current
+        progress={
+          step !== "countdown" ? (
+            <div className="flex gap-1.5" aria-hidden="true">
+              {Array.from({ length: WIZARD_STEP_COUNT }).map((_, i) => {
+                const on = i < Math.min(stepIndex(step), WIZARD_STEP_COUNT)
                 return (
-                  <div
-                    key={label}
-                    className="flex min-w-0 flex-1 flex-col items-center gap-1.5"
-                  >
-                    <span
-                      className={cn(
-                        "flex size-7 items-center justify-center rounded-full text-[11px] font-bold",
-                        done && "bg-brand-orange text-white",
-                        active && "bg-white text-brand-navy",
-                        !done &&
-                          !active &&
-                          "border border-white/25 bg-transparent text-white/45"
-                      )}
-                    >
-                      {done ? (
-                        <CheckIcon className="size-3.5" strokeWidth={3} />
-                      ) : (
-                        n
-                      )}
-                    </span>
-                    <span
-                      className={cn(
-                        "truncate text-[11px] font-semibold",
-                        active
-                          ? "text-white"
-                          : done
-                            ? "text-white/70"
-                            : "text-white/40"
-                      )}
-                    >
-                      {label}
-                    </span>
-                  </div>
+                  <span
+                    key={i}
+                    className={cn(
+                      "h-[5px] flex-1 rounded-full",
+                      on
+                        ? "bg-brand-orange shadow-[0_0_12px_rgba(255,106,26,0.7)]"
+                        : "bg-white/15"
+                    )}
+                  />
                 )
               })}
             </div>
-            <div className="h-1 overflow-hidden rounded-full bg-white/15">
-              <div
-                className="h-full rounded-full bg-brand-orange transition-all duration-300"
-                style={{
-                  width: `${(Math.min(stepIndex(step), WIZARD_STEP_COUNT) / WIZARD_STEP_COUNT) * 100}%`,
-                }}
-              />
-            </div>
-          </div>
-        ) : null}
-
+          ) : undefined
+        }
+        resetKey={step}
+      >
         {step === "category" ? (
           <SosTypeStep
             value={emergency}
             onSelect={(next) => {
               setEmergency(next)
+              setTriage({})
               setFieldErrors((c) => ({ ...c, type: "" }))
             }}
             error={fieldErrors.type}
@@ -907,9 +887,18 @@ export function SosWizard({
           />
         ) : null}
 
-        {step === "location" ? (
-          <div className="flex flex-col gap-4">
-            <SosLocationStep value={location} onChange={setLocation} />
+        {locationVisited ? (
+          <div
+            className={cn(
+              "flex min-h-full flex-col gap-4",
+              step !== "location" && "hidden"
+            )}
+          >
+            <SosLocationStep
+              value={location}
+              onChange={setLocation}
+              className="min-h-[320px] flex-1"
+            />
             {fieldErrors.location ? (
               <p
                 className="text-[13px] font-medium text-sos-bright"
@@ -925,6 +914,7 @@ export function SosWizard({
           <div className="flex flex-col gap-4">
             <SosTriageStep
               categoryCode={emergency || ""}
+              questions={typeMeta?.quickQuestions}
               value={triage}
               onChange={(next) => {
                 setTriage(next)
@@ -941,7 +931,9 @@ export function SosWizard({
               mediaError={mediaError}
               onAddFiles={(files) => void addSosFiles(files)}
               onRemoveFile={(index) => {
-                setMediaFiles((previous) => previous.filter((_, i) => i !== index))
+                setMediaFiles((previous) =>
+                  previous.filter((_, i) => i !== index)
+                )
                 setMediaError(null)
               }}
             />
@@ -956,10 +948,11 @@ export function SosWizard({
             onSmsFallbackClick={announceSmsFallback}
             typeLabel={typeMeta?.label}
             locationLabel={locationLabel}
-            triageSummary={describeTriage(triage)}
+            triageSummary={describeTriage(triage, activeQuestions)}
             note={note}
             submitting={submitting}
             dispatchCountdown={dispatchCountdown}
+            onEditStep={(next) => setStep(next)}
           />
         ) : null}
       </SosShell>

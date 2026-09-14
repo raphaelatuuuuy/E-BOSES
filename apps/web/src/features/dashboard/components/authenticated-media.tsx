@@ -3,11 +3,12 @@ import { createPortal } from "react-dom"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
-  DownloadIcon,
+  CircleCheck,
   EyeOffIcon,
   FileIcon,
   ImageIcon,
   Loader2Icon,
+  TriangleAlertIcon,
   XIcon,
 } from "lucide-react"
 
@@ -18,7 +19,6 @@ import { cn } from "@workspace/ui/lib/utils"
 import { getAccessToken } from "@/lib/api"
 import {
   invalidateAuthenticatedMedia,
-  openAuthenticatedMedia,
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -75,7 +75,8 @@ function useAuthenticatedBlob(src: string) {
       }
     }
     window.addEventListener("eboses:media-invalidate", onInvalidate)
-    return () => window.removeEventListener("eboses:media-invalidate", onInvalidate)
+    return () =>
+      window.removeEventListener("eboses:media-invalidate", onInvalidate)
   }, [src])
 
   useEffect(() => {
@@ -100,7 +101,8 @@ function useAuthenticatedBlob(src: string) {
         if (response.headers.get("X-EBOSES-Preview-Status") === "pending") {
           // Never cache the server's placeholder JPEG. Keep polling until the
           // worker has written the real preview.
-          if (!cancelled) retryTimer = window.setTimeout(() => void load(), 1500)
+          if (!cancelled)
+            retryTimer = window.setTimeout(() => void load(), 1500)
           return
         }
         const url = URL.createObjectURL(blob)
@@ -140,7 +142,12 @@ export function AuthenticatedMediaImage({
   if (failed) {
     if (hideOnError) return null
     return (
-      <span className={cn("flex items-center justify-center bg-muted text-muted-foreground", className)}>
+      <span
+        className={cn(
+          "flex items-center justify-center bg-muted text-muted-foreground",
+          className
+        )}
+      >
         <ImageIcon className="size-5" aria-hidden="true" />
         <span className="sr-only">Preview unavailable</span>
       </span>
@@ -148,13 +155,25 @@ export function AuthenticatedMediaImage({
   }
   if (!objectUrl) {
     return (
-      <span className={cn("flex items-center justify-center bg-muted text-muted-foreground", className)}>
+      <span
+        className={cn(
+          "flex items-center justify-center bg-muted text-muted-foreground",
+          className
+        )}
+      >
         <Loader2Icon className="size-5 animate-spin" aria-hidden="true" />
         <span className="sr-only">Loading preview</span>
       </span>
     )
   }
-  return <img src={objectUrl} alt={alt} className={className} draggable={draggable} />
+  return (
+    <img
+      src={objectUrl}
+      alt={alt}
+      className={className}
+      draggable={draggable}
+    />
+  )
 }
 
 export function AuthenticatedMediaVideo({
@@ -168,7 +187,12 @@ export function AuthenticatedMediaVideo({
 
   if (failed) {
     return (
-      <span className={cn("flex items-center justify-center bg-muted text-muted-foreground", className)}>
+      <span
+        className={cn(
+          "flex items-center justify-center bg-muted text-muted-foreground",
+          className
+        )}
+      >
         <ImageIcon className="size-5" aria-hidden="true" />
         <span className="sr-only">Video unavailable</span>
       </span>
@@ -176,7 +200,12 @@ export function AuthenticatedMediaVideo({
   }
   if (!objectUrl) {
     return (
-      <span className={cn("flex items-center justify-center bg-muted text-muted-foreground", className)}>
+      <span
+        className={cn(
+          "flex items-center justify-center bg-muted text-muted-foreground",
+          className
+        )}
+      >
         <Loader2Icon className="size-5 animate-spin" aria-hidden="true" />
         <span className="sr-only">Loading video</span>
       </span>
@@ -185,7 +214,6 @@ export function AuthenticatedMediaVideo({
   return <video src={objectUrl} controls playsInline className={className} />
 }
 
-
 interface BlurDraft {
   x: number
   y: number
@@ -193,7 +221,10 @@ interface BlurDraft {
   height: number
 }
 
-function normalisedBlurPoint(event: React.PointerEvent<HTMLDivElement>, element: HTMLDivElement) {
+function normalisedBlurPoint(
+  event: React.PointerEvent<HTMLDivElement>,
+  element: HTMLDivElement
+) {
   const rect = element.getBoundingClientRect()
   return {
     x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
@@ -201,14 +232,26 @@ function normalisedBlurPoint(event: React.PointerEvent<HTMLDivElement>, element:
   }
 }
 
+type PreviewFilter = "concern" | "resolution"
+
+function previewFilterFor(item: MediaPreviewItem): PreviewFilter | null {
+  const badge = (item.badge ?? "").trim().toLowerCase()
+  if (badge === "reported issue") return "concern"
+  if (badge === "resolved case") return "resolution"
+  return null
+}
+
 export function MediaLightbox({
   items,
   index,
   onClose,
+  simpleCounter = false,
 }: {
   items: MediaPreviewItem[]
   index: number
   onClose: () => void
+  /** Report previews use a centered image counter instead of status pills. */
+  simpleCounter?: boolean
 }) {
   const { user } = useAuthSession()
   const canBlur = isOfficialUser(user) || isResponderUser(user)
@@ -234,8 +277,11 @@ export function MediaLightbox({
   }
 
   const media = items[active]
-  const currentMedia = media?.media ? (overrides[media.media.id] ?? media.media) : undefined
-  const blurTarget = blurMode && media?.kind === "image" ? (currentMedia ?? null) : null
+  const currentMedia = media?.media
+    ? (overrides[media.media.id] ?? media.media)
+    : undefined
+  const blurTarget =
+    blurMode && media?.kind === "image" ? (currentMedia ?? null) : null
   const saved = blurTarget?.redactions ?? []
 
   useEffect(() => {
@@ -250,8 +296,10 @@ export function MediaLightbox({
         onClose()
       }
       if (blurMode) return
-      if (event.key === "ArrowLeft") setActive((current) => Math.max(0, current - 1))
-      if (event.key === "ArrowRight") setActive((current) => Math.min(items.length - 1, current + 1))
+      if (event.key === "ArrowLeft")
+        setActive((current) => Math.max(0, current - 1))
+      if (event.key === "ArrowRight")
+        setActive((current) => Math.min(items.length - 1, current + 1))
     }
     window.addEventListener("keydown", onKey)
     const previous = document.body.style.overflow
@@ -301,7 +349,11 @@ export function MediaLightbox({
       setPending([])
       toast.success("The photo was updated with your blurred areas.")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "The blurred areas could not be saved.")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "The blurred areas could not be saved."
+      )
     } finally {
       setBusy(false)
     }
@@ -315,7 +367,11 @@ export function MediaLightbox({
       applyMediaUpdate(next)
       toast.success("The blurred area was removed.")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "The blurred area could not be removed.")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "The blurred area could not be removed."
+      )
     } finally {
       setBusy(false)
     }
@@ -334,7 +390,11 @@ export function MediaLightbox({
       applyMediaUpdate(next)
       toast.success("All blurred areas were removed.")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "The blurred areas could not be removed.")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "The blurred areas could not be removed."
+      )
     } finally {
       setBusy(false)
     }
@@ -347,6 +407,60 @@ export function MediaLightbox({
   }
 
   const boxes = [...saved, ...pending, ...(draft && blurTarget ? [draft] : [])]
+  const badgeText = (media.badge ?? "").trim().toLowerCase()
+  const isResolvedBadge = badgeText === "resolved case"
+  const isReportedBadge = badgeText === "reported issue"
+  const concernPhotoIndexes = simpleCounter
+    ? items.flatMap((item, itemIndex) =>
+        previewFilterFor(item) === "concern" ? [itemIndex] : []
+      )
+    : []
+  const resolutionPhotoIndexes = simpleCounter
+    ? items.flatMap((item, itemIndex) =>
+        previewFilterFor(item) === "resolution" ? [itemIndex] : []
+      )
+    : []
+  const previewFilters: Array<{
+    key: PreviewFilter
+    label: string
+    indexes: number[]
+  }> = [
+    {
+      key: "concern" as const,
+      label: "Concern Photo",
+      indexes: concernPhotoIndexes,
+    },
+    {
+      key: "resolution" as const,
+      label: "Resolution Photo",
+      indexes: resolutionPhotoIndexes,
+    },
+  ].filter((filter) => filter.indexes.length > 0)
+  const activeFilter = previewFilterFor(media)
+  const activeFilterIndexes =
+    previewFilters.find((filter) => filter.key === activeFilter)?.indexes ?? []
+  const filterNavigationIndexes = activeFilterIndexes.length
+    ? activeFilterIndexes
+    : items.map((_, itemIndex) => itemIndex)
+  const filterNavigationPosition = Math.max(
+    0,
+    filterNavigationIndexes.indexOf(active)
+  )
+
+  function moveWithinFilter(offset: number) {
+    const nextPosition = Math.min(
+      filterNavigationIndexes.length - 1,
+      Math.max(0, filterNavigationPosition + offset)
+    )
+    setActive(filterNavigationIndexes[nextPosition] ?? active)
+  }
+
+  function handleClose() {
+    setBlurMode(false)
+    setPending([])
+    setDraft(null)
+    onClose()
+  }
 
   return createPortal(
     <div
@@ -356,29 +470,83 @@ export function MediaLightbox({
       aria-label="Media preview"
       onClick={blurMode ? undefined : onClose}
     >
+      <button
+        type="button"
+        onClick={handleClose}
+        aria-label="Close preview"
+        className="absolute top-4 right-4 z-10 flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+      >
+        <XIcon className="size-5" />
+      </button>
       <div
         className="relative flex max-h-[92vh] w-full max-w-4xl flex-col items-center"
         onClick={(event) => event.stopPropagation()}
       >
         {blurMode ? (
           <p className="mb-2 text-center text-[13px] text-white/70">
-            Drag across anything that should not be public. The blur is applied to the copy residents see; the
-            original stays available to you.
+            Drag across anything that should not be public. The blur is applied
+            to the copy residents see; the original stays available to you.
           </p>
         ) : null}
 
-        <div className="flex w-full items-center justify-center gap-2 sm:gap-3">
-          {!blurMode && active > 0 ? (
+        {!blurMode && !simpleCounter && !isResolvedBadge && !isReportedBadge ? (
+          <div className="mb-3 w-full text-white">
+            {media.eyebrow ? (
+              <p className="text-center text-[12px] text-white/55">
+                {media.eyebrow}
+              </p>
+            ) : null}
+            {media.postedLabel ? (
+              <p className="mt-0.5 text-center text-[12px] text-white/55">
+                Posted on {media.postedLabel}
+              </p>
+            ) : null}
+            {media.heading ? (
+              <h2 className="mt-1.5 min-w-0 text-center text-[17px] font-bold break-words text-white">
+                {media.heading}
+              </h2>
+            ) : null}
+            {media.blurb ? (
+              <p className="mx-auto mt-1 line-clamp-3 max-w-md text-center text-[13px] leading-snug text-white/70">
+                {media.blurb}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {!blurMode && simpleCounter ? (
+          <div className="mb-3 flex w-full items-center justify-center gap-1 text-white">
             <button
               type="button"
-              aria-label="Previous media"
-              onClick={() => setActive((current) => current - 1)}
-              className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+              aria-label="Previous photo in this filter"
+              disabled={filterNavigationPosition === 0}
+              onClick={() => moveWithinFilter(-1)}
+              className="flex size-6 items-center justify-center text-white/80 transition-colors hover:text-white disabled:opacity-30"
             >
-              <ChevronLeftIcon className="size-5" />
+              <ChevronLeftIcon className="size-4" />
             </button>
-          ) : null}
-          <div className="flex min-w-0 flex-1 items-center justify-center">
+            <span
+              aria-live="polite"
+              className="min-w-10 text-center text-[12px] font-normal tabular-nums"
+            >
+              {filterNavigationPosition + 1}/{filterNavigationIndexes.length}
+            </span>
+            <button
+              type="button"
+              aria-label="Next photo in this filter"
+              disabled={
+                filterNavigationPosition === filterNavigationIndexes.length - 1
+              }
+              onClick={() => moveWithinFilter(1)}
+              className="flex size-6 items-center justify-center text-white/80 transition-colors hover:text-white disabled:opacity-30"
+            >
+              <ChevronRightIcon className="size-4" />
+            </button>
+          </div>
+        ) : null}
+
+        <div className="flex w-full items-center justify-center gap-2 sm:gap-3">
+          <div className="relative flex min-w-0 flex-1 items-center justify-center">
             {blurTarget ? (
               <div
                 ref={surfaceRef}
@@ -387,7 +555,7 @@ export function MediaLightbox({
                 onPointerUp={onSurfacePointerUp}
                 onPointerCancel={onSurfacePointerUp}
                 onDragStart={(event) => event.preventDefault()}
-                className="relative max-h-[80vh] cursor-crosshair touch-none select-none overflow-hidden rounded-xl"
+                className="relative max-h-[80vh] cursor-crosshair touch-none overflow-hidden rounded-xl select-none"
               >
                 <AuthenticatedMediaImage
                   src={media.src}
@@ -395,7 +563,8 @@ export function MediaLightbox({
                   className="pointer-events-none max-h-[80vh] w-auto max-w-full object-contain"
                 />
                 {boxes.map((box, boxIndex) => {
-                  const savedRegion = boxIndex < saved.length ? saved[boxIndex] : null
+                  const savedRegion =
+                    boxIndex < saved.length ? saved[boxIndex] : null
                   return savedRegion ? (
                     <button
                       key={`${box.x}-${box.y}-${boxIndex}`}
@@ -427,116 +596,171 @@ export function MediaLightbox({
                 })}
               </div>
             ) : media.kind === "image" ? (
-              <AuthenticatedMediaImage
-                src={media.src}
-                alt={media.filename}
-                className="max-h-[80vh] w-auto max-w-full rounded-xl object-contain"
-              />
+              <div className="relative max-h-[80vh] overflow-hidden rounded-xl">
+                <AuthenticatedMediaImage
+                  src={media.src}
+                  alt={media.filename}
+                  className="max-h-[80vh] w-auto max-w-full object-contain"
+                />
+              </div>
             ) : media.kind === "video" ? (
-              <AuthenticatedMediaVideo src={media.src} className="max-h-[80vh] w-auto max-w-full rounded-xl" />
+              <AuthenticatedMediaVideo
+                src={media.src}
+                className="max-h-[80vh] w-auto max-w-full rounded-xl"
+              />
             ) : (
               <div className="flex flex-col items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-10 py-10">
-                <FileIcon className="size-10 text-white/70" aria-hidden="true" />
+                <FileIcon
+                  className="size-10 text-white/70"
+                  aria-hidden="true"
+                />
                 <p className="max-w-60 text-center text-sm leading-5 text-white/70">
-                  This file type can't be previewed in the browser — download it instead.
+                  This file type can't be previewed in the browser — download it
+                  instead.
                 </p>
               </div>
             )}
           </div>
-          {!blurMode && active < items.length - 1 ? (
-            <button
-              type="button"
-              aria-label="Next media"
-              onClick={() => setActive((current) => current + 1)}
-              className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
-            >
-              <ChevronRightIcon className="size-5" />
-            </button>
-          ) : null}
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          {blurMode ? (
-            <>
-              {pending.length ? (
+        {!blurMode &&
+        !simpleCounter &&
+        (items.length > 1 || isResolvedBadge || isReportedBadge) ? (
+          <div className="mt-3 flex items-center justify-center gap-2">
+            {items.length > 1 ? (
+              <button
+                type="button"
+                aria-label="Previous media"
+                disabled={active === 0}
+                onClick={() => setActive((current) => Math.max(0, current - 1))}
+                className="flex size-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-30"
+              >
+                <ChevronLeftIcon className="size-5" />
+              </button>
+            ) : null}
+            {isResolvedBadge || isReportedBadge ? (
+              <span className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-3 text-[12px] font-semibold text-white">
+                {isResolvedBadge ? (
+                  <CircleCheck
+                    className="size-4 text-emerald-300"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <TriangleAlertIcon
+                    className="size-4 text-orange-300"
+                    aria-hidden="true"
+                  />
+                )}
+                {isResolvedBadge ? "After" : "Before"}
+              </span>
+            ) : null}
+            {items.length > 1 ? (
+              <button
+                type="button"
+                aria-label="Next media"
+                disabled={active === items.length - 1}
+                onClick={() =>
+                  setActive((current) =>
+                    Math.min(items.length - 1, current + 1)
+                  )
+                }
+                className="flex size-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-30"
+              >
+                <ChevronRightIcon className="size-5" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {!blurMode && simpleCounter && previewFilters.length > 0 ? (
+          <div className="mt-3 flex items-center justify-center gap-6 text-[13px] text-white">
+            {previewFilters.map((filter) => {
+              const selected = activeFilter === filter.key
+              return (
+                <button
+                  key={filter.key}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setActive(filter.indexes[0] ?? 0)}
+                  className="inline-flex items-center gap-2 text-white/85 transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "size-2 rounded-full",
+                      selected
+                        ? "bg-white"
+                        : "border border-white/75 bg-transparent"
+                    )}
+                  />
+                  <span>{filter.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+
+        {blurMode || (canBlur && media.kind === "image" && media.media) ? (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {blurMode ? (
+              <>
+                {pending.length ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setPending([])}
+                    className="inline-flex h-9 items-center rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+                  >
+                    Clear
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  disabled={busy}
-                  onClick={() => setPending([])}
+                  disabled={busy || !pending.length}
+                  onClick={() => void saveBlur()}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-full bg-brand-orange px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-50"
+                >
+                  {busy ? (
+                    <Loader2Icon className="size-4 animate-spin" />
+                  ) : null}
+                  Save blurred areas
+                </button>
+                {saved.length ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void removeAllBlur()}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+                  >
+                    <EraserIcon className="size-4" />
+                    Remove all blur
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBlurMode(false)
+                    setPending([])
+                  }}
                   className="inline-flex h-9 items-center rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
                 >
-                  Clear
+                  Done
                 </button>
-              ) : null}
+              </>
+            ) : (
               <button
                 type="button"
-                disabled={busy || !pending.length}
-                onClick={() => void saveBlur()}
-                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-brand-orange px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-50"
-              >
-                {busy ? <Loader2Icon className="size-4 animate-spin" /> : null}
-                Save blurred areas
-              </button>
-              {saved.length ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void removeAllBlur()}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
-                >
-                  <EraserIcon className="size-4" />
-                  Remove all blur
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => {
-                  setBlurMode(false)
-                  setPending([])
-                }}
-                className="inline-flex h-9 items-center rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
-              >
-                Done
-              </button>
-            </>
-          ) : (
-            <>
-              {canBlur && media.kind === "image" && media.media ? (
-                <button
-                  type="button"
-                  onClick={() => setBlurMode(true)}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
-                >
-                  <EyeOffIcon className="size-4" />
-                  Blur an area
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => void openAuthenticatedMedia(media.src, media.filename)}
+                onClick={() => setBlurMode(true)}
                 className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
               >
-                <DownloadIcon className="size-4" />
-                Download
+                <EyeOffIcon className="size-4" />
+                Blur an area
               </button>
-              <button
-                type="button"
-                onClick={onClose}
-                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
-              >
-                <XIcon className="size-4" />
-                Close
-              </button>
-            </>
-          )}
-          {items.length > 1 ? (
-            <span className="ml-2 text-xs tabular-nums text-white/50">
-              {active + 1} of {items.length}
-            </span>
-          ) : null}
-        </div>
+            )}
+          </div>
+        ) : null}
       </div>
     </div>,
-    document.body,
+    document.body
   )
 }

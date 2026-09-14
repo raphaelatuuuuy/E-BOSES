@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { CircleCheck, ChevronRightIcon, PlusIcon, ShieldCheckIcon } from "lucide-react"
+import { CircleCheck, ChevronRightIcon, PencilIcon, PlusIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { CAPABILITY_LABEL } from "@/features/dashboard/lib/capabilities"
-import { FilterRow, ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
-import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
+import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
+import { ConfigurationTable, ConfigurationTableEmpty, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
+import { SheetActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 import {
   ConfigHeroAction,
   ConfigShell,
@@ -104,7 +105,7 @@ function CapabilityGroup({ title, capabilities, selected, onToggle, defaultOpen 
   )
 }
 
-export default function OfficialRolesPage() {
+export default function OfficialRolesPage({ embedded = false }: { embedded?: boolean }) {
   const { refreshUser } = useAuthSession()
   const [positions, setPositions] = useState<Position[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
@@ -158,7 +159,7 @@ export default function OfficialRolesPage() {
     return result
   }, [positions, departments, debounced, unitKey])
 
-  const page = filtered.slice(offset, offset + PAGE_SIZE)
+  const page = filtered.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
 
   const positionSnapshot = (value: Draft | null) => JSON.stringify({
     id: value?.id ?? null,
@@ -223,12 +224,22 @@ export default function OfficialRolesPage() {
     all: countFor(null),
     ...Object.fromEntries(unitsWithPositions.map((u) => [String(u.id), countFor(u.id)])),
   }
-  const unitDetails: Record<string, string> = Object.fromEntries(
-    unitsWithPositions.map((u) => [String(u.id), u.name]),
-  )
+  function openNew() {
+    setDraft({ name: "", code: "", permissions: [] })
+    setOriginalDraft(null)
+    setEditOpen(true)
+  }
+
+  useEffect(() => {
+    if (!embedded) return
+    window.addEventListener("configuration-primary-action", openNew)
+    return () => window.removeEventListener("configuration-primary-action", openNew)
+  }, [embedded, openNew])
 
   return (
     <ConfigShell
+      embedded={embedded}
+      hideEmbeddedAction={embedded}
       icon={ShieldCheckIcon}
       eyebrow="User management"
       title="Permissions"
@@ -238,34 +249,38 @@ export default function OfficialRolesPage() {
         { label: "Without permissions", value: activePositions.filter((p) => p.permissions.length === 0).length, alarm: activePositions.some((p) => p.permissions.length === 0) },
       ]}
       action={
-        <ConfigHeroAction icon={PlusIcon} onClick={() => { setDraft({ name: "", code: "", permissions: [] }); setOriginalDraft(null); setEditOpen(true) }}>
+        <ConfigHeroAction icon={PlusIcon} onClick={openNew}>
           New position
         </ConfigHeroAction>
       }
     >
-      <FilterRow
-        options={[
-          { key: "all", label: "All" },
-          ...unitsWithPositions.map((u) => ({ key: String(u.id), label: u.short_name || u.name })),
+      <ConfigurationListToolbar
+        search={query}
+        onSearch={(value) => { setQuery(value); setOffset(0) }}
+        placeholder="Search positions or units"
+        filters={[
+          { key: "all", label: "All", count: unitCounts.all },
+          ...unitsWithPositions.map((unit) => ({ key: String(unit.id), label: unit.short_name || unit.name, count: unitCounts[String(unit.id)] })),
         ]}
-        counts={unitCounts}
-        details={unitDetails}
-        value={unitKey}
-        onChange={setUnitKey}
-        className="mt-8"
+        activeFilter={unitKey}
+        onFilter={(value) => { setUnitKey(value); setOffset(0) }}
       />
 
-      <ListSearch value={query} onChange={setQuery} placeholder="Search positions or units" className="mt-5 flex-1 sm:max-w-xs" />
-
-      {/* Editorial list */}
-      <ol>
+      <ConfigurationTable label="Permissions">
         {page.map((position) => (
-          <li
+          <ConfigurationTableRow
             key={position.id}
-            className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto]"
+            actions={<>
+              <SheetIconButton label={`Edit ${position.name}`} onClick={() => { setDraft(position); setOriginalDraft(positionSnapshot(position)); setEditOpen(true) }}>
+                <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
+              </SheetIconButton>
+              <SheetIconButton label={`Delete ${position.name}`} onClick={() => { setDeleteTarget(position); setDeleteOpen(true) }} className="text-neutral-500 hover:text-sos">
+                <Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden />
+              </SheetIconButton>
+            </>}
           >
             <div className="min-w-0">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-3">
                 <span className="text-row text-brand-navy">{position.name}</span>
                 {position.department && (
                   <span className="text-meta text-neutral-400">
@@ -292,18 +307,12 @@ export default function OfficialRolesPage() {
               </dl>
             </div>
 
-            <div className="flex shrink-0 items-center gap-5 border-t border-neutral-200 pt-3 sm:border-0 sm:pt-0">
-              <button type="button" onClick={() => { setDraft(position); setOriginalDraft(positionSnapshot(position)); setEditOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-accent">Edit</button>
-              <button type="button" onClick={() => { setDeleteTarget(position); setDeleteOpen(true) }} className="text-meta text-neutral-500 transition-colors hover:text-sos">Delete</button>
-            </div>
-          </li>
+          </ConfigurationTableRow>
         ))}
-        {page.length === 0 && !loading ? (
-          <li className="py-14 text-center text-read text-neutral-500">No positions found.</li>
-        ) : null}
-      </ol>
+        {page.length === 0 && !loading ? <ConfigurationTableEmpty>No positions found.</ConfigurationTableEmpty> : null}
+      </ConfigurationTable>
 
-      <Pager offset={offset} total={filtered.length} onChange={setOffset} noun="positions" />
+      <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="positions" />
 
       {/* Edit dialog */}
       {draft && (
@@ -312,6 +321,18 @@ export default function OfficialRolesPage() {
           onClose={() => { setEditOpen(false); setDraft(null); setOriginalDraft(null) }}
           title={draft.id ? `Edit ${draft.name}` : "New position"}
           size="wide"
+          footer={
+            <SheetActionRow>
+              <SheetSecondaryButton disabled={saving} onClick={() => { setEditOpen(false); setDraft(null) }}>Cancel</SheetSecondaryButton>
+              <SheetPrimaryButton
+                tone="accent"
+                disabled={saving || !draft.name || Boolean(draft.id && positionSnapshot(draft) === originalDraft)}
+                onClick={() => void save()}
+              >
+                {saving ? "Saving…" : draft.id ? "Save changes" : "Create position"}
+              </SheetPrimaryButton>
+            </SheetActionRow>
+          }
         >
           <div className="space-y-6 pb-4">
             <label className="block">
@@ -346,17 +367,6 @@ export default function OfficialRolesPage() {
             </div>
           </div>
 
-          <div className="mt-6 space-y-3">
-            <button
-              type="button"
-              disabled={saving || !draft.name || Boolean(draft.id && positionSnapshot(draft) === originalDraft)}
-              onClick={() => void save()}
-              className="flex h-[52px] w-full items-center justify-center rounded-full bg-accent text-[17px] font-semibold text-white transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-400"
-            >
-              {saving ? "Saving\u2026" : draft.id ? "Save changes" : "Create position"}
-            </button>
-            <SheetPrimaryButton disabled={saving} onClick={() => { setEditOpen(false); setDraft(null) }}>Cancel</SheetPrimaryButton>
-          </div>
         </SheetDialog>
       )}
 
@@ -367,10 +377,10 @@ export default function OfficialRolesPage() {
         title={deleteTarget ? `Delete ${deleteTarget.name}?` : ""}
         description="This position will be removed. People assigned to it will lose these permissions."
         footer={
-          <div className="flex gap-2">
-            <SheetPrimaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">Cancel</SheetPrimaryButton>
-            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()} className="flex-1 text-[15px]">Delete position</SheetPrimaryButton>
-          </div>
+          <SheetActionRow>
+            <SheetSecondaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }}>Cancel</SheetSecondaryButton>
+            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()}>Delete position</SheetPrimaryButton>
+          </SheetActionRow>
         }
       />
     </ConfigShell>

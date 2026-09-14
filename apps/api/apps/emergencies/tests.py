@@ -1439,9 +1439,11 @@ class EmergencyAPITests(APITestCase):
         public = Concern.objects.create(
             reporter=self.resident,
             title="Broken streetlight",
+            official_title="Broken streetlight near the plaza",
             description="Near the plaza",
             category=Concern.Category.INFRASTRUCTURE,
             visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
             latitude="14.6507000",
             longitude="121.1133000",
             address="Plaza",
@@ -1472,6 +1474,7 @@ class EmergencyAPITests(APITestCase):
         self.assertFalse(any(item["id"] == private.pk for item in response.data["concerns"]))
         public_row = next(item for item in response.data["concerns"] if item["id"] == public.pk)
         self.assertEqual(public_row["category"], Concern.Category.INFRASTRUCTURE)
+        self.assertEqual(public_row["title"], public.official_title)
         self.assertEqual(public_row["kind"], "concern")
         self.assertIn("latitude", public_row)
         self.assertEqual(public_row["reporter"]["full_name"], "Map R.")

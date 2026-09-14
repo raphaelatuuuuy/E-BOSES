@@ -1,15 +1,23 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 
 import { cn } from "@workspace/ui/lib/utils"
 
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { geocodeCommunityStreet } from "@/features/auth/lib/forward-geocode"
+import { getResidentDashboardSummary } from "@/features/dashboard/api"
+import {
+  LiveDot,
+  liveDotAriaLabel,
+} from "@/features/dashboard/components/home/live-dot"
 import {
   ResidentNotificationsButton,
   ResidentProfileDialog,
 } from "@/features/dashboard/components/resident/resident-account-dialogs"
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
+import { streetLabelFromAddress } from "@/features/dashboard/components/feed-post-text"
+import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
 import {
   CONTENT_GAP,
   CONTENT_MAX,
@@ -74,27 +82,72 @@ export function ResidentContentGrid({
  * sidebar does not duplicate account access on the phone. Mirrors the staff
  * mobile header; home ships its own header (live map dot + search) instead.
  */
-export function ResidentMobileHeader({ homeTo = "/dashboard/home" }: { homeTo?: string }) {
+export function ResidentMobileHeader({
+  homeTo = "/dashboard/home",
+  divider = true,
+}: {
+  homeTo?: string
+  divider?: boolean
+}) {
   const { user } = useAuthSession()
   const [profileOpen, setProfileOpen] = useState(false)
   const avatarInitials = initials(user?.full_name || "Resident").charAt(0)
+  const community = (user?.barangay || "Your community").replace(
+    /^Barangay\s+/i,
+    ""
+  )
+  const [railMap, setRailMap] = useState({ lat: 14.5995, lng: 120.9842 })
+  const [activeEmergencies, setActiveEmergencies] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    getResidentDashboardSummary()
+      .then((summary) => {
+        if (!cancelled)
+          setActiveEmergencies(summary?.barangay_active_emergencies ?? 0)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    async function resolveRailMap() {
+      const street = streetLabelFromAddress(user?.address)
+      if (!street) return
+      const hit = await geocodeCommunityStreet(street, community)
+      if (!cancelled && hit) setRailMap({ lat: hit.lat, lng: hit.lng })
+    }
+    void resolveRailMap()
+    return () => {
+      cancelled = true
+    }
+  }, [community, user?.address])
 
   return (
-    <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-neutral-200 bg-white px-3">
-      <Link to={homeTo} className="flex min-w-0 items-center gap-2 no-underline">
-        <img
-          src="/contents/logo.webp"
-          alt="Boses community portal"
-          className="size-8 shrink-0 object-contain"
-        />
-        <div className="flex flex-col">
-          <span className="truncate text-[18px] font-bold leading-none tracking-tight text-brand-orange">
-            Boses
-          </span>
-          <span className="text-[9px] font-bold leading-tight tracking-wide text-brand-navy">
-            {(user?.barangay || "Community").replace(/^Barangay\s+/i, "")}
-          </span>
-        </div>
+    <header
+      className={cn(
+        "sticky top-0 z-40 mt-5 flex h-14 shrink-0 items-center gap-2 bg-white px-3",
+        divider && "border-b border-neutral-200"
+      )}
+    >
+      <LiveDot
+        src={railLiveMapSrc(railMap.lat, railMap.lng)}
+        alert={activeEmergencies > 0}
+        label={liveDotAriaLabel(
+          community,
+          activeEmergencies > 0,
+          activeEmergencies
+        )}
+        to="/dashboard/alerts-map"
+      />
+      <Link
+        to={homeTo}
+        className="min-w-0 flex-1 truncate text-[16px] font-bold tracking-tight text-neutral-900 no-underline"
+      >
+        {community}
       </Link>
       <div className="flex items-center gap-0.5">
         <ResidentNotificationsButton />
@@ -102,9 +155,9 @@ export function ResidentMobileHeader({ homeTo = "/dashboard/home" }: { homeTo?: 
           type="button"
           onClick={() => openSettingsDialog()}
           aria-label="Open settings"
-          className="flex size-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-50"
+          className="flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-50"
         >
-          <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
+          <span className="flex size-9 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
             {avatarInitials}
           </span>
         </button>

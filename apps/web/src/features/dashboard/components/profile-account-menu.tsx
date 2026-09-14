@@ -186,9 +186,9 @@ export function ProfileAccountMenu({
             type="button"
             onClick={() => void handleSignOut()}
             disabled={signingOut}
-            className="flex w-full items-center gap-3 px-5 py-3.5 text-left text-[15px] font-medium text-neutral-800 transition-colors hover:bg-neutral-50 disabled:opacity-60"
+            className="flex w-full items-center gap-3 bg-brand-orange px-5 py-3.5 text-left text-[15px] font-medium text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-60"
           >
-            <LogOutIcon className="size-5 shrink-0 text-neutral-700" strokeWidth={1.75} />
+            <LogOutIcon className="size-5 shrink-0 text-white" strokeWidth={1.75} />
             {signingOut ? "Signing out…" : "Sign out"}
           </button>
         </PopoverContent>
@@ -273,7 +273,7 @@ export function ProfileAccountMenu({
                   type="button"
                   onClick={() => void handleSignOut()}
                   disabled={signingOut}
-                  className="block w-full py-2.5 text-left text-[15px] font-normal text-neutral-600 transition-colors hover:text-neutral-900 disabled:opacity-60"
+                  className="block w-full rounded-lg bg-brand-orange px-3 py-2.5 text-left text-[15px] font-normal text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-60"
                 >
                   {signingOut ? "Signing out…" : "Sign out"}
                 </button>

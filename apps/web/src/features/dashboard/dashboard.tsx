@@ -17,6 +17,7 @@ import { useLocationPing } from "@/features/dashboard/hooks/use-location-ping"
 import {
   NotificationProvider,
   fetchConcern,
+  useNotifications,
 } from "@/features/dashboard/components/notification-context"
 import { ReportStatusDialog } from "@/features/dashboard/components/report-status-dialog"
 import { statusModeFromReport } from "@/features/dashboard/components/report-status-mode"
@@ -34,19 +35,80 @@ import {
   MOBILE_NAV_CLEARANCE,
 } from "@/features/dashboard/lib/shell"
 import type { StatusDialogMode } from "@/features/dashboard/components/report-status-mode"
-import type { Concern } from "@/features/dashboard/api"
+import {
+  listAssignedConcerns,
+  type Concern,
+} from "@/features/dashboard/api"
+import { listAssignedEmergencies } from "@/features/dashboard/emergency-api"
+import type { NotificationItem } from "@/features/dashboard/components/notification-context"
 
 function DashboardContent() {
   const navigate = useNavigate()
   const location = useLocation()
   const isDesktop = useIsDesktop()
   const { user } = useAuthSession()
+  const { markAsRead } = useNotifications()
+  const navigateRef = React.useRef(navigate)
+  const markAsReadRef = React.useRef(markAsRead)
+  const handledAssignmentIdsRef = React.useRef(new Set<number>())
+  React.useEffect(() => {
+    navigateRef.current = navigate
+    markAsReadRef.current = markAsRead
+  }, [markAsRead, navigate])
   useLocationPing(user)
   const isResident = isResidentUser(user)
   const isOfficialRole = isOfficialUser(user)
   const isMobile = !isDesktop
   const chrome = getRouteChrome(location.pathname)
   const hideMobileNav = isMobile && chrome.hideMobileNav
+
+  React.useEffect(() => {
+    if (!isResponderUser(user)) return
+
+    async function openAssignment(notification: NotificationItem) {
+      const isConcernAssignment =
+        notification.type === "assigned" && notification.concern_id != null
+      const isEmergencyAssignment =
+        (notification.type === "emergency_routed" ||
+          notification.type === "emergency_escalated") &&
+        notification.emergency_id != null
+
+      if (isConcernAssignment) {
+        const assignedConcerns = await listAssignedConcerns()
+        const concern = assignedConcerns.find(
+          (item) =>
+            item.id === notification.concern_id ||
+            item.public_id === notification.concern_public_id,
+        )
+        if (!concern) return
+        navigateRef.current(`/dashboard/reports/${concern.public_id || concern.id}`)
+      } else if (isEmergencyAssignment) {
+        const assignedEmergencies = await listAssignedEmergencies()
+        const emergency = assignedEmergencies.find(
+          (item) => item.id === notification.emergency_id,
+        )
+        if (!emergency) return
+        navigateRef.current(`/dashboard/reports?alert=${emergency.id}`)
+      } else {
+        return
+      }
+
+      void markAsReadRef.current(notification.id).catch(() => undefined)
+    }
+
+    function onNotification(event: Event) {
+      const notification = (event as CustomEvent<NotificationItem>).detail
+      if (!notification || handledAssignmentIdsRef.current.has(notification.id)) {
+        return
+      }
+      handledAssignmentIdsRef.current.add(notification.id)
+      void openAssignment(notification).catch(() => undefined)
+    }
+
+    window.addEventListener("eboses:notification-created", onNotification)
+    return () =>
+      window.removeEventListener("eboses:notification-created", onNotification)
+  }, [user])
 
   const [statusDialogOpen, setStatusDialogOpen] = React.useState(false)
   const [statusDialogMode, setStatusDialogMode] =
@@ -84,9 +146,7 @@ function DashboardContent() {
 
   const shellHome = isResident
     ? "/dashboard/home"
-    : user?.role === "first_responder"
-      ? "/dashboard/reports"
-      : "/dashboard/alerts-map"
+    : "/dashboard/overview"
 
   const statusDialog = statusDialogReport ? (
     <ReportStatusDialog
@@ -185,12 +245,16 @@ function DashboardContent() {
                   responder map no longer sets. */}
             {!hideMobileNav && !chrome.fullBleedMap ? (
               isResident ? (
-                // Home renders its own mobile header (live-map dot + search),
+                // Home and Feed render their own mobile headers (live-map dot),
                 // so only the other resident pages get the shell one with bell.
                 location.pathname === "/dashboard" ||
                 location.pathname === "/dashboard/" ||
-                location.pathname === "/dashboard/home" ? null : (
-                  <ResidentMobileHeader homeTo={shellHome} />
+                location.pathname === "/dashboard/home" ||
+                location.pathname === "/dashboard/feed" ? null : (
+                  <ResidentMobileHeader
+                    homeTo={shellHome}
+                    divider={!location.pathname.startsWith("/dashboard/reports")}
+                  />
                 )
               ) : (
                 <StaffMobileHeader homeTo={shellHome} />

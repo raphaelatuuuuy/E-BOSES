@@ -1,18 +1,10 @@
-import { useState } from "react"
-import {
-  AlertTriangleIcon,
-  CheckIcon,
-  SearchIcon,
-  Share2Icon,
-} from "lucide-react"
+import { AlertTriangleIcon, SearchIcon } from "lucide-react"
 
 import type { Concern } from "@/features/dashboard/api"
 import {
   SheetDialog,
   SheetPrimaryButton,
-  SheetSecondaryButton,
 } from "@/features/dashboard/components/sheet-dialog"
-import { shareConcernReport } from "@/features/dashboard/lib/share-report"
 
 function unitInitials(name: string, shortName?: string | null) {
   const compact = (shortName || "").trim()
@@ -33,15 +25,12 @@ export function ReportDetailsDialog({
   report,
   onClose,
   onTrack,
-  canShare = false,
 }: {
   open: boolean
   report: Concern
   onClose: () => void
   onTrack: () => void
-  canShare?: boolean
 }) {
-  const [shared, setShared] = useState(false)
   const emergency = report.escalated_alert ?? null
   const rejected =
     report.validation_status === "rejected" || report.status === "rejected"
@@ -65,14 +54,6 @@ export function ReportDetailsDialog({
     (validationFailed
       ? "Automated review could not be completed. Your report has not been assigned to a unit yet."
       : "This report was not accepted.")
-
-  async function handleShare() {
-    const didShare = await shareConcernReport(report)
-    if (didShare) {
-      setShared(true)
-      window.setTimeout(() => setShared(false), 1800)
-    }
-  }
 
   return (
     <SheetDialog
@@ -128,19 +109,6 @@ export function ReportDetailsDialog({
         )}
 
         <div className="mt-7 w-full space-y-2">
-          {!emergency && canShare ? (
-            <SheetSecondaryButton
-              className="mt-0"
-              onClick={() => void handleShare()}
-            >
-              {shared ? (
-                <CheckIcon className="mr-2 size-5" strokeWidth={2.5} />
-              ) : (
-                <Share2Icon className="mr-2 size-5" strokeWidth={2} />
-              )}
-              {shared ? "Link ready" : "Share report"}
-            </SheetSecondaryButton>
-          ) : null}
           <SheetPrimaryButton
             tone="accent"
             onClick={() => {

@@ -26,7 +26,6 @@ class TemporalClassificationTests(TestCase):
         payload = {
             "relevance": "VALID",
             "primary_category": "public_safety",
-            "selected_category_match": True,
             "urgent_attention": True,
             "severity": "high",
             "recommended_action": "escalate_as_emergency",

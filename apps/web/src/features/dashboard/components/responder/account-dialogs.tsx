@@ -1,15 +1,20 @@
 "use client"
 
 import { useState } from "react"
-import { InboxIcon } from "lucide-react"
+import { InboxIcon, SettingsIcon } from "lucide-react"
 
-import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
+import {
+  SheetDialog,
+  SheetIconButton,
+} from "@/features/dashboard/components/sheet-dialog"
 
 import { useNotifications } from "@/features/dashboard/components/notification-context"
 import { ResponderProfilePanel } from "@/features/dashboard/components/responder/responder-profile-panel"
 import { ResponderNotificationsPanel } from "@/features/dashboard/components/responder/responder-notifications-panel"
 import { NotificationViewActions } from "@/features/dashboard/components/notifications/notifications-panel"
 import { useNotificationsPopGate } from "@/features/dashboard/components/notifications/notifications-event"
+import { SettingsWorkspace } from "@/features/dashboard/components/settings/settings-workspace"
+import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 
 const RESPONDER_DIALOG_THEME = "bg-white text-neutral-900"
 
@@ -55,7 +60,7 @@ export function ResponderNotificationsButton() {
         ) : null}
       </button>
       {open ? (
-        <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => setOpen(false)} title="Dispatch updates" size="wide" actions={<NotificationViewActions />}>
+        <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => setOpen(false)} title="Notifications" size="wide" actions={<NotificationViewActions />}>
           <ResponderNotificationsPanel
             variant="sheet"
             onClose={() => setOpen(false)}
@@ -86,7 +91,7 @@ export function ResponderNotificationsDialog({
   if (!open) return null
 
   return (
-    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Dispatch updates" size="wide" actions={<NotificationViewActions initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
+    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Notifications" size="wide" actions={<NotificationViewActions initialView={initialFilter === "archived" ? "archived" : "inbox"} />}>
       <ResponderNotificationsPanel
         variant="sheet"
         onClose={() => onOpenChange(false)}
@@ -126,10 +131,36 @@ export function ResponderProfileDialog({
   onOpenChange: (open: boolean) => void
 }) {
   if (!open) return null
+  const openSettings = () => {
+    onOpenChange(false)
+    openSettingsDialog()
+  }
 
   return (
-    <SheetDialog className={RESPONDER_DIALOG_THEME} open onClose={() => onOpenChange(false)} title="Profile" size="wide">
+    <SheetDialog
+      className={RESPONDER_DIALOG_THEME}
+      open
+      onClose={() => onOpenChange(false)}
+      title="Profile"
+      size="wide"
+      actions={
+        <SheetIconButton label="Settings" onClick={openSettings}>
+          <SettingsIcon className="size-6" strokeWidth={2} />
+        </SheetIconButton>
+      }
+    >
       <ResponderProfilePanel />
     </SheetDialog>
   )
+}
+
+export function ResponderSettingsDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  if (!open) return null
+  return <SettingsWorkspace variant="sheet" onExit={() => onOpenChange(false)} />
 }

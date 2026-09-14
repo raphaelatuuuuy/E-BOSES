@@ -10,6 +10,11 @@ import type {
 } from "@/features/dashboard/api"
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
 import {
+  formatDate,
+  formatTime,
+} from "@/features/dashboard/components/concerns/concern-display"
+import { streetOnly } from "@/features/dashboard/lib/location-text"
+import {
   toMediaPreviewItem,
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
@@ -129,25 +134,27 @@ type TimelineAvatarMember = Pick<
   "id" | "full_name" | "initials" | "role"
 >
 
-function memberAvatarGroup(members: TimelineAvatarMember[]) {
+function memberAvatarGroup(members: TimelineAvatarMember[], large = false) {
   if (!members.length) return null
+  const visible = members.slice(0, large ? 3 : 4)
+  const extra = members.length - visible.length
   return (
     <div
       className="flex shrink-0 items-center pl-2"
       aria-label={`${members.length} assigned member${members.length === 1 ? "" : "s"}`}
     >
-      {members.slice(0, 4).map((member, index) => (
+      {visible.map((member, index) => (
         <span
           key={member.id}
-          className={`inline-flex size-6 items-center justify-center rounded-full border-2 border-white bg-slate-soft text-[8px] font-bold text-navy-muted ${index ? "-ml-1.5" : ""}`}
+          className={`inline-flex items-center justify-center rounded-full border-2 border-white bg-slate-soft font-bold text-navy-muted ${large ? "size-8 text-[10px]" : "size-6 text-[8px]"} ${index ? (large ? "-ml-2" : "-ml-1.5") : ""}`}
           title={`${member.full_name} · ${member.role.replace(/_/g, " ")}`}
         >
           {(member.initials || member.full_name || "U").charAt(0).toUpperCase()}
         </span>
       ))}
-      {members.length > 4 ? (
-        <span className="-ml-1.5 inline-flex size-6 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[8px] font-semibold text-neutral-500">
-          +{members.length - 4}
+      {extra > 0 ? (
+        <span className={large ? "-ml-2 inline-flex size-8 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[10px] font-semibold text-neutral-500" : "-ml-1.5 inline-flex size-6 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[8px] font-semibold text-neutral-500"}>
+          +{extra}
         </span>
       ) : null}
     </div>
@@ -157,18 +164,19 @@ function memberAvatarGroup(members: TimelineAvatarMember[]) {
 function noteBlock(
   text: string,
   members: TimelineAvatarMember[] = [],
-  unitBadge = ""
+  unitBadge = "",
+  large = false
 ) {
   return (
-    <div className="mt-1 flex items-center justify-between gap-2 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap text-neutral-600">
+    <div className={`mt-1 flex items-center justify-between gap-2 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 leading-relaxed whitespace-pre-wrap text-neutral-600 ${large ? "text-[13px]" : "text-[11px]"}`}>
       <span className="min-w-0">{text}</span>
-      {unitBadge ? (
+      {unitBadge && !large ? (
         <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[7px] font-bold text-navy-muted">
           {unitBadge}
         </span>
-      ) : (
-        memberAvatarGroup(members)
-      )}
+      ) : !unitBadge ? (
+        memberAvatarGroup(members, large)
+      ) : null}
     </div>
   )
 }
@@ -181,17 +189,19 @@ function resolvedNoteBlock({
   proof,
   proofPreview,
   onOpenProof,
+  large = false,
 }: {
   text: string
   members: TimelineAvatarMember[]
   proof: ConcernResolutionEvidence[]
   proofPreview: MediaPreviewItem[]
   onOpenProof?: (items: MediaPreviewItem[], index: number) => void
+  large?: boolean
 }) {
   return (
-    <div className="mt-1 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 text-[11px] leading-relaxed text-neutral-600">
+    <div className={`mt-1 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 leading-relaxed text-neutral-600 ${large ? "text-[13px]" : "text-[11px]"}`}>
       <div className="flex items-center gap-2">
-        {memberAvatarGroup(members) ?? (
+        {memberAvatarGroup(members, large) ?? (
           <span className="shrink-0" aria-hidden />
         )}
         <span className="min-w-0 flex-1">{text}</span>
@@ -302,7 +312,8 @@ function assignmentUnitName(
 export function buildConcernTimelineEntries(
   report: Concern,
   onOpenProof?: (items: MediaPreviewItem[], index: number) => void,
-  viewer?: PublicUser | null
+  viewer?: PublicUser | null,
+  large = false
 ): ConcernTimelineEntry[] {
   const events = [...(report.status_events ?? [])].sort(
     (a, b) =>
@@ -324,7 +335,7 @@ export function buildConcernTimelineEntries(
   )
   // A handling row is meaningful only after a real status transition or a
   // recorded official view. Do not manufacture one for every newly submitted
-  // report; that made residents see “An official has viewed your report” even
+  // report; that made residents see “An official has viewed this report” even
   // when nobody had opened it.
   if (!hasHandlingEvent && recordedViewers.length > 0) {
     lifecycleEvents.unshift({
@@ -371,13 +382,21 @@ export function buildConcernTimelineEntries(
   const proof = (report.resolution_evidence ?? []).filter((item) =>
     item.mime_type.startsWith("image/")
   )
-  const proofPreview = proof.map((item) =>
-    toMediaPreviewItem(
+  const proofPreview = proof.map((item) => ({
+    ...toMediaPreviewItem(
       item.preview_url || item.raw_url,
       item.original_filename,
       item.mime_type
-    )
-  )
+    ),
+    eyebrow:
+      streetOnly(report.community_incident?.address || report.address) ||
+      undefined,
+    postedLabel: `${formatDate(report.created_at)} at ${formatTime(report.created_at)}`,
+    heading:
+      (report.notification_subject || report.title || "").trim() || undefined,
+    badge: "Resolved case",
+    blurb: (report.description || "").trim() || undefined,
+  }))
 
   const officialChatMembers = Array.from(
     new Map(
@@ -450,7 +469,7 @@ export function buildConcernTimelineEntries(
         note ||
         currentUpdate ||
         `Status updated to ${concernTimelineStatusLabel(event.status).toLowerCase()}.`
-      if (isBeingHandled) statement = "An official has viewed your report."
+      if (isBeingHandled) statement = "An official has viewed this report."
 
       if (isClarificationReply) {
         badge = "Clarification answered"
@@ -495,28 +514,30 @@ export function buildConcernTimelineEntries(
         actor,
         actorUser,
         content: isResolvedRecord({ status: event.status }) ? (
-            resolvedNoteBlock({
-              text: statement,
-              // The resolver roster, shown as a leading avatar group the same
-              // way "Being handled" rows surface the officials on the report.
-              members: activeAssignees,
-              proof,
-              proofPreview,
-              onOpenProof,
-            })
-          ) : (
-            <>
-              {noteBlock(
-                statement,
-                event.status === "assigned"
-                  ? assignmentMembers
-                  : isBeingHandled
-                    ? beingHandledMembers
-                    : [],
-                event.status === "assigned" ? assignmentBadge : undefined
-              )}
-            </>
-          ),
+          resolvedNoteBlock({
+            text: statement,
+            large,
+            // The resolver roster, shown as a leading avatar group the same
+            // way "Being handled" rows surface the officials on the report.
+            members: activeAssignees,
+            proof,
+            proofPreview,
+            onOpenProof,
+          })
+        ) : (
+          <>
+            {noteBlock(
+              statement,
+              event.status === "assigned"
+                ? assignmentMembers
+                : isBeingHandled
+                  ? beingHandledMembers
+                  : [],
+              event.status === "assigned" ? assignmentBadge : undefined,
+              large
+            )}
+          </>
+        ),
       }
     }
   )
@@ -542,7 +563,7 @@ export function buildConcernTimelineEntries(
       icon: "network",
       actor: "System",
       actorUser: null,
-      content: noteBlock(`Assigned to ${assignmentName}.`, [], assignmentBadge),
+      content: noteBlock(`Assigned to ${assignmentName}.`, [], assignmentBadge, large),
     })
   }
 
@@ -583,7 +604,7 @@ export function buildConcernTimelineEntries(
       icon: "network",
       actor: "System",
       actorUser: null,
-      content: noteBlock(`Assigned to ${assignmentName}.`, [], assignmentBadge),
+      content: noteBlock(`Assigned to ${assignmentName}.`, [], assignmentBadge, large),
     },
   ]
 }

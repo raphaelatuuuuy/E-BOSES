@@ -1,21 +1,16 @@
 import {
   AtSignIcon,
-  BadgeCheckIcon,
   BellRingIcon,
   CheckCircle2Icon,
   CircleXIcon,
   ConstructionIcon,
   FilePlus2Icon,
   FileTextIcon,
-  InfoIcon,
-  MapPinCheckIcon,
   MegaphoneIcon,
   MessageCircleIcon,
   MessageCircleQuestionIcon,
   MessageCircleReplyIcon,
   MessagesSquareIcon,
-  NavigationIcon,
-  RouteIcon,
   ScaleIcon,
   SearchCheckIcon,
   ShieldCheckIcon,
@@ -86,36 +81,6 @@ export function notificationIconFor(item: NotificationItem): NotificationVisual 
   }
 
   if (isEmergencyNotification(item)) {
-    if (type === "emergency_appeal_submitted") {
-      return { Icon: ScaleIcon, chipClass: "bg-violet-50 text-violet-700" }
-    }
-    if (type === "emergency_appeal_approved") {
-      return { Icon: ScaleIcon, chipClass: "bg-emerald-50 text-emerald-700" }
-    }
-    if (type === "emergency_appeal_denied") {
-      return { Icon: ScaleIcon, chipClass: "bg-rose-50 text-rose-700" }
-    }
-    if (type === "emergency_acknowledged") {
-      return { Icon: BadgeCheckIcon, chipClass: "bg-blue-50 text-blue-700" }
-    }
-    if (type === "emergency_routed" || type === "emergency_en_route") {
-      return { Icon: RouteIcon, chipClass: "bg-orange-50 text-orange-700" }
-    }
-    if (type === "emergency_nearby") {
-      return { Icon: NavigationIcon, chipClass: "bg-orange-50 text-orange-700" }
-    }
-    if (type === "emergency_arrived") {
-      return { Icon: MapPinCheckIcon, chipClass: "bg-emerald-50 text-emerald-700" }
-    }
-    if (type === "emergency_resolved") {
-      return { Icon: CheckCircle2Icon, chipClass: "bg-emerald-50 text-emerald-700" }
-    }
-    if (type === "emergency_cancelled") {
-      return { Icon: CircleXIcon, chipClass: "bg-slate-100 text-slate-600" }
-    }
-    if (type === "emergency_updated") {
-      return { Icon: InfoIcon, chipClass: "bg-blue-50 text-blue-700" }
-    }
     return { Icon: TriangleAlertIcon, chipClass: "bg-sos/10 text-sos" }
   }
 

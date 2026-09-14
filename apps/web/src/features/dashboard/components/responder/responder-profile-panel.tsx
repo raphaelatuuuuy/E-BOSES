@@ -26,10 +26,6 @@ export function ResponderProfilePanel() {
     { label: "Email", value: user?.email || "Not recorded" },
     { label: "Phone", value: user?.phone_number || "Not recorded" },
     { label: "Barangay", value: user?.barangay || "Not recorded" },
-    {
-      label: "Account status",
-      value: user?.status === "verified" ? "Verified" : user?.status || "Not recorded",
-    },
   ]
 
   return (
@@ -45,9 +41,8 @@ export function ResponderProfilePanel() {
           <h3 className="truncate text-[20px] font-bold leading-tight tracking-tight text-neutral-900">
             {fullName}
           </h3>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-            <span className="text-[13px] font-semibold text-neutral-600">Responder</span>
-            <span className="text-[15px] text-neutral-500">{unit.name}</span>
+          <p className="mt-1 break-words text-[15px] text-neutral-500">
+            {unit.name}
           </p>
         </div>
       </section>

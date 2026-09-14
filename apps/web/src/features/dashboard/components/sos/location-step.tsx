@@ -1,31 +1,15 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { HomeIcon, LocateFixedIcon } from "lucide-react"
-import L, {
-  type Map as LeafletMap,
-  type Marker,
-  type LatLngBounds,
-  type LeafletMouseEvent,
-} from "leaflet"
-import "leaflet/dist/leaflet.css"
-import "@/features/dashboard/components/map/location-pin.css"
-import { apiRequest } from "@/lib/api"
-import { validateLocation } from "@/lib/location-validation"
-import type { GeoJsonPolygon } from "@/features/dashboard/api"
-import {
-  insideCoverage,
-  type CoverageInput,
-} from "@/features/dashboard/components/map/coverage-layer"
-import {
-  MapControlStack,
-  MapStackButton,
-  MapStackDivider,
-} from "@/features/dashboard/components/map-control-stack"
+import { useCallback, useEffect, useRef } from "react"
 
+import LocationPickerModal, {
+  type LocationConfirmPayload,
+  type PinState,
+} from "@/features/dashboard/components/location-picker"
+import {
+  nearestOfflineStreet,
+} from "@/features/dashboard/components/sos/offline-sos-config"
 import { cn } from "@workspace/ui/lib/utils"
-import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
-import { formatNominatimParts, reverseGeocode } from "@/lib/geocode"
 
 export type SosLocationValue = {
   lat: number
@@ -37,6 +21,8 @@ export type SosLocationValue = {
   addressResolved?: boolean
   streetDistanceMeters?: number | null
   streetConfidence?: "high" | "medium" | null
+  /** Local boundary/radius result used when the network validator is offline or unavailable. */
+  coverageAccepted?: boolean
   locationCheck?: SosLocationCheck | null
 }
 
@@ -54,15 +40,59 @@ export type SosLocationCheck = {
 }
 
 function acceptedLocationCheck(check: SosLocationCheck | null | undefined) {
-  return Boolean(check?.accepted && check.status !== "far")
+  // `accepted` is the server's final boundary-or-acceptance-zone decision.
+  // Status is descriptive (and has historically varied between `inside` and
+  // `edge`), so it must not become a second, stricter rejection rule.
+  return check?.accepted === true
+}
+
+export function acceptedSosLocation(
+  value: SosLocationValue | null | undefined
+) {
+  if (value?.coverageAccepted != null) return value.coverageAccepted === true
+  return Boolean(acceptedLocationCheck(value?.locationCheck))
 }
 
 export function friendlyLocationMessage(
   check: SosLocationCheck | null | undefined
 ) {
-  if (!check || acceptedLocationCheck(check))
-    return ""
-  return check.message || "This location may be outside the service area. Check your pin."
+  if (!check || acceptedLocationCheck(check)) return ""
+  return (
+    check.message ||
+    "This location may be outside the service area. Check your pin."
+  )
+}
+
+function usableAddressPart(value: string | null | undefined) {
+  const normalized = value?.trim() || ""
+  if (!normalized) return false
+  if (
+    /^(finding street…|finding street\.\.\.|move the map to adjust|selected location|pinned location)$/i.test(
+      normalized
+    )
+  ) {
+    return false
+  }
+  return !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(normalized)
+}
+
+function pendingLocationCheck(): SosLocationCheck {
+  return {
+    accepted: false,
+    status: "pending",
+    zone: "",
+    message:
+      "This location is still being checked. Move the map or wait a moment.",
+  }
+}
+
+function acceptedLocationCheckValue(): SosLocationCheck {
+  return {
+    accepted: true,
+    status: "inside",
+    zone: "",
+    message: "",
+  }
 }
 
 export function SosLocationStep({
@@ -74,397 +104,110 @@ export function SosLocationStep({
   onChange: (next: SosLocationValue) => void
   className?: string
 }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<LeafletMap | null>(null)
-  const markerRef = useRef<Marker | null>(null)
-  const leafletRef = useRef<typeof L | null>(null)
   const valueRef = useRef(value)
   const onChangeRef = useRef(onChange)
-  const requestRef = useRef(0)
-  const watchRef = useRef<number | null>(null)
-  const timerRef = useRef<number | null>(null)
-  const boundaryRef = useRef<LatLngBounds | null>(null)
-  const coverageRef = useRef<CoverageInput>({})
-  const centerFallbackRef = useRef(false)
-  const [addressExpanded, setAddressExpanded] = useState(false)
-  const [gpsBusy, setGpsBusy] = useState(false)
-  const [addressBusy, setAddressBusy] = useState(false)
-  const [notice, setNotice] = useState("")
-  const [outOfScope, setOutOfScope] = useState(false)
-  const framedRef = useRef(false)
 
-  useEffect(() => {
-    onChangeRef.current = onChange
-  }, [onChange])
   useEffect(() => {
     valueRef.current = value
   }, [value])
 
-  const stopGps = useCallback(() => {
-    if (watchRef.current != null)
-      navigator.geolocation?.clearWatch(watchRef.current)
-    if (timerRef.current != null) window.clearTimeout(timerRef.current)
-    watchRef.current = null
-    timerRef.current = null
-    setGpsBusy(false)
+  useEffect(() => {
+    onChangeRef.current = onChange
+  }, [onChange])
+
+  const applyPinState = useCallback((pin: PinState | null) => {
+    if (!pin) return
+
+    const nearbyStreet = nearestOfflineStreet(pin.lat, pin.lng)
+    const fallbackPrimary = nearbyStreet
+      ? `Nearby ${nearbyStreet}`
+      : "Pinned location"
+    const primary = usableAddressPart(pin.addressPrimary)
+      ? pin.addressPrimary.trim()
+      : fallbackPrimary
+    const address = usableAddressPart(pin.address)
+      ? pin.address.trim()
+      : nearbyStreet
+        ? `${fallbackPrimary} on the map`
+        : "Pinned location on the map"
+    const offline =
+      typeof navigator !== "undefined" && navigator.onLine === false
+    const next: SosLocationValue = {
+      lat: pin.lat,
+      lng: pin.lng,
+      source: pin.source === "gps" ? "gps" : "manual",
+      accuracy: pin.accuracy ?? null,
+      address,
+      addressPrimary: primary,
+      addressResolved: pin.ready || Boolean(nearbyStreet),
+      // The shared picker is the online authority. Offline SOS remains usable
+      // with finite coordinates and the local address fallback.
+      coverageAccepted: pin.ready || offline,
+      locationCheck: pin.ready
+        ? acceptedLocationCheckValue()
+        : offline
+          ? null
+          : pendingLocationCheck(),
+    }
+
+    const previous = valueRef.current
+    if (
+      previous &&
+      previous.lat === next.lat &&
+      previous.lng === next.lng &&
+      previous.source === next.source &&
+      previous.accuracy === next.accuracy &&
+      previous.address === next.address &&
+      previous.addressPrimary === next.addressPrimary &&
+      previous.addressResolved === next.addressResolved &&
+      previous.coverageAccepted === next.coverageAccepted &&
+      previous.locationCheck?.accepted === next.locationCheck?.accepted &&
+      previous.locationCheck?.status === next.locationCheck?.status
+    ) {
+      return
+    }
+
+    valueRef.current = next
+    onChangeRef.current(next)
   }, [])
 
-  const selectLocation = useCallback(
-    (
-      lat: number,
-      lng: number,
-      source: "gps" | "manual",
-      accuracy: number | null
-    ) => {
-      const request = ++requestRef.current
-      const next: SosLocationValue = {
-        lat,
-        lng,
-        source,
-        accuracy,
-        address: "Pinned location on the map",
-        addressPrimary: "Pinned location",
-        addressResolved: false,
-        locationCheck: null,
-      }
-      setOutOfScope(!insideCoverage(lat, lng, coverageRef.current))
-      valueRef.current = next
-      onChangeRef.current(next)
-      setAddressBusy(true)
-      void Promise.all([
-        reverseGeocode(lat, lng),
-        validateLocation(lat, lng).catch(
-          () =>
-              ({
-                accepted: false,
-                status: "unknown",
-                zone: "unknown",
-                message: "Could not validate this location. Try again.",
-              }) as SosLocationCheck
-        ),
-      ]).then(([data, locationCheck]) => {
-        if (request !== requestRef.current) return
-        setAddressBusy(false)
-        setOutOfScope(
-          !acceptedLocationCheck(locationCheck)
-        )
-        const current = valueRef.current
-        const checked = {
-          ...next,
-          ...(current && current.lat === lat && current.lng === lng
-            ? current
-            : {}),
-          locationCheck,
-        }
-        if (
-          data &&
-          (data.display_name ||
-            Object.values(data.address ?? {}).some(Boolean))
-        ) {
-          const address = formatNominatimParts(data)
-          checked.address = address.full
-          checked.addressPrimary = address.primary
-          checked.addressResolved = true
-        }
-        valueRef.current = checked
-        onChangeRef.current(checked)
+  const confirmPin = useCallback(
+    (payload: LocationConfirmPayload) => {
+      applyPinState({
+        lat: payload.lat,
+        lng: payload.lng,
+        address: payload.address,
+        addressPrimary: payload.addressPrimary,
+        addressSecondary: payload.addressSecondary,
+        ready: true,
+        source: payload.source,
+        accuracy: null,
       })
     },
-    []
+    [applyPinState]
   )
-
-  const pinBoundaryCenter = useCallback(() => {
-    const bounds = boundaryRef.current
-    const map = mapRef.current
-    if (!bounds || !map || valueRef.current) return false
-    const center = bounds.getCenter()
-    map.setView([center.lat, center.lng], 16)
-    selectLocation(center.lat, center.lng, "manual", null)
-    return true
-  }, [selectLocation])
-
-  const locate = useCallback(() => {
-    stopGps()
-    if (!navigator.geolocation) {
-      setNotice("Location is unavailable. Select your location on the map.")
-      centerFallbackRef.current = true
-      pinBoundaryCenter()
-      return
-    }
-    setGpsBusy(true)
-    setNotice("")
-    let bestAccuracy = Infinity
-    watchRef.current = navigator.geolocation.watchPosition(
-      ({ coords }) => {
-        if (coords.accuracy >= bestAccuracy) return
-        bestAccuracy = coords.accuracy
-        if (coords.accuracy > 120) return
-        selectLocation(
-          coords.latitude,
-          coords.longitude,
-          "gps",
-          coords.accuracy
-        )
-        mapRef.current?.setView([coords.latitude, coords.longitude], 17)
-        if (coords.accuracy <= 50) stopGps()
-      },
-      (error) => {
-        stopGps()
-        setNotice(
-          error.code === error.PERMISSION_DENIED
-            ? "Allow location access in your browser, or select a place on the map."
-            : "Could not find your location. Try again or select a place on the map."
-        )
-        centerFallbackRef.current = true
-        pinBoundaryCenter()
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20_000 }
-    )
-    timerRef.current = window.setTimeout(() => {
-      stopGps()
-      if (bestAccuracy > 120) {
-        setNotice(
-          "Could not find a precise location. Try again or select a place on the map."
-        )
-        centerFallbackRef.current = true
-        pinBoundaryCenter()
-      }
-    }, 20_000)
-  }, [selectLocation, stopGps, pinBoundaryCenter])
-
-  const syncMarker = useCallback(() => {
-    const L = leafletRef.current
-    const map = mapRef.current
-    const pin = valueRef.current
-    if (!L || !map || !pin) return
-    const check = pin.locationCheck
-    const inside =
-      check != null
-        ? acceptedLocationCheck(check)
-        : insideCoverage(pin.lat, pin.lng, coverageRef.current)
-    if (!inside) {
-      markerRef.current?.remove()
-      markerRef.current = null
-      return
-    }
-    if (markerRef.current) {
-      markerRef.current.setLatLng([pin.lat, pin.lng])
-      return
-    }
-    const pinSize = 12
-    const marker = L.marker([pin.lat, pin.lng], {
-      draggable: true,
-      title: "Emergency location. Drag to adjust.",
-      alt: "Emergency location",
-      icon: L.divIcon({
-        className: "",
-        html: `<span class="eboses-pin-pulse" style="display:block;width:12px;height:12px;border-radius:9999px;background:#171717;box-shadow:0 1px 4px rgba(0,0,0,0.35)"></span>`,
-        iconSize: [pinSize, pinSize],
-        iconAnchor: [pinSize / 2, pinSize / 2],
-      }),
-      zIndexOffset: 800,
-    }).addTo(map)
-    marker.on("dragstart", stopGps)
-    marker.on("dragend", () => {
-      const point = marker.getLatLng()
-      setNotice("")
-      selectLocation(point.lat, point.lng, "manual", null)
-    })
-    markerRef.current = marker
-  }, [selectLocation, stopGps])
-
-  useEffect(() => {
-    let cancelled = false
-    let observer: ResizeObserver | undefined
-    const contextRequest = apiRequest<{
-      boundary: { geometry: GeoJsonPolygon | null }
-      dispatch_policy?: CoverageInput["policy"]
-    }>("/locations/map-context/").catch(() => null)
-    if (!containerRef.current) return
-    {
-      leafletRef.current = L
-      const pin = valueRef.current
-      const map = L.map(containerRef.current, {
-        zoomControl: false,
-        attributionControl: false,
-      }).setView(pin ? [pin.lat, pin.lng] : [14.5995, 120.9842], pin ? 17 : 11)
-      mapRef.current = map
-      const fitBoundaryIfReady = () => {
-        if (valueRef.current || framedRef.current || !boundaryRef.current) return
-        const size = map?.getSize()
-        if (!map || !size || size.x <= 0 || size.y <= 0) return
-        const bounds = boundaryRef.current
-        if (!bounds.isValid()) return
-        map.fitBounds(bounds, { padding: [18, 18], maxZoom: 16 })
-        framedRef.current = true
-      }
-      void contextRequest.then((context) => {
-        if (cancelled || !context?.boundary.geometry) return
-        const boundary = context.boundary.geometry
-        const bounds = L.geoJSON(boundary as never).getBounds()
-        if (!bounds.isValid()) return
-        boundaryRef.current = bounds
-        coverageRef.current = {
-          boundary,
-          policy: context.dispatch_policy ?? null,
-        }
-        const currentPin = valueRef.current
-        if (currentPin) {
-          setOutOfScope(
-            !insideCoverage(currentPin.lat, currentPin.lng, coverageRef.current)
-          )
-        }
-        if (!valueRef.current) {
-          if (centerFallbackRef.current) {
-            centerFallbackRef.current = false
-            pinBoundaryCenter()
-          } else {
-            fitBoundaryIfReady()
-          }
-        }
-      })
-      addBaseTiles(L, map, "light", { crossOrigin: true })
-      map.on("click", (event: LeafletMouseEvent) => {
-        stopGps()
-        setNotice("")
-        selectLocation(event.latlng.lat, event.latlng.lng, "manual", null)
-      })
-      observer = new ResizeObserver(() => {
-        map.invalidateSize()
-        fitBoundaryIfReady()
-      })
-      observer.observe(containerRef.current)
-      syncMarker()
-    }
-    return () => {
-      cancelled = true
-      observer?.disconnect()
-      mapRef.current?.remove()
-      mapRef.current = null
-      markerRef.current = null
-      leafletRef.current = null
-      boundaryRef.current = null
-      coverageRef.current = {}
-      framedRef.current = false
-    }
-  }, [selectLocation, stopGps, syncMarker, pinBoundaryCenter])
-
-  useEffect(() => {
-    syncMarker()
-  }, [value, syncMarker])
-
-  useEffect(() => {
-    if (!valueRef.current) locate()
-    else if (!valueRef.current.locationCheck) {
-      selectLocation(
-        valueRef.current.lat,
-        valueRef.current.lng,
-        valueRef.current.source,
-        valueRef.current.accuracy ?? null
-      )
-    }
-    return () => {
-      stopGps()
-      requestRef.current += 1
-    }
-  }, [locate, selectLocation, stopGps])
-
-  function recenter() {
-    stopGps()
-    const bounds = boundaryRef.current
-    if (!bounds || !mapRef.current) {
-      setNotice("Map area is unavailable. Reconnect and try again.")
-      return
-    }
-    setNotice("")
-    mapRef.current.fitBounds(bounds, {
-      paddingTopLeft: [18, 18],
-      paddingBottomRight: [64, 100],
-      maxZoom: 16,
-    })
-  }
 
   return (
     <div
       className={cn(
-        "relative isolate h-[clamp(300px,46dvh,400px)] shrink-0 overflow-hidden rounded-2xl bg-neutral-100 text-neutral-900",
+        "relative isolate flex h-full min-h-[320px] min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-neutral-100 text-neutral-900",
         className
       )}
     >
-      <div
-        ref={containerRef}
-        className={cn(
-          "relative z-0 h-full w-full",
-          outOfScope && "eboses-map-blocked"
-        )}
-        aria-label="Emergency location map"
+      <LocationPickerModal
+        open
+        renderInline
+        showSearch={false}
+        recenterOnOpen
+        showStreetView={false}
+        coverageScope="served"
+        onClose={() => {}}
+        onConfirm={confirmPin}
+        onPinStateChange={applyPinState}
+        initialLat={value?.lat ?? null}
+        initialLng={value?.lng ?? null}
+        initialAddress={value?.addressPrimary ?? value?.address ?? ""}
       />
-      {notice ? (
-        <p
-          role="status"
-          className="pointer-events-none absolute top-3 left-3 z-20 max-w-[min(75%,20rem)] rounded-xl border border-amber-200 bg-white/95 px-3 py-2 text-[12px] font-medium text-neutral-700 shadow-md"
-        >
-          {notice}
-        </p>
-      ) : null}
-      <div className="pointer-events-none absolute top-3 right-3 z-20">
-        <MapControlStack className="pointer-events-auto shrink-0 border-0 bg-white">
-          <MapStackButton
-            className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
-            label="Recenter to the barangay"
-            onClick={recenter}
-          >
-            <HomeIcon className="size-5" strokeWidth={1.8} aria-hidden />
-          </MapStackButton>
-          <MapStackDivider className="bg-neutral-200" />
-          <MapStackButton
-            className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
-            label="Use my current location"
-            onClick={locate}
-            loading={gpsBusy}
-          >
-            <LocateFixedIcon className="size-5" strokeWidth={1.8} aria-hidden />
-          </MapStackButton>
-        </MapControlStack>
-      </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex flex-col items-center gap-2 px-4">
-        {outOfScope ? (
-          <p
-            role="status"
-            className="pointer-events-none flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
-          >
-            <span className="text-[15px] leading-none font-semibold text-neutral-900">
-              This area is outside of our scope
-            </span>
-            <span className="mt-1.5 text-[13px] leading-snug font-medium text-neutral-500">
-              Drag the map back inside the service area.
-            </span>
-          </p>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setAddressExpanded((expanded) => !expanded)}
-            aria-expanded={addressExpanded}
-            className="pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
-          >
-            <span className="text-[16px] leading-none font-semibold text-neutral-900">
-              Nearby location
-            </span>
-            <span
-              aria-live="polite"
-              className={cn(
-                "mt-1.5 text-[14px] leading-snug font-medium text-neutral-500",
-                !addressExpanded && "line-clamp-2"
-              )}
-            >
-              {addressBusy
-                ? "Finding address…"
-                : (addressExpanded ? value?.address : value?.addressPrimary) ||
-                  "Select your location"}
-            </span>
-          </button>
-        )}
-      </div>
     </div>
   )
 }

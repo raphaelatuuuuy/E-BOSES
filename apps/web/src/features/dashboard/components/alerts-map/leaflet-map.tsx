@@ -1,17 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import {
-  FootprintsIcon,
-  HomeIcon,
-  MinusIcon,
-  NavigationIcon,
-  PlusIcon,
-} from "lucide-react"
+import { FootprintsIcon, HomeIcon, LocateFixedIcon } from "lucide-react"
 import { toast } from "sonner"
 
-import {
-  type LiveMapPerson,
-  type LiveMapSnapshot,
-} from "@/features/dashboard/api"
+import { type LiveMapSnapshot } from "@/features/dashboard/api"
 import {
   drawRoute,
   routeRenderGeometry,
@@ -20,7 +11,6 @@ import {
   MapControlButton,
   MapControlStack,
 } from "@/features/dashboard/components/map/map-chrome"
-import { MapLegend } from "@/features/dashboard/components/map/map-legend"
 import {
   StreetViewModal,
   startStreetViewPick,
@@ -31,12 +21,20 @@ import {
   polygonCentroid,
 } from "@/features/dashboard/components/community-content/area-lib"
 import {
+  ANNOUNCEMENT_ACCENT,
+  advisoryGlyphHtml,
+  advisoryLabel,
   advisoryMarkerHtml,
-  advisoryMeta,
 } from "@/features/dashboard/components/community-content/advisory-tags"
+import { streetSegment } from "@/features/dashboard/lib/location-text"
+import {
+  announcementSummary,
+  announcementTitle,
+} from "@/features/dashboard/lib/announcement-summary"
 import type { GeoJsonPolygon } from "@/features/dashboard/api"
 import {
   concernGlyph,
+  dotPinHtml,
   glyphPinHtml,
   glyphPinSize,
   GLYPHS,
@@ -57,8 +55,8 @@ import {
   type Selection,
   type StreetLine,
   advisoryDoneColor,
-  alertLayerRows,
   geoJsonToLines,
+  joinLineRuns,
   isMapDrawableConcern,
   isResolvedRecord,
   isActiveEmergency,
@@ -69,18 +67,6 @@ import {
 import type leaflet from "leaflet"
 
 const ICON_CACHE = new Map<string, leaflet.DivIcon>()
-
-function responderInitials(fullName: string) {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean)
-  if (!parts.length) return "R"
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase()
-}
-
-function responderTooltipHtml(person: LiveMapPerson) {
-  const name = person.full_name.trim() || "Responder"
-  return `<span class="eboses-official-responder-tip__content"><span class="eboses-official-responder-tip__avatar">${escapeHtml(responderInitials(name))}</span><span class="eboses-official-responder-tip__name">${escapeHtml(name)}</span></span>`
-}
 
 function cachedIcon(
   L: typeof leaflet,
@@ -183,20 +169,14 @@ function AlertsLeafletMapInner({
   selected,
   selectedStreetNames,
   onSelect,
-  onToggleLayer,
-  onResetLayers,
   onMapInteract,
-  counts,
 }: {
   snapshot: LiveMapSnapshot
   layers: Record<LayerKey, boolean>
   selected: Selection
   selectedStreetNames: Set<string>
   onSelect: (selection: Selection) => void
-  onToggleLayer: (key: LayerKey) => void
-  onResetLayers: () => void
   onMapInteract?: () => void
-  counts: { concerns: number; advisories: number }
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
@@ -219,18 +199,18 @@ function AlertsLeafletMapInner({
   const onSelectRef = useRef(onSelect)
   const onMapInteractRef = useRef(onMapInteract)
   const streetLayersRef = useRef<leaflet.LayerGroup | null>(null)
-  const responderLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const routeLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const advisoryLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const advisoryRoadsRef = useRef<
     Map<
       number,
       {
-        roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }>
+        roads: Array<{ flow: leaflet.Polyline }>
         wide: string | null
       }
     >
   >(new Map())
+  const svgRendererRef = useRef<leaflet.SVG | null>(null)
   const advisoryFallbackAnchorsRef = useRef(
     new Map<number, leaflet.LatLngTuple>()
   )
@@ -251,9 +231,8 @@ function AlertsLeafletMapInner({
       highlight.clearLayers()
       for (const [key, entry] of advisoryRoadsRef.current) {
         const strong = id != null && key === id
-        for (const { casing, core } of entry.roads) {
-          casing.setStyle({ opacity: strong ? 0.95 : 0.5 })
-          core.setStyle({ opacity: strong ? 0.95 : 0.35 })
+        for (const { flow } of entry.roads) {
+          flow.setStyle({ opacity: strong ? 1 : 0.9 })
         }
       }
       const entry = id != null ? advisoryRoadsRef.current.get(id) : null
@@ -262,9 +241,7 @@ function AlertsLeafletMapInner({
         const ring = geometry ? geoJsonToRing(geometry) : []
         if (ring.length >= 3) {
           L.polygon(ring, {
-            color: entry.wide,
-            weight: 2,
-            opacity: 0.9,
+            stroke: false,
             fillColor: entry.wide,
             fillOpacity: 0.15,
             interactive: false,
@@ -291,6 +268,34 @@ function AlertsLeafletMapInner({
   const [locating, setLocating] = useState(false)
   const [svPick, setSvPick] = useState(false)
   const [svCoord, setSvCoord] = useState<StreetViewCoord | null>(null)
+  const streetViewWasOpenRef = useRef(false)
+
+  useEffect(() => {
+    if (svCoord) {
+      streetViewWasOpenRef.current = true
+      return
+    }
+    if (!streetViewWasOpenRef.current) return
+    streetViewWasOpenRef.current = false
+
+    let firstFrame = 0
+    let secondFrame = 0
+    const repaintMap = () => {
+      const map = mapRef.current
+      if (!map) return
+      map.invalidateSize({ animate: false })
+      map.setZoom(map.getZoom(), { animate: false })
+    }
+    firstFrame = requestAnimationFrame(() => {
+      repaintMap()
+      secondFrame = requestAnimationFrame(repaintMap)
+    })
+    return () => {
+      cancelAnimationFrame(firstFrame)
+      cancelAnimationFrame(secondFrame)
+    }
+  }, [svCoord])
+
   const streetLines = useMemo<StreetLine[]>(() => {
     return snapshot.map.streets.streets.flatMap((street) =>
       (street.geometries ?? []).flatMap((geometry) =>
@@ -330,6 +335,28 @@ function AlertsLeafletMapInner({
     return cleanup
   }, [svPick, mapReady])
 
+  function openStreetViewAtPin() {
+    const map = mapRef.current
+    if (!map) return
+    const center = map.getCenter()
+    let lat = center.lat
+    let lng = center.lng
+    if (selected?.kind === "concern") {
+      const coord = validCoord(
+        snapshot.concerns.find((c) => c.id === selected.id)?.latitude,
+        snapshot.concerns.find((c) => c.id === selected.id)?.longitude
+      )
+      if (coord) [lat, lng] = coord
+    } else if (selected?.kind === "emergency") {
+      const coord = validCoord(
+        snapshot.emergencies.find((e) => e.id === selected.id)?.latitude,
+        snapshot.emergencies.find((e) => e.id === selected.id)?.longitude
+      )
+      if (coord) [lat, lng] = coord
+    }
+    setSvCoord({ lat, lng })
+  }
+
   function goToCurrentLocation() {
     const map = mapRef.current
     if (!map) return
@@ -357,17 +384,18 @@ function AlertsLeafletMapInner({
             {
               icon: L.divIcon({
                 className: "",
-                html: glyphPinHtml({
-                  paths: GLYPHS.userOfficial,
+                html: dotPinHtml({
                   color: MAP_COLORS.you,
-                  size: 32,
-                  label: "You",
-                  className: "is-you",
+                  size: 14,
+                  live: true,
                 }),
-                iconSize: [32, 32],
-                iconAnchor: [16, 16],
+                iconSize: [14, 14],
+                iconAnchor: [7, 7],
               }),
               zIndexOffset: 1200,
+              // This is a passive position marker, not a report. It should
+              // never open a hover affordance or capture pointer interaction.
+              interactive: false,
             }
           ).addTo(map)
         }
@@ -415,7 +443,7 @@ function AlertsLeafletMapInner({
           font-family: inherit;
         }
         .eboses-map-light.leaflet-container {
-          background: #eef1fa;
+          background: #e8f5f0;
         }
         .eboses-map-light .leaflet-tile-pane { isolation: isolate; }
         .eboses-map-light img.leaflet-tile,
@@ -495,6 +523,19 @@ function AlertsLeafletMapInner({
         .eboses-map-light .eboses-pin--dot.is-live .eboses-pin__core {
           animation: eboses-pin-blink-quiet 2.6s ease-in-out infinite;
         }
+        .eboses-alerts-corridor-flow {
+          animation: eboses-corridor-flow 1.1s linear infinite;
+        }
+        @keyframes eboses-corridor-flow {
+          to {
+            stroke-dashoffset: -14;
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .eboses-alerts-corridor-flow {
+            animation: none;
+          }
+        }
         @keyframes eboses-pin-blink-quiet {
           0%,
           100% {
@@ -532,7 +573,6 @@ function AlertsLeafletMapInner({
       advisoryLayersRef.current = L.layerGroup().addTo(map)
       routeLayersRef.current = L.layerGroup().addTo(map)
       alertLayersRef.current = L.layerGroup().addTo(map)
-      responderLayersRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
       closeHoverCardsOnLeave(map)
 
@@ -622,11 +662,11 @@ function AlertsLeafletMapInner({
       boundaryGeometry as Parameters<typeof L.geoJSON>[0],
       {
         style: {
-          color: "#f97316",
-          weight: 0,
+          // Keep the boundary geometry available for framing, but do not show
+          // a barangay outline/fill as a visual hint on the alerts map.
+          stroke: false,
           fillColor: "#f97316",
-          fillOpacity: 0.12,
-          opacity: 0,
+          fillOpacity: 0,
         },
         interactive: false,
       }
@@ -656,10 +696,8 @@ function AlertsLeafletMapInner({
     const map = mapRef.current
     const boundary = boundaryRef.current
     if (!map || !boundary) return
-    if (layers.boundary && !map.hasLayer(boundary))
-      boundary.addTo(map)
-    if (!layers.boundary && map.hasLayer(boundary))
-      map.removeLayer(boundary)
+    if (layers.boundary && !map.hasLayer(boundary)) boundary.addTo(map)
+    if (!layers.boundary && map.hasLayer(boundary)) map.removeLayer(boundary)
   }, [layers.boundary, boundaryGeometry, mapReady])
 
   // Streets are reference geometry: hundreds of polylines that change only when
@@ -741,7 +779,9 @@ function AlertsLeafletMapInner({
     hoverIdRef.current = null
     focusIdRef.current = null
     if (!layers.advisories) return
-    const nowMs = snapshot.generated_at ? Date.parse(snapshot.generated_at) : undefined
+    const nowMs = snapshot.generated_at
+      ? Date.parse(snapshot.generated_at)
+      : undefined
 
     const bindAdvisoryFocus = (
       id: number,
@@ -774,11 +814,14 @@ function AlertsLeafletMapInner({
     for (const advisory of snapshot.advisories ?? []) {
       const tagColor = advisoryDoneColor(
         advisory,
-        advisoryMeta(advisory.tag).color,
+        ANNOUNCEMENT_ACCENT.color,
         nowMs
       )
       const ring = geoJsonToRing(advisory.area_geometry)
-      if (ring.length >= 3) {
+      const streetRuns = joinLineRuns(
+        (advisory.street_geometries ?? []).flatMap(geoJsonToLines)
+      )
+      if (ring.length >= 3 && streetRuns.length === 0) {
         L.polygon(ring, {
           stroke: false,
           fillColor: tagColor,
@@ -790,7 +833,13 @@ function AlertsLeafletMapInner({
           const marker = L.marker(centroid, {
             icon: L.divIcon({
               className: "",
-              html: advisoryMarkerHtml(advisory.tag, 26, "light", false, tagColor),
+              html: advisoryMarkerHtml(
+                advisory.tag,
+                26,
+                "light",
+                false,
+                tagColor
+              ),
               iconSize: [26, 26],
               iconAnchor: [13, 13],
             }),
@@ -798,44 +847,45 @@ function AlertsLeafletMapInner({
           }).addTo(group)
           bindAdvisoryFocus(advisory.id, marker, {
             image: advisory.image_url,
-            title: advisory.title,
+            eyebrow: advisoryLabel(advisory.tag),
+            eyebrowColor: ANNOUNCEMENT_ACCENT.color,
+            badgeSvg: advisoryGlyphHtml(advisory.tag, 18),
+            title: announcementTitle(advisory),
             excerpt: advisory.body,
+            summary: announcementSummary(advisory),
             date: advisory.starts_at ?? advisory.expires_at,
           })
         }
         continue
       }
-      const roads: Array<{ casing: leaflet.Polyline; core: leaflet.Polyline }> =
-        []
+      const roads: Array<{ flow: leaflet.Polyline }> = []
+      if (!svgRendererRef.current)
+        svgRendererRef.current = L.svg({ padding: 0.5 })
+      const svgRenderer = svgRendererRef.current
+      const drawCorridor = (run: leaflet.LatLngTuple[]) => {
+        const flow = L.polyline(run, {
+          color: tagColor,
+          weight: 4,
+          opacity: 0.9,
+          lineCap: "round",
+          lineJoin: "round",
+          dashArray: "7 7",
+          className: "eboses-alerts-corridor-flow",
+          interactive: false,
+          renderer: svgRenderer,
+        }).addTo(group)
+        roads.push({ flow })
+      }
       let anchor: leaflet.LatLngTuple | null = null
       let anchorLat = 0
       let anchorLng = 0
       let anchorPointCount = 0
-      for (const geometry of advisory.street_geometries ?? []) {
-        const runs = geoJsonToLines(geometry)
-        for (const line of runs) {
-          const casing = L.polyline(line, {
-            color: "#ffffff",
-            weight: 7,
-            opacity: 0.5,
-            lineCap: "round",
-            lineJoin: "round",
-            interactive: false,
-          }).addTo(group)
-          const core = L.polyline(line, {
-            color: tagColor,
-            weight: 2.5,
-            opacity: 0.35,
-            lineCap: "round",
-            lineJoin: "round",
-            interactive: false,
-          }).addTo(group)
-          roads.push({ casing, core })
-          for (const point of line) {
-            anchorLat += point[0]
-            anchorLng += point[1]
-            anchorPointCount += 1
-          }
+      for (const line of streetRuns) {
+        drawCorridor(line)
+        for (const point of line) {
+          anchorLat += point[0]
+          anchorLng += point[1]
+          anchorPointCount += 1
         }
       }
       if (anchorPointCount > 0) {
@@ -858,7 +908,13 @@ function AlertsLeafletMapInner({
         const marker = L.marker(anchor, {
           icon: L.divIcon({
             className: "",
-            html: advisoryMarkerHtml(advisory.tag, 26, "light", false, tagColor),
+            html: advisoryMarkerHtml(
+              advisory.tag,
+              26,
+              "light",
+              false,
+              tagColor
+            ),
             iconSize: [26, 26],
             iconAnchor: [13, 13],
           }),
@@ -866,8 +922,12 @@ function AlertsLeafletMapInner({
         }).addTo(group)
         bindAdvisoryFocus(advisory.id, marker, {
           image: advisory.image_url,
-          title: advisory.title,
+          eyebrow: advisoryLabel(advisory.tag),
+          eyebrowColor: ANNOUNCEMENT_ACCENT.color,
+          badgeSvg: advisoryGlyphHtml(advisory.tag, 18),
+          title: announcementTitle(advisory),
           excerpt: advisory.body,
+          summary: announcementSummary(advisory),
           date: advisory.starts_at ?? advisory.expires_at,
         })
         advisoryRoadsRef.current.set(advisory.id, { roads: [], wide: tagColor })
@@ -875,7 +935,13 @@ function AlertsLeafletMapInner({
         const marker = L.marker(anchor, {
           icon: L.divIcon({
             className: "",
-            html: advisoryMarkerHtml(advisory.tag, 26, "light", false, tagColor),
+            html: advisoryMarkerHtml(
+              advisory.tag,
+              26,
+              "light",
+              false,
+              tagColor
+            ),
             iconSize: [26, 26],
             iconAnchor: [13, 13],
           }),
@@ -884,8 +950,12 @@ function AlertsLeafletMapInner({
         }).addTo(group)
         bindAdvisoryFocus(advisory.id, marker, {
           image: advisory.image_url,
-          title: advisory.title,
+          eyebrow: advisoryLabel(advisory.tag),
+          eyebrowColor: ANNOUNCEMENT_ACCENT.color,
+          badgeSvg: advisoryGlyphHtml(advisory.tag, 18),
+          title: announcementTitle(advisory),
           excerpt: advisory.body,
+          summary: announcementSummary(advisory),
           date: advisory.starts_at ?? advisory.expires_at,
         })
         if (roads.length > 0)
@@ -925,24 +995,35 @@ function AlertsLeafletMapInner({
         const focused =
           selected?.kind === "concern" && selected.id === concern.id
         const box = glyphPinSize(26, focused)
-        const color = concernResolved ? MAP_COLORS.resolved : MAP_COLORS.concern
-        // Resolved pins keep the report's own category icon, just recoloured
-        // neutral — everything falls back through the same priority the
-        // report's icon uses elsewhere: image > custom label > picked icon > glyph.
+        const concernCritical =
+          (concern.severity ?? concern.priority ?? "").toLowerCase() ===
+          "critical"
+        const color = concernCritical
+          ? MAP_COLORS.emergency
+          : concernResolved
+            ? MAP_COLORS.resolved
+            : MAP_COLORS.concern
+        // Critical concerns always use the red alert pin, even though they are
+        // normal reports and not SOS emergencies. Other concerns keep the
+        // report's own icon priority: image > custom label > picked icon > glyph.
         const categoryRef = concern.category_ref
-        const content = categoryRef?.icon_image_url
-          ? `<img src="${escapeHtml(categoryRef.icon_image_url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:9999px" />`
-          : categoryRef?.custom_icon_label?.trim()
-            ? `<span style="font-size:${Math.round(box * 0.42)}px;font-weight:700;line-height:1">${escapeHtml(categoryRef.custom_icon_label.trim().slice(0, 2).toUpperCase())}</span>`
-            : undefined
-        const paths =
-          (categoryRef?.icon_key
-            ? lucideIconPaths(categoryRef.icon_key)
-            : null) ?? concernGlyph(concern.category)
+        const content =
+          !concernCritical && !concernResolved && categoryRef?.icon_image_url
+            ? `<img src="${escapeHtml(categoryRef.icon_image_url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:9999px" />`
+            : !concernCritical && !concernResolved && categoryRef?.custom_icon_label?.trim()
+              ? `<span style="font-size:${Math.round(box * 0.42)}px;font-weight:700;line-height:1">${escapeHtml(categoryRef.custom_icon_label.trim().slice(0, 2).toUpperCase())}</span>`
+              : undefined
+        const paths = concernCritical
+          ? GLYPHS.emergency
+          : concernResolved
+            ? (lucideIconPaths("check") ?? concernGlyph(concern.category))
+            : ((categoryRef?.icon_key
+                ? lucideIconPaths(categoryRef.icon_key)
+                : null) ?? concernGlyph(concern.category))
         specs.push({
           key: `concern-${concern.id}`,
           coord,
-          iconKey: `concern:${concernResolved ? "resolved" : `${concern.category}:${categoryRef?.icon_key ?? ""}:${categoryRef?.icon_image_url ?? ""}:${categoryRef?.custom_icon_label ?? ""}`}:${color}:${box}`,
+          iconKey: `concern:${concernCritical ? "critical" : concernResolved ? "resolved" : `${concern.category}:${categoryRef?.icon_key ?? ""}:${categoryRef?.icon_image_url ?? ""}:${categoryRef?.custom_icon_label ?? ""}`}:${color}:${box}`,
           box,
           html: () =>
             glyphPinHtml({
@@ -957,13 +1038,19 @@ function AlertsLeafletMapInner({
           z: focused ? 700 : 200,
           tip: {
             image: concern.preview_url,
+            resolutionImage: concern.resolution_preview_url,
+            resolutionCount: concern.resolution_photo_count,
+            resolved: concernResolved,
+            resolvedAt: concern.updated_at,
             title: concern.notification_subject || concern.title,
-            excerpt: concern.summary || concern.description,
-            excerptLabel: concern.summary
-              ? null
-              : concern.description
-                ? "Report description"
-                : null,
+            reporterName: concern.reporter?.full_name,
+            meta:
+              streetSegment(concern.address) ||
+              streetSegment(concern.barangay) ||
+              undefined,
+            description: concern.description,
+            summary: concern.summary,
+            severity: concern.severity ?? concern.priority,
             date: concern.created_at,
           },
           onClick: () =>
@@ -1019,6 +1106,7 @@ function AlertsLeafletMapInner({
                 : emergency.note
                   ? "Resident report"
                   : null,
+            severity: "critical",
             date: emergency.created_at,
           },
           onClick: () =>
@@ -1036,68 +1124,6 @@ function AlertsLeafletMapInner({
     selected?.id,
     mapReady,
   ])
-
-  useEffect(() => {
-    const L = LRef.current
-    const group = responderLayersRef.current
-    if (!L || !group) return
-    group.clearLayers()
-
-    const responders = new Map<
-      number,
-      { person: LiveMapPerson; coord: leaflet.LatLngTuple }
-    >()
-    const peopleById = new Map(
-      snapshot.people
-        .filter((person) => person.role === "first_responder")
-        .map((person) => [person.id, person])
-    )
-
-    for (const person of peopleById.values()) {
-      const coord = validCoord(person.latitude, person.longitude)
-      if (coord) responders.set(person.id, { person, coord })
-    }
-
-    for (const route of snapshot.routes) {
-      const person = route.responder ?? peopleById.get(route.responder_id)
-      if (!person || person.role !== "first_responder") continue
-      const current = validCoord(person.latitude, person.longitude)
-      if (current) {
-        responders.set(person.id, { person, coord: current })
-        continue
-      }
-      const savedOrigin = route.origin_snap
-        ? validCoord(
-            String(route.origin_snap.latitude),
-            String(route.origin_snap.longitude)
-          )
-        : null
-      if (savedOrigin) responders.set(person.id, { person, coord: savedOrigin })
-    }
-
-    for (const { person, coord } of responders.values()) {
-      L.marker(coord, {
-        icon: cachedIcon(L, "official-responder-pin", 30, () =>
-          glyphPinHtml({
-            paths: GLYPHS.userResponder,
-            color: MAP_COLORS.responder,
-            size: 30,
-            tone: "light",
-            tint: true,
-          })
-        ),
-        zIndexOffset: 1000,
-        keyboard: true,
-      })
-        .bindTooltip(responderTooltipHtml(person), {
-          direction: "top",
-          offset: [0, -16],
-          className: "eboses-official-responder-tip",
-          opacity: 1,
-        })
-        .addTo(group)
-    }
-  }, [snapshot.people, snapshot.routes, mapReady])
 
   // Framing the selected incident is a viewport action, not a layer action. It
   // used to live inside the layer effect, so every websocket tick yanked the
@@ -1121,8 +1147,6 @@ function AlertsLeafletMapInner({
       map.setView(coord, Math.max(map.getZoom(), 16), { animate: true })
   }, [selected?.kind, selected?.id, mapReady])
 
-  const layerRows = alertLayerRows(counts)
-
   return (
     // `absolute inset-0`, not `size-full`. A percentage height only resolves
     // when every ancestor has a definite one, and on mobile the shell's <main>
@@ -1130,10 +1154,10 @@ function AlertsLeafletMapInner({
     // the whole chain collapsed to zero, leaving the map unpainted. Absolute
     // insets resolve against the positioned parent's laid-out box instead, so
     // they work identically at both breakpoints.
-    <div className="absolute inset-0 overflow-hidden bg-neutral-100">
+    <div className="absolute inset-0 overflow-hidden bg-status-closed-surface">
       <div ref={containerRef} className="absolute inset-0" />
 
-      {/* One control column. Locate sits below the zoom controls. */}
+      {/* One control column using the same action order as every map. */}
       <div className="absolute top-3 right-3 z-[600] flex flex-col items-end gap-2">
         <div className="pointer-events-auto relative">
           <MapControlStack tone="light">
@@ -1147,36 +1171,16 @@ function AlertsLeafletMapInner({
             <MapControlButton
               tone="light"
               divider
-              label="Zoom in"
-              onClick={() => mapRef.current?.zoomIn()}
-            >
-              <PlusIcon className="size-5" strokeWidth={2.1} />
-            </MapControlButton>
-            <MapControlButton
-              tone="light"
-              divider
-              label="Zoom out"
-              onClick={() => mapRef.current?.zoomOut()}
-            >
-              <MinusIcon className="size-5" strokeWidth={2.1} />
-            </MapControlButton>
-            <MapControlButton
-              tone="light"
-              divider
               label="Current location"
               onClick={goToCurrentLocation}
               loading={locating}
             >
-              <NavigationIcon className="size-5" strokeWidth={1.9} />
+              <LocateFixedIcon className="size-5" strokeWidth={1.9} />
             </MapControlButton>
             <MapControlButton
               tone="light"
               divider
-              label={
-                svPick
-                  ? "Cancel Street View pick"
-                  : "Drag me onto the map or click, then pick a spot for Street View"
-              }
+              label="Open Street View at the current pin"
               active={svPick}
               draggable
               onDragStart={(event) => {
@@ -1184,7 +1188,7 @@ function AlertsLeafletMapInner({
                 event.dataTransfer.effectAllowed = "copy"
                 setSvPick(true)
               }}
-              onClick={() => setSvPick((value) => !value)}
+              onClick={openStreetViewAtPin}
             >
               <FootprintsIcon className="size-5" strokeWidth={1.9} />
             </MapControlButton>
@@ -1196,18 +1200,6 @@ function AlertsLeafletMapInner({
             Click the map to start Street View · Esc cancels
           </div>
         ) : null}
-      </div>
-
-      {/* Below the map, clear of the control column. Collapsed it is one icon,
-          so the legend never covers the barangay. */}
-      <div className="absolute right-3 bottom-[calc(56px+0.75rem)] z-[500] flex flex-col items-end lg:bottom-3">
-        <MapLegend
-          tone="light"
-          rows={layerRows}
-          active={layers}
-          onToggle={onToggleLayer}
-          onReset={onResetLayers}
-        />
       </div>
 
       {svCoord ? (

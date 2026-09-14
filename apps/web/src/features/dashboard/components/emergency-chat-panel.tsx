@@ -16,7 +16,12 @@ import { cn } from "@workspace/ui/lib/utils"
 import { initialsFor, roleLabel } from "@/features/dashboard/lib/people"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
-import { Message, MessageAvatar, MessageContent, MessageFooter } from "@/components/ui/message"
+import {
+  Message,
+  MessageAvatar,
+  MessageContent,
+  MessageFooter,
+} from "@/components/ui/message"
 import { websocketTicket, websocketUrl } from "@/lib/api"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { checkConcernMedia } from "@/features/dashboard/api"
@@ -26,7 +31,10 @@ import {
 } from "@/features/dashboard/components/authenticated-media"
 import { type MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { VoiceNoteBubble } from "@/features/dashboard/components/voice-note-bubble"
-import { useVoiceRecorder, formatVoiceTime } from "@/features/dashboard/lib/use-voice-recorder"
+import {
+  useVoiceRecorder,
+  formatVoiceTime,
+} from "@/features/dashboard/lib/use-voice-recorder"
 import { LocalAttachmentPreview } from "@/features/dashboard/components/comments"
 import {
   listEmergencyChat,
@@ -44,28 +52,28 @@ function formatChatTime(value: string) {
 const HISTORY_PAGE_SIZE = 30
 
 export function EmergencyChatPanel({
-   alertId,
-   open,
-   disabled,
-   incomingMessage,
-   realtime = true,
-   theme = "light",
-   scrollable = true,
-   bare = false,
-   variant = "classic",
-   className,
- }: {
-   alertId: number
-   open: boolean
-   /** When true, hide input (e.g. cancelled) */
-   disabled?: boolean
-   /** Real-time message from websocket parent */
-   incomingMessage?: EmergencyChatMessage | null
-   /** Disable when a parent tracking socket already supplies incomingMessage. */
-   realtime?: boolean
-   /** Light is the shared official/responder workspace; dark remains opt-in for the resident SOS dock. */
-   theme?: "dark" | "light"
-   /** When false, cap the thread at a fixed 340px with its own scrollbar. */
+  alertId,
+  open,
+  disabled,
+  incomingMessage,
+  realtime = true,
+  theme = "light",
+  scrollable = true,
+  bare = false,
+  variant = "classic",
+  className,
+}: {
+  alertId: number
+  open: boolean
+  /** When true, hide input (e.g. cancelled) */
+  disabled?: boolean
+  /** Real-time message from websocket parent */
+  incomingMessage?: EmergencyChatMessage | null
+  /** Disable when a parent tracking socket already supplies incomingMessage. */
+  realtime?: boolean
+  /** Light is the shared official/responder workspace; dark remains opt-in for the resident SOS dock. */
+  theme?: "dark" | "light"
+  /** When false, cap the thread at a fixed 340px with its own scrollbar. */
   scrollable?: boolean
   /** Bare = host surface already supplies the chrome; drop the card wrapper. */
   bare?: boolean
@@ -78,9 +86,7 @@ export function EmergencyChatPanel({
   // "Message your responder…" speaks to the resident who raised the alert;
   // officials and responders answer, so they get the neutral follow-up prompt.
   const placeholder =
-    user?.role === "resident"
-      ? "Message your responder…"
-      : "Ask a follow-up…"
+    user?.role === "resident" ? "Message your responder…" : "Ask a follow-up…"
   const [messages, setMessages] = useState<EmergencyChatMessage[]>([])
   const [draft, setDraft] = useState("")
   const [loading, setLoading] = useState(false)
@@ -92,7 +98,9 @@ export function EmergencyChatPanel({
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [checkingAttachment, setCheckingAttachment] = useState(false)
   const [sendFeedback, setSendFeedback] = useState<string | null>(null)
-  const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(null)
+  const [previewMedia, setPreviewMedia] = useState<MediaPreviewItem | null>(
+    null
+  )
   const [socketLive, setSocketLive] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isDark = theme === "dark"
@@ -104,7 +112,7 @@ export function EmergencyChatPanel({
       }
       return Boolean(msg.is_mine)
     },
-    [userId],
+    [userId]
   )
 
   const scrollToBottom = useCallback(() => {
@@ -118,12 +126,15 @@ export function EmergencyChatPanel({
     setLoading(true)
     setLoadError("")
     try {
-      const next = await listEmergencyChat(alertId, { limit: HISTORY_PAGE_SIZE })
+      const next = await listEmergencyChat(alertId, {
+        limit: HISTORY_PAGE_SIZE,
+      })
       setMessages(next)
       setHasOlder(next.length === HISTORY_PAGE_SIZE)
       scrollToBottom()
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not load chat."
+      const message =
+        error instanceof Error ? error.message : "Could not load chat."
       setLoadError(message)
       toast.error(message)
     } finally {
@@ -135,11 +146,18 @@ export function EmergencyChatPanel({
     if (!messages.length || loadingOlder) return
     setLoadingOlder(true)
     try {
-      const older = await listEmergencyChat(alertId, { beforeId: messages[0].id, limit: HISTORY_PAGE_SIZE })
+      const older = await listEmergencyChat(alertId, {
+        beforeId: messages[0].id,
+        limit: HISTORY_PAGE_SIZE,
+      })
       setMessages((prev) => [...older, ...prev])
       setHasOlder(older.length === HISTORY_PAGE_SIZE)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load earlier messages.")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not load earlier messages."
+      )
     } finally {
       setLoadingOlder(false)
     }
@@ -162,11 +180,16 @@ export function EmergencyChatPanel({
         const ticket = await websocketTicket()
         if (closed) return
         socket = new WebSocket(
-          websocketUrl(`/ws/emergencies/${alertId}/tracking/?ticket=${encodeURIComponent(ticket)}`),
+          websocketUrl(
+            `/ws/emergencies/${alertId}/tracking/?ticket=${encodeURIComponent(ticket)}`
+          )
         )
       } catch {
         attempts += 1
-        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+        reconnectTimer = window.setTimeout(
+          () => void connect(),
+          Math.min(30_000, 1500 * 2 ** attempts)
+        )
         return
       }
       socket.onopen = () => {
@@ -175,11 +198,21 @@ export function EmergencyChatPanel({
       }
       socket.onmessage = (event) => {
         try {
-          const message = JSON.parse(event.data) as { type?: string; payload?: EmergencyChatMessage }
-          if (message.type !== "emergency.chat" || !message.payload || message.payload.alert !== alertId) return
-          setMessages((current) => current.some((item) => item.id === message.payload!.id)
-            ? current
-            : [...current, message.payload!])
+          const message = JSON.parse(event.data) as {
+            type?: string
+            payload?: EmergencyChatMessage
+          }
+          if (
+            message.type !== "emergency.chat" ||
+            !message.payload ||
+            message.payload.alert !== alertId
+          )
+            return
+          setMessages((current) =>
+            current.some((item) => item.id === message.payload!.id)
+              ? current
+              : [...current, message.payload!]
+          )
         } catch {
           // The REST poll remains the fallback for malformed frames.
         }
@@ -188,7 +221,10 @@ export function EmergencyChatPanel({
         setSocketLive(false)
         if (closed) return
         attempts += 1
-        reconnectTimer = window.setTimeout(() => void connect(), Math.min(30_000, 1500 * 2 ** attempts))
+        reconnectTimer = window.setTimeout(
+          () => void connect(),
+          Math.min(30_000, 1500 * 2 ** attempts)
+        )
       }
       socket.onerror = () => socket?.close()
     }
@@ -203,19 +239,29 @@ export function EmergencyChatPanel({
 
   useEffect(() => {
     if (!open || !alertId) return
-    const id = window.setInterval(() => {
-      void listEmergencyChat(alertId)
-        .then((next) => {
-          setMessages((prev) => {
-            if (next.length === prev.length && next.at(-1)?.id === prev.at(-1)?.id) return prev
-            const knownIds = new Set(prev.map((message) => message.id))
-            return [...prev, ...next.filter((message) => !knownIds.has(message.id))]
+    const id = window.setInterval(
+      () => {
+        void listEmergencyChat(alertId)
+          .then((next) => {
+            setMessages((prev) => {
+              if (
+                next.length === prev.length &&
+                next.at(-1)?.id === prev.at(-1)?.id
+              )
+                return prev
+              const knownIds = new Set(prev.map((message) => message.id))
+              return [
+                ...prev,
+                ...next.filter((message) => !knownIds.has(message.id)),
+              ]
+            })
           })
-        })
-        .catch(() => {
-          /* ignore poll errors */
-        })
-    }, realtime ? (socketLive ? 30000 : 8000) : 30000)
+          .catch(() => {
+            /* ignore poll errors */
+          })
+      },
+      realtime ? (socketLive ? 30000 : 8000) : 30000
+    )
     return () => window.clearInterval(id)
   }, [open, alertId, socketLive, realtime])
 
@@ -235,8 +281,17 @@ export function EmergencyChatPanel({
     scrollToBottom()
   }, [messages.length, scrollToBottom])
 
-  async function sendMessage(bodyText: string, file: File | null): Promise<boolean> {
-    if ((!bodyText.trim() && !file) || sending || checkingAttachment || disabled) return false
+  async function sendMessage(
+    bodyText: string,
+    file: File | null
+  ): Promise<boolean> {
+    if (
+      (!bodyText.trim() && !file) ||
+      sending ||
+      checkingAttachment ||
+      disabled
+    )
+      return false
     setSending(true)
     setSendFeedback(null)
     try {
@@ -256,7 +311,8 @@ export function EmergencyChatPanel({
       scrollToBottom()
       return true
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not send message."
+      const message =
+        error instanceof Error ? error.message : "Could not send message."
       setSendFeedback("Message not sent. Your attachment is still here.")
       toast.error(message)
       return false
@@ -306,10 +362,20 @@ export function EmergencyChatPanel({
     try {
       const checkData = new FormData()
       checkData.append("media", file)
-      await checkConcernMedia(checkData)
+      const result = await checkConcernMedia(checkData)
+      const rejected = result.files.find((item) => item.status === "rejected")
+      if (rejected) {
+        throw new Error(
+          rejected.message ||
+            "This media failed authenticity checks and cannot be sent."
+        )
+      }
     } catch (error) {
       setAttachment(null)
-      const message = error instanceof Error ? error.message : "This media failed authenticity checks and cannot be sent."
+      const message =
+        error instanceof Error
+          ? error.message
+          : "This media failed authenticity checks and cannot be sent."
       setAttachmentError(message)
       toast.error(message)
     } finally {
@@ -322,15 +388,19 @@ export function EmergencyChatPanel({
       className={cn(
         "flex min-h-0 flex-col",
         modern ? "h-full" : "overflow-hidden rounded-xl border",
-        !modern && !bare && (isDark ? "border-white/10 bg-white/10" : "border-slate-200 bg-white"),
-        className,
+        !modern &&
+          !bare &&
+          (isDark
+            ? "border-white/10 bg-white/10"
+            : "border-slate-200 bg-white"),
+        className
       )}
     >
       <div
         className={cn(
           "scrollbar-hide min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3",
           modern && "px-1 py-2",
-          !modern && !scrollable && "max-h-[340px]",
+          !modern && !scrollable && "max-h-[340px]"
         )}
       >
         {hasOlder ? (
@@ -343,10 +413,14 @@ export function EmergencyChatPanel({
                 "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
                 isDark
                   ? "border-white/15 text-white/75 hover:border-white/35 hover:text-white"
-                  : "border-neutral-200 text-neutral-600 hover:border-neutral-400 hover:text-neutral-900",
+                  : "border-neutral-200 text-neutral-600 hover:border-neutral-400 hover:text-neutral-900"
               )}
             >
-              {loadingOlder ? <Loader2Icon className="size-3.5 animate-spin" /> : <ChevronUpIcon className="size-3.5" />}
+              {loadingOlder ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <ChevronUpIcon className="size-3.5" />
+              )}
               {loadingOlder ? "Loading..." : "Load previous messages"}
             </button>
           </div>
@@ -354,13 +428,28 @@ export function EmergencyChatPanel({
         {loadError && messages.length === 0 && !loading ? (
           <div className="py-6 text-center">
             <p className={cn("text-[12px]", "text-sos")}>{loadError}</p>
-            <button type="button" onClick={() => void load()} className={cn("mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold", isDark ? "border-white/20 text-white" : "border-slate-200 text-brand-navy")}>Try again</button>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className={cn(
+                "mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold",
+                isDark
+                  ? "border-white/20 text-white"
+                  : "border-slate-200 text-brand-navy"
+              )}
+            >
+              Try again
+            </button>
           </div>
         ) : messages.length === 0 && !loading ? (
           <p
             className={cn(
               "py-6 text-center text-[12px] leading-5",
-              modern ? "text-neutral-400" : isDark ? "text-white/45" : "text-subtle-foreground",
+              modern
+                ? "text-neutral-400"
+                : isDark
+                  ? "text-white/45"
+                  : "text-subtle-foreground"
             )}
           >
             {modern
@@ -373,7 +462,13 @@ export function EmergencyChatPanel({
           const mine = isMine(msg)
           const name = msg.sender?.full_name || "User"
           const role = roleLabel(msg.sender)
-          const footer = [mine ? "You" : name, !mine && role ? role : "", formatChatTime(msg.created_at)].filter(Boolean).join(" · ")
+          const footer = [
+            mine ? "You" : name,
+            !mine && role ? role : "",
+            formatChatTime(msg.created_at),
+          ]
+            .filter(Boolean)
+            .join(" · ")
           const attachment = msg.attachment
           // Pending authenticity analysis must not make a successfully sent
           // image disappear. The protected preview endpoint remains the source
@@ -446,8 +541,11 @@ export function EmergencyChatPanel({
               <Bubble
                 variant={mine ? "default" : "muted"}
                 className={cn(
-                  !mine && isDark && "border-white/10 bg-white text-neutral-900",
-                  modern && "border border-neutral-200 bg-white text-neutral-900 shadow-none",
+                  !mine &&
+                    isDark &&
+                    "border-white/10 bg-white text-neutral-900",
+                  modern &&
+                    "border border-neutral-200 bg-white text-neutral-900 shadow-none"
                 )}
               >
                 <BubbleContent>
@@ -462,12 +560,24 @@ export function EmergencyChatPanel({
             <Message key={msg.id} align={mine ? "end" : "start"}>
               <MessageAvatar>
                 <Avatar className={isDark ? "bg-white/15" : undefined}>
-                  <AvatarFallback className={isDark ? "bg-white/20 text-white" : undefined}>{initialsFor(msg.sender).charAt(0)}</AvatarFallback>
+                  <AvatarFallback
+                    className={isDark ? "bg-white/20 text-white" : undefined}
+                  >
+                    {initialsFor(msg.sender).charAt(0)}
+                  </AvatarFallback>
                 </Avatar>
               </MessageAvatar>
               <MessageContent className={mine ? "items-end" : "items-start"}>
                 {content}
-                <MessageFooter className={cn(mine ? "text-right" : "text-left", "font-normal", isDark && "text-white/40")}>{footer}</MessageFooter>
+                <MessageFooter
+                  className={cn(
+                    mine ? "text-right" : "text-left",
+                    "font-normal",
+                    isDark && "text-white/40"
+                  )}
+                >
+                  {footer}
+                </MessageFooter>
               </MessageContent>
             </Message>
           )
@@ -475,27 +585,49 @@ export function EmergencyChatPanel({
         <div ref={bottomRef} />
       </div>
       {previewMedia ? (
-        <MediaLightbox items={[previewMedia]} index={0} onClose={() => setPreviewMedia(null)} />
+        <MediaLightbox
+          items={[previewMedia]}
+          index={0}
+          onClose={() => setPreviewMedia(null)}
+        />
       ) : null}
 
       {!disabled ? (
         modern ? (
-          <div className="px-1 pb-1 pt-1">
+          <div className="px-1 pt-1 pb-1">
             {attachmentError ? (
-              <p className="mb-2 text-[11px] font-medium text-red-500">{attachmentError}</p>
+              <p className="mb-2 text-[11px] font-medium text-red-500">
+                {attachmentError}
+              </p>
             ) : null}
             {checkingAttachment ? (
-              <p role="status" className="mb-2 text-[11px] font-medium text-neutral-500">Checking attachment…</p>
+              <p
+                role="status"
+                className="mb-2 text-[11px] font-medium text-neutral-500"
+              >
+                Checking attachment…
+              </p>
             ) : null}
             {sendFeedback ? (
-              <p role="status" className={cn("mb-2 text-[11px] font-medium", sendFeedback.startsWith("Message") ? "text-red-500" : "text-neutral-500")}>
+              <p
+                role="status"
+                className={cn(
+                  "mb-2 text-[11px] font-medium",
+                  sendFeedback.startsWith("Message")
+                    ? "text-red-500"
+                    : "text-neutral-500"
+                )}
+              >
                 {sendFeedback}
               </p>
             ) : null}
             {recording || readyFile ? (
-              <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-neutral-200 bg-white py-2 pl-4 pr-2">
+              <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-neutral-200 bg-white py-2 pr-2 pl-4">
                 {recording ? (
-                  <span className="size-2 shrink-0 rounded-full animate-pulse bg-red-500" aria-hidden />
+                  <span
+                    className="size-2 shrink-0 animate-pulse rounded-full bg-red-500"
+                    aria-hidden
+                  />
                 ) : null}
                 <div className="flex items-center gap-[2px]">
                   {Array.from({ length: 30 }, (_, i) => {
@@ -509,7 +641,7 @@ export function EmergencyChatPanel({
                     )
                   })}
                 </div>
-                <span className="shrink-0 font-mono text-[11px] font-semibold tabular-nums text-neutral-900">
+                <span className="shrink-0 font-mono text-[11px] font-semibold text-neutral-900 tabular-nums">
                   {formatVoiceTime(recording ? recordSeconds : durationSeconds)}
                 </span>
                 <div className="flex items-center gap-1">
@@ -530,12 +662,18 @@ export function EmergencyChatPanel({
                       aria-label="Send voice note"
                       className="flex size-8 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
                     >
-                      {sending ? <Loader2Icon className="size-3 animate-spin" /> : <ArrowUpIcon className="size-3" strokeWidth={2.4} />}
+                      {sending ? (
+                        <Loader2Icon className="size-3 animate-spin" />
+                      ) : (
+                        <ArrowUpIcon className="size-3" strokeWidth={2.4} />
+                      )}
                     </button>
                   )}
                   <button
                     type="button"
-                    onClick={() => (recording ? cancelRecording() : discardRecording())}
+                    onClick={() =>
+                      recording ? cancelRecording() : discardRecording()
+                    }
                     aria-label="Cancel voice note"
                     className="flex size-8 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
                   >
@@ -544,18 +682,18 @@ export function EmergencyChatPanel({
                 </div>
               </div>
             ) : (
-              <div className="relative flex items-center gap-2 rounded-full border border-neutral-200 bg-white py-1.5 pl-4 pr-1.5 transition-colors focus-within:border-neutral-300">
+              <div className="relative flex items-center gap-2 rounded-full border border-transparent bg-neutral-100 py-1.5 pr-1.5 pl-4 transition-colors focus-within:border-neutral-200">
                 <button
                   type="button"
                   onClick={() => void startRecording()}
                   disabled={sending}
                   aria-label="Record a voice note"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-50"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-50"
                 >
                   <MicIcon className="size-4" />
                 </button>
                 <label
-                  className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+                  className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
                   aria-label="Attach image or video"
                 >
                   <PaperclipIcon className="size-4" />
@@ -587,17 +725,22 @@ export function EmergencyChatPanel({
                     }
                   }}
                   placeholder={placeholder}
-                  className="h-10 min-w-0 flex-1 bg-transparent text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400"
+                  className="h-10 min-w-0 flex-1 bg-transparent text-[14px] text-neutral-900 outline-none placeholder:text-neutral-500"
                 />
                 <button
                   type="button"
-                  disabled={sending || checkingAttachment || recording || (!draft.trim() && !attachment)}
+                  disabled={
+                    sending ||
+                    checkingAttachment ||
+                    recording ||
+                    (!draft.trim() && !attachment)
+                  }
                   onClick={() => void handleSend()}
                   className={cn(
                     "flex size-10 shrink-0 items-center justify-center rounded-full transition-all duration-150",
-                    (draft.trim() || attachment)
+                    draft.trim() || attachment
                       ? "bg-brand-orange text-white hover:bg-brand-orange-strong"
-                      : "bg-neutral-100 text-neutral-300",
+                      : "bg-neutral-100 text-neutral-300"
                   )}
                   aria-label="Send message"
                 >
@@ -609,152 +752,229 @@ export function EmergencyChatPanel({
                 </button>
               </div>
             )}
-            {!modern ? (
-              <p className="mt-2.5 text-center text-[11px] leading-normal text-neutral-400">
-                Please be kind and respectful to your neighbours.
-              </p>
-            ) : null}
+            <p
+              className={cn(
+                "mt-2.5 text-center text-[11px] leading-normal",
+                modern ? "text-neutral-500" : "text-neutral-400"
+              )}
+            >
+              {modern
+                ? "Please be respectful at all times."
+                : "Please be kind and respectful to your neighbours."}
+            </p>
           </div>
         ) : (
-        <div
-          className={cn(
-            "relative flex items-end gap-2 border-t p-2.5",
-            isDark ? "border-white/10" : "border-slate-100",
-          )}
-        >
-          {recording || readyFile ? (
-            <>
-              <div
-                className={cn(
-                  "flex h-12 min-w-0 flex-1 items-center gap-3 rounded-xl border px-4",
-                  recording
-                    ? isDark ? "border-sos/40 bg-sos/10 text-sos" : "border-sos/30 bg-sos/10 text-sos"
-                    : isDark ? "border-brand-orange/40 bg-brand-orange/10 text-brand-orange" : "border-brand-orange/30 bg-brand-orange/5 text-brand-orange",
-                )}
-                aria-label={recording ? `Recording ${formatVoiceTime(recordSeconds)}` : `Voice note ready, ${formatVoiceTime(durationSeconds)}`}
-              >
-                <span className={cn("size-2 shrink-0 rounded-full", recording ? (isDark ? "animate-pulse bg-sos" : "animate-pulse bg-sos") : "bg-brand-orange")} aria-hidden />
-                <span className="flex h-8 min-w-0 flex-1 items-center gap-[2px] overflow-hidden">
-                  {(levels.length ? levels : [0.2, 0.2, 0.2, 0.2]).map((level, index) => (
-                    <span key={index} className="w-[3px] shrink-0 rounded-full bg-current transition-[height] duration-100 ease-out" style={{ height: `${3 + level * 22}px` }} />
-                  ))}
-                </span>
-                <span className={cn("shrink-0 font-mono text-[13px] font-semibold tabular-nums", recording ? (isDark ? "text-sos" : "text-sos") : isDark ? "text-white" : "text-brand-navy")}>
-                  {formatVoiceTime(recording ? recordSeconds : durationSeconds)}
-                </span>
-              </div>
-              {recording ? (
-                <button
-                  type="button"
-                  onClick={() => void stopRecording()}
-                  aria-label="Stop recording"
-                  title="Stop recording"
-                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos text-white hover:bg-sos-bright"
+          <div
+            className={cn(
+              "relative flex items-end gap-2 border-t p-2.5",
+              isDark ? "border-white/10" : "border-slate-100"
+            )}
+          >
+            {recording || readyFile ? (
+              <>
+                <div
+                  className={cn(
+                    "flex h-12 min-w-0 flex-1 items-center gap-3 rounded-xl border px-4",
+                    recording
+                      ? isDark
+                        ? "border-sos/40 bg-sos/10 text-sos"
+                        : "border-sos/30 bg-sos/10 text-sos"
+                      : isDark
+                        ? "border-brand-orange/40 bg-brand-orange/10 text-brand-orange"
+                        : "border-brand-orange/30 bg-brand-orange/5 text-brand-orange"
+                  )}
+                  aria-label={
+                    recording
+                      ? `Recording ${formatVoiceTime(recordSeconds)}`
+                      : `Voice note ready, ${formatVoiceTime(durationSeconds)}`
+                  }
                 >
-                  <SquareIcon className="size-4" fill="currentColor" />
-                </button>
-              ) : (
+                  <span
+                    className={cn(
+                      "size-2 shrink-0 rounded-full",
+                      recording
+                        ? isDark
+                          ? "animate-pulse bg-sos"
+                          : "animate-pulse bg-sos"
+                        : "bg-brand-orange"
+                    )}
+                    aria-hidden
+                  />
+                  <span className="flex h-8 min-w-0 flex-1 items-center gap-[2px] overflow-hidden">
+                    {(levels.length ? levels : [0.2, 0.2, 0.2, 0.2]).map(
+                      (level, index) => (
+                        <span
+                          key={index}
+                          className="w-[3px] shrink-0 rounded-full bg-current transition-[height] duration-100 ease-out"
+                          style={{ height: `${3 + level * 22}px` }}
+                        />
+                      )
+                    )}
+                  </span>
+                  <span
+                    className={cn(
+                      "shrink-0 font-mono text-[13px] font-semibold tabular-nums",
+                      recording
+                        ? isDark
+                          ? "text-sos"
+                          : "text-sos"
+                        : isDark
+                          ? "text-white"
+                          : "text-brand-navy"
+                    )}
+                  >
+                    {formatVoiceTime(
+                      recording ? recordSeconds : durationSeconds
+                    )}
+                  </span>
+                </div>
+                {recording ? (
+                  <button
+                    type="button"
+                    onClick={() => void stopRecording()}
+                    aria-label="Stop recording"
+                    title="Stop recording"
+                    className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos text-white hover:bg-sos-bright"
+                  >
+                    <SquareIcon className="size-4" fill="currentColor" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={sending}
+                    onClick={() => void sendReadyVoiceNote()}
+                    aria-label="Send voice note"
+                    className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
+                  >
+                    {sending ? (
+                      <Loader2Icon className="size-4 animate-spin" />
+                    ) : (
+                      <SendIcon className="size-4" />
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
+                  onClick={() =>
+                    recording ? cancelRecording() : discardRecording()
+                  }
+                  aria-label="Cancel voice note"
+                  title="Cancel voice note"
+                  className={cn(
+                    "flex size-10 shrink-0 items-center justify-center rounded-full",
+                    isDark
+                      ? "text-white/60 hover:bg-white/10 hover:text-white"
+                      : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                  )}
+                >
+                  <XIcon className="size-5" />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="relative min-w-0 flex-1">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault()
+                        void handleSend()
+                      }
+                    }}
+                    rows={1}
+                    placeholder={placeholder}
+                    className={cn(
+                      "max-h-24 min-h-10 w-full resize-none rounded-xl border px-3 py-2.5 text-[13px] transition-all outline-none focus:border-brand-orange focus:ring-2 focus:ring-brand-orange/25",
+                      attachment && "pl-12",
+                      isDark
+                        ? "border-white/15 bg-black/25 text-white placeholder:text-white/40"
+                        : "border-slate-200 bg-canvas text-brand-navy placeholder:text-slate-400"
+                    )}
+                  />
+                  {attachment ? (
+                    <div className="absolute top-1/2 left-2 -translate-y-1/2">
+                      <LocalAttachmentPreview
+                        file={attachment}
+                        compact
+                        onRemove={() => setAttachment(null)}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void startRecording()}
                   disabled={sending}
-                  onClick={() => void sendReadyVoiceNote()}
-                  aria-label="Send voice note"
-                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
+                  aria-label="Record a voice note"
+                  title="Record a voice note"
+                  className={cn(
+                    "flex size-10 shrink-0 items-center justify-center rounded-full disabled:opacity-50",
+                    isDark
+                      ? "text-white/70 hover:bg-white/10"
+                      : "text-slate-500 hover:bg-slate-100"
+                  )}
                 >
-                  {sending ? <Loader2Icon className="size-4 animate-spin" /> : <SendIcon className="size-4" />}
+                  <MicIcon className="size-4" />
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => (recording ? cancelRecording() : discardRecording())}
-                aria-label="Cancel voice note"
-                title="Cancel voice note"
-                className={cn(
-                  "flex size-10 shrink-0 items-center justify-center rounded-full",
-                  isDark ? "text-white/60 hover:bg-white/10 hover:text-white" : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700",
-                )}
-              >
-                <XIcon className="size-5" />
-              </button>
-            </>
-          ) : (
-            <>
-          <div className="relative min-w-0 flex-1">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault()
-                  void handleSend()
-                }
-              }}
-              rows={1}
-              placeholder={placeholder}
-              className={cn(
-                "max-h-24 min-h-10 w-full resize-none rounded-xl border px-3 py-2.5 text-[13px] outline-none transition-all focus:border-brand-orange focus:ring-2 focus:ring-brand-orange/25",
-                attachment && "pl-12",
-                isDark
-                  ? "border-white/15 bg-black/25 text-white placeholder:text-white/40"
-                  : "border-slate-200 bg-canvas text-brand-navy placeholder:text-slate-400",
-              )}
-            />
-            {attachment ? (
-              <div className="absolute left-2 top-1/2 -translate-y-1/2">
-                <LocalAttachmentPreview file={attachment} compact onRemove={() => setAttachment(null)} />
-              </div>
-            ) : null}
+                <input
+                  id={`emergency-chat-media-${alertId}`}
+                  type="file"
+                  accept="image/*,video/mp4,video/webm,video/quicktime"
+                  className="sr-only"
+                  onChange={(event) => {
+                    void chooseAttachment(event.target.files?.[0] ?? null)
+                    event.currentTarget.value = ""
+                  }}
+                />
+                <label
+                  htmlFor={`emergency-chat-media-${alertId}`}
+                  className={cn(
+                    "flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full",
+                    isDark
+                      ? "text-white/70 hover:bg-white/10"
+                      : "text-slate-500 hover:bg-slate-100"
+                  )}
+                  aria-label="Attach image or video"
+                >
+                  <PaperclipIcon className="size-4" />
+                </label>
+                {sendFeedback ? (
+                  <span
+                    role="status"
+                    className={cn(
+                      "absolute bottom-14 left-3 text-[11px] font-medium",
+                      sendFeedback.startsWith("Message")
+                        ? "text-red-500"
+                        : isDark
+                          ? "text-white/70"
+                          : "text-slate-500"
+                    )}
+                  >
+                    {sendFeedback}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={
+                    sending ||
+                    checkingAttachment ||
+                    recording ||
+                    (!draft.trim() && !attachment)
+                  }
+                  onClick={() => void handleSend()}
+                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
+                  aria-label="Send message"
+                >
+                  {sending ? (
+                    <Loader2Icon className="size-4 animate-spin" />
+                  ) : (
+                    <SendIcon className="size-4" />
+                  )}
+                </button>
+              </>
+            )}
           </div>
-          <button
-            type="button"
-            onClick={() => void startRecording()}
-            disabled={sending}
-            aria-label="Record a voice note"
-            title="Record a voice note"
-            className={cn(
-              "flex size-10 shrink-0 items-center justify-center rounded-full disabled:opacity-50",
-              isDark ? "text-white/70 hover:bg-white/10" : "text-slate-500 hover:bg-slate-100",
-            )}
-          >
-            <MicIcon className="size-4" />
-          </button>
-          <input
-            id={`emergency-chat-media-${alertId}`}
-            type="file"
-            accept="image/*,video/mp4,video/webm,video/quicktime"
-            className="sr-only"
-            onChange={(event) => {
-              void chooseAttachment(event.target.files?.[0] ?? null)
-              event.currentTarget.value = ""
-            }}
-          />
-          <label
-            htmlFor={`emergency-chat-media-${alertId}`}
-            className={cn(
-              "flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full",
-              isDark ? "text-white/70 hover:bg-white/10" : "text-slate-500 hover:bg-slate-100",
-            )}
-            aria-label="Attach image or video"
-          >
-            <PaperclipIcon className="size-4" />
-          </label>
-          {sendFeedback ? (
-            <span role="status" className={cn("absolute bottom-14 left-3 text-[11px] font-medium", sendFeedback.startsWith("Message") ? "text-red-500" : isDark ? "text-white/70" : "text-slate-500")}>
-              {sendFeedback}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            disabled={sending || checkingAttachment || recording || (!draft.trim() && !attachment)}
-            onClick={() => void handleSend()}
-            className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong disabled:opacity-50"
-            aria-label="Send message"
-          >
-            {sending ? <Loader2Icon className="size-4 animate-spin" /> : <SendIcon className="size-4" />}
-          </button>
-            </>
-          )}
-        </div>
         )
       ) : (
         <p
@@ -762,7 +982,12 @@ export function EmergencyChatPanel({
             "px-3 py-2 text-center text-[12px]",
             modern
               ? "text-neutral-400"
-              : cn("border-t", isDark ? "border-white/10 text-white/40" : "border-slate-100 text-slate-400"),
+              : cn(
+                  "border-t",
+                  isDark
+                    ? "border-white/10 text-white/40"
+                    : "border-slate-100 text-slate-400"
+                )
           )}
         >
           Chat is closed for this alert.

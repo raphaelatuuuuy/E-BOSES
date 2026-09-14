@@ -29,7 +29,6 @@ export type ConcernClassificationConfig = {
   text_relevance_threshold: number
   duplicate_similarity_threshold: number
   minimum_description_length: number
-  mismatch_action: "auto_correct" | "request_resubmission" | "reject"
   flag_suspicious: boolean
   flag_duplicates: boolean
   report_duplicate_detection_enabled?: boolean
@@ -131,7 +130,13 @@ export type ReportValidationResult = {
   matched_emergency_type?: string
   emergency_routing_reason?: string
   ongoing_emergency_confirmation_required?: boolean
-  incident_timing?: "ongoing" | "ended" | "historical" | "planned" | "hypothetical" | "unclear"
+  incident_timing?:
+    | "ongoing"
+    | "ended"
+    | "historical"
+    | "planned"
+    | "hypothetical"
+    | "unclear"
   incident_timing_reason?: string
   current_danger?: boolean
   title_preview?: { official_title: string; summary: string }
@@ -187,7 +192,9 @@ export function getConcernClassificationConfig() {
   return apiRequest<RawJson>("/concerns/classification/").then(normalizeConfig)
 }
 
-export function saveConcernClassificationConfig(config: ConcernClassificationConfig) {
+export function saveConcernClassificationConfig(
+  config: ConcernClassificationConfig
+) {
   return apiRequest<RawJson>("/concerns/classification/", {
     method: "PATCH",
     body: JSON.stringify(config),
@@ -195,7 +202,9 @@ export function saveConcernClassificationConfig(config: ConcernClassificationCon
 }
 
 export function resetConcernClassificationConfig() {
-  return apiRequest<RawJson>("/concerns/classification/reset/", { method: "POST" }).then(normalizeConfig)
+  return apiRequest<RawJson>("/concerns/classification/reset/", {
+    method: "POST",
+  }).then(normalizeConfig)
 }
 
 /**
@@ -233,10 +242,13 @@ function normalizeConfig(raw: RawJson): ConcernClassificationConfig {
 }
 
 export function testConcernReport(category: string, description: string) {
-  return apiRequest<ReportValidationResult>("/concerns/classification/test-text/", {
-    method: "POST",
-    body: JSON.stringify({ category, description }),
-  })
+  return apiRequest<ReportValidationResult>(
+    "/concerns/classification/test-text/",
+    {
+      method: "POST",
+      body: JSON.stringify({ category, description }),
+    }
+  )
 }
 
 export function testConcernSubmission(input: {
@@ -256,7 +268,10 @@ export function testConcernSubmission(input: {
     body.append("latitude", String(input.latitude))
     body.append("longitude", String(input.longitude))
   }
-  return apiRequest<ReportValidationResult>("/concerns/classification/test-submission/", { method: "POST", body })
+  return apiRequest<ReportValidationResult>(
+    "/concerns/classification/test-submission/",
+    { method: "POST", body }
+  )
 }
 
 export type EmergencySimulationReview = ReportValidationResult
@@ -264,7 +279,15 @@ export type EmergencySimulationReview = ReportValidationResult
 export type SimulationCommunity = { id: number; name: string }
 
 export type LocationResolution = {
-  source: "sms_gps" | "sms_geocoded" | "web_gps" | "message_area" | "recent_account_location" | "profile_community" | "home_context" | "none"
+  source:
+    | "sms_gps"
+    | "sms_geocoded"
+    | "web_gps"
+    | "message_area"
+    | "recent_account_location"
+    | "profile_community"
+    | "home_context"
+    | "none"
   freshness: "fresh" | "stale" | "not_available"
   state: "confirmed" | "reported" | "fallback" | "ambiguous" | "unknown"
   community: SimulationCommunity | null
@@ -291,21 +314,38 @@ export type RoutePreview = {
   eta_seconds: number | null
   geometry: GeoJsonGeometry | null
   summary: string
-  origin_snap?: { latitude: number; longitude: number; meters: number | null } | null
-  destination_snap?: { latitude: number; longitude: number; meters: number | null } | null
+  origin_snap?: {
+    latitude: number
+    longitude: number
+    meters: number | null
+  } | null
+  destination_snap?: {
+    latitude: number
+    longitude: number
+    meters: number | null
+  } | null
   approach?: { geometry?: GeoJsonGeometry | null } | null
 }
 
 export type EmergencySimulationResponderPreview =
   | {
       found: true
-      responder: { id: number; full_name: string; latitude: number | null; longitude: number | null }
+      responder: {
+        id: number
+        full_name: string
+        latitude: number | null
+        longitude: number | null
+      }
       distance_meters: number | null
       eta_seconds: number | null
     }
   | { found: false; reason: string }
 
-export type EmergencySimulationUnit = { id: number; name: string; short_name: string }
+export type EmergencySimulationUnit = {
+  id: number
+  name: string
+  short_name: string
+}
 
 export type EmergencySimulationResult =
   | {
@@ -345,7 +385,11 @@ export type EmergencySimulationResult =
         /** A real OSRM route from a random nearby point, only present when no
          * responder was actually found — lets the preview map show an actual
          * road route instead of nothing (or a fake straight line). */
-        sample_route: { latitude: number; longitude: number; route: RoutePreview } | null
+        sample_route: {
+          latitude: number
+          longitude: number
+          route: RoutePreview
+        } | null
       }
     }
 
@@ -362,9 +406,13 @@ export function testEmergencySimulation(input: {
   body.append("description", input.description)
   body.append("latitude", String(input.latitude))
   body.append("longitude", String(input.longitude))
-  if (input.confirmed_ongoing != null) body.append("confirmed_ongoing", String(input.confirmed_ongoing))
+  if (input.confirmed_ongoing != null)
+    body.append("confirmed_ongoing", String(input.confirmed_ongoing))
   for (const file of input.files ?? []) body.append("files", file)
-  return apiRequest<EmergencySimulationResult>("/concerns/classification/test-emergency/", { method: "POST", body })
+  return apiRequest<EmergencySimulationResult>(
+    "/concerns/classification/test-emergency/",
+    { method: "POST", body }
+  )
 }
 
 export type SmsSimulationSender = {
@@ -389,7 +437,13 @@ export type SmsSimulationParsed = {
   triage_summary: string
   note: string
   urgency_signal: boolean
-  incident_timing: "ongoing" | "ended" | "historical" | "planned" | "hypothetical" | "unclear"
+  incident_timing:
+    | "ongoing"
+    | "ended"
+    | "historical"
+    | "planned"
+    | "hypothetical"
+    | "unclear"
   incident_timing_reason: string
   current_danger: boolean
   unresolved_fields: string[]
@@ -399,24 +453,32 @@ export type SmsSimulationResult = {
   branch: string
   branch_reason: string
   sender: SmsSimulationSender
-  command: { keyword: string; reference: string; argument: string; rest: string; recognised: boolean } | null
+  command: {
+    keyword: string
+    reference: string
+    argument: string
+    rest: string
+    recognised: boolean
+  } | null
   parsed: SmsSimulationParsed
   location: LocationResolution | null
-  duplicate: { would_suppress: boolean; reference: string; detail: string } | null
+  duplicate: {
+    would_suppress: boolean
+    reference: string
+    detail: string
+  } | null
   routing: {
     department: { id: number; name: string; short_name: string } | null
     routing_reason: string
-    responder:
-      | {
-          found: boolean
-          full_name: string
-          unit_name: string
-          latitude: number | null
-          longitude: number | null
-          distance_meters: number | null
-          eta_seconds: number | null
-        }
-      | null
+    responder: {
+      found: boolean
+      full_name: string
+      unit_name: string
+      latitude: number | null
+      longitude: number | null
+      distance_meters: number | null
+      eta_seconds: number | null
+    } | null
     escalates?: boolean
     scope: "local" | "cross_community" | "manual_dispatch"
     manual_dispatch: boolean
@@ -433,7 +495,13 @@ export type SmsSimulationResult = {
     applied: Record<string, { value: string; confidence: number }>
     map_resolution: LocationResolution | null
   } | null
-  reply: { text: string; characters: number; segments: number; gsm7: boolean; category_label: string } | null
+  reply: {
+    text: string
+    characters: number
+    segments: number
+    gsm7: boolean
+    category_label: string
+  } | null
 }
 
 export type SmsSimulationScenario = "default" | "fresh" | "stale" | "context"
@@ -479,26 +547,43 @@ export function generateSampleDescription(input: {
   body.append("mode", input.mode)
   body.append("language", input.language)
   for (const file of input.files ?? []) body.append("files", file)
-  return apiRequest<{ description: string }>("/concerns/classification/generate-sample/", {
-    method: "POST",
-    body,
-  })
+  return apiRequest<{ description: string }>(
+    "/concerns/classification/generate-sample/",
+    {
+      method: "POST",
+      body,
+    }
+  )
 }
 
-export function generateCommunitySampleContent(input: { reason: ContentFlagReason; language: SampleLanguage }) {
+export function generateCommunitySampleContent(input: {
+  reason: ContentFlagReason
+  language: SampleLanguage
+}) {
   const body = new FormData()
   body.append("domain", "community")
   body.append("reason", input.reason)
   body.append("language", input.language)
-  return apiRequest<{ description: string }>("/concerns/classification/generate-sample/", {
-    method: "POST",
-    body,
-  })
+  return apiRequest<{ description: string }>(
+    "/concerns/classification/generate-sample/",
+    {
+      method: "POST",
+      body,
+    }
+  )
 }
 
-export type ContentFlagReason = "irrelevant" | "false_info" | "sensitive" | "abusive" | "other"
+export type ContentFlagReason =
+  | "irrelevant"
+  | "false_info"
+  | "sensitive"
+  | "abusive"
+  | "other"
 
-export const CONTENT_FLAG_REASON_OPTIONS: { value: ContentFlagReason; label: string }[] = [
+export const CONTENT_FLAG_REASON_OPTIONS: {
+  value: ContentFlagReason
+  label: string
+}[] = [
   { value: "irrelevant", label: "Irrelevant" },
   { value: "false_info", label: "False information" },
   { value: "sensitive", label: "Sensitive content" },
@@ -524,10 +609,13 @@ export function testCommunityModeration(input: {
   body.append("content_text", input.content_text)
   body.append("reason", input.reason)
   if (input.image) body.append("image", input.image)
-  return apiRequest<CommunityModerationResult>("/concerns/classification/test-community/", {
-    method: "POST",
-    body,
-  })
+  return apiRequest<CommunityModerationResult>(
+    "/concerns/classification/test-community/",
+    {
+      method: "POST",
+      body,
+    }
+  )
 }
 
 export type ValidationActivityItem = {
@@ -554,7 +642,10 @@ export type ValidationActivityResponse = {
   }
 }
 
-export function getValidationActivity(params?: { days?: number; category?: string }) {
+export function getValidationActivity(params?: {
+  days?: number
+  category?: string
+}) {
   const query = new URLSearchParams()
   if (params?.days) query.set("days", String(params.days))
   if (params?.category) query.set("category", params.category)
@@ -564,7 +655,11 @@ export function getValidationActivity(params?: { days?: number; category?: strin
   )
 }
 
-export type LlmDecisionLogDomain = "concern" | "emergency" | "verification" | "community"
+export type LlmDecisionLogDomain =
+  | "concern"
+  | "emergency"
+  | "verification"
+  | "community"
 
 export type LlmDecisionLogEntry = {
   id: number
@@ -623,7 +718,10 @@ export type LlmDecisionLogEntry = {
   } | null
 }
 
-export type LlmDecisionLogResponse = { results: LlmDecisionLogEntry[]; count: number }
+export type LlmDecisionLogResponse = {
+  results: LlmDecisionLogEntry[]
+  count: number
+}
 
 export function getLlmDecisionLog(params?: {
   domain?: LlmDecisionLogDomain
@@ -641,17 +739,22 @@ export function getLlmDecisionLog(params?: {
   if (params?.search) query.set("search", params.search)
   if (params?.days) query.set("days", String(params.days))
   const qs = query.toString()
-  return apiRequest<LlmDecisionLogResponse>(`/concerns/classification/log/${qs ? `?${qs}` : ""}`)
+  return apiRequest<LlmDecisionLogResponse>(
+    `/concerns/classification/log/${qs ? `?${qs}` : ""}`
+  )
 }
 
 export function rerunLlmDecisionLogStreetImagery(logId: number) {
   return apiRequest<NonNullable<LlmDecisionLogEntry["street_imagery"]>>(
     `/concerns/classification/log/${logId}/street-view/`,
-    { method: "POST" },
+    { method: "POST" }
   )
 }
 
-export function revertAutomatedContentAction(flagId: number, staffNote = "Automated moderation action reverted by an official.") {
+export function revertAutomatedContentAction(
+  flagId: number,
+  staffNote = "Automated moderation action reverted by an official."
+) {
   return apiRequest(`/concerns/flags/${flagId}/review/`, {
     method: "PATCH",
     body: JSON.stringify({ status: "dismissed", staff_note: staffNote }),

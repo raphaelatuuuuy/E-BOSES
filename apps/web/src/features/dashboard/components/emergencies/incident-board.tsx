@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   FileIcon,
+  FootprintsIcon,
   LocateFixedIcon,
+  MapPinIcon,
   LoaderCircleIcon,
+  NavigationIcon,
   PhoneIcon,
   PlayIcon,
   ShieldCheckIcon,
@@ -20,6 +23,14 @@ import {
 } from "@/features/dashboard/components/map/markers"
 import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import {
+  MapControlButton,
+  MapControlStack,
+} from "@/features/dashboard/components/map/map-chrome"
+import {
+  StreetViewModal,
+  type StreetViewCoord,
+} from "@/features/dashboard/components/map/street-view"
 import {
   drawRoute,
   routeRenderGeometry,
@@ -48,7 +59,12 @@ import {
   getEmergencyRoute,
   sendEmergencyLocationPing,
   type EmergencyAlert,
+  type EmergencyRoute,
 } from "@/features/dashboard/emergency-api"
+import {
+  formatDistance,
+  formatEta,
+} from "@/features/dashboard/components/alerts-map/lib"
 import type leaflet from "leaflet"
 import {
   formatTime,
@@ -91,7 +107,21 @@ export function IncidentMap({
   const boundsPointsRef = useRef<leaflet.LatLngTuple[]>([])
   const routeLayersRef = useRef<RouteLayers[]>([])
   const responderMarkerRef = useRef<leaflet.Marker | null>(null)
+  const currentGuideRef = useRef<leaflet.Polyline | null>(null)
+  const officialLayersRef = useRef<RouteLayers | null>(null)
+  const officialMarkerRef = useRef<leaflet.Marker | null>(null)
+  const officialTipRef = useRef<leaflet.Tooltip | null>(null)
+  const officialPosRef = useRef<leaflet.LatLngTuple | null>(null)
+  const lastOfficialRouteRef = useRef<EmergencyRoute | null>(null)
+  const watchIdRef = useRef<number | null>(null)
+  const lastNavFetchRef = useRef(0)
+  const lastNavPingRef = useRef(0)
+  const navigatingRef = useRef(false)
+  const [navigating, setNavigating] = useState(false)
+  const [navBusy, setNavBusy] = useState(false)
+  const [streetView, setStreetView] = useState<StreetViewCoord | null>(null)
   const [routeBusy, setRouteBusy] = useState(false)
+  const [routeHint, setRouteHint] = useState<string | null>(null)
   const assignment = alert.current_assignment
   const settled = !isActiveEmergency(alert)
   const responderAssignments = useMemo(
@@ -289,6 +319,13 @@ export function IncidentMap({
       } else {
         map.setView(incident, 18)
       }
+      if (navigatingRef.current && officialPosRef.current) {
+        drawOfficialPreview(
+          officialPosRef.current,
+          lastOfficialRouteRef.current,
+          false
+        )
+      }
 
       const observer = new ResizeObserver(() => {
         const box = containerRef.current?.getBoundingClientRect()
@@ -307,6 +344,18 @@ export function IncidentMap({
       resizeRef.current = null
       routeLayersRef.current.forEach((layer) => layer.remove())
       routeLayersRef.current = []
+      currentGuideRef.current?.remove()
+      currentGuideRef.current = null
+      if (watchIdRef.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current)
+      }
+      watchIdRef.current = null
+      officialLayersRef.current?.remove()
+      officialLayersRef.current = null
+      officialTipRef.current?.remove()
+      officialTipRef.current = null
+      officialMarkerRef.current?.remove()
+      officialMarkerRef.current = null
       responderMarkerRef.current = null
       mapRef.current = null
       leafletRef.current = null
@@ -338,14 +387,14 @@ export function IncidentMap({
     } else if (map && incident) {
       map.setView(incident, 18, { animate: true })
     }
-    if (routeBusy || !primaryAssignment) return
+    if (routeBusy || viewerId == null) return
     setRouteBusy(true)
     void (async () => {
       const isAssignedViewer =
-        viewerId != null && primaryAssignment.responder?.id === viewerId
+        viewerId != null && primaryAssignment?.responder?.id === viewerId
       let currentResponder = responder
       try {
-        if (isAssignedViewer && navigator.geolocation) {
+        if (navigator.geolocation) {
           try {
             const position = await readCurrentPosition()
             currentResponder = [
@@ -363,11 +412,66 @@ export function IncidentMap({
           }
         }
 
+        const currentMap = mapRef.current
+        const L = leafletRef.current
+        if (!currentMap || !L || !incident || !currentResponder) return
+
+        // Officials can preview a route even before an assignment exists. In
+        // that case the API has no assignment route to return, so keep the
+        // interaction useful with a clear animated guide to the emergency pin.
+        if (!primaryAssignment) {
+          currentGuideRef.current?.remove()
+          currentGuideRef.current = L.polyline(
+            [currentResponder, incident],
+            {
+              color: "#1d4ed8",
+              weight: 4,
+              opacity: 0.9,
+              dashArray: "10 10",
+              className: "eboses-live-route",
+              interactive: false,
+            }
+          ).addTo(currentMap)
+          const markerSize = 26
+          const currentMarker = L.divIcon({
+            className: "eboses-emergency-pin",
+            iconSize: [markerSize, markerSize],
+            iconAnchor: [markerSize / 2, markerSize / 2],
+            html: glyphPinHtml({
+              paths: GLYPHS.userResponder,
+              color: MAP_COLORS.you,
+              size: markerSize,
+              label: "You",
+            }),
+          })
+          if (responderMarkerRef.current) {
+            responderMarkerRef.current.setLatLng(currentResponder)
+            responderMarkerRef.current.setIcon(currentMarker)
+          } else {
+            responderMarkerRef.current = L.marker(currentResponder, {
+              icon: currentMarker,
+              zIndexOffset: 1000,
+            }).addTo(currentMap)
+          }
+          const meters = currentMap.distance(
+            currentResponder as leaflet.LatLngExpression,
+            incident as leaflet.LatLngExpression
+          )
+          const eta = Math.max(1, Math.round((meters / 1000 / 20) * 60))
+          setRouteHint(
+            `Approx. ${meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`} · ~${eta} min`
+          )
+          currentMap.fitBounds(L.latLngBounds([currentResponder, incident]), {
+            padding: [28, 28],
+            maxZoom: 17,
+            animate: true,
+          })
+          return
+        }
+
         const next = await getEmergencyRoute(alert.id, {
           refresh: isAssignedViewer,
         })
-        const currentMap = mapRef.current
-        const L = leafletRef.current
         if (!currentMap || !L || !incident) return
 
         if (currentResponder && primaryAssignment.responder) {
@@ -418,6 +522,9 @@ export function IncidentMap({
           live: routeIsLive,
         })
         routeLayersRef.current = layers ? [layers] : []
+        currentGuideRef.current?.remove()
+        currentGuideRef.current = null
+        setRouteHint(next.summary || routeLabel(alert))
         const points = [
           incident,
           currentResponder,
@@ -439,6 +546,205 @@ export function IncidentMap({
     })()
   }
 
+  const approxPreviewLabel = (pos: leaflet.LatLngTuple) => {
+    const map = mapRef.current
+    if (!map || !incident) return "Locating route"
+    const meters = map.distance(
+      pos as leaflet.LatLngExpression,
+      incident as leaflet.LatLngExpression
+    )
+    const eta = Math.max(1, Math.round((meters / 1000 / 20) * 60))
+    return `${formatDistance(meters)} · ETA ~${eta} min`
+  }
+
+  const drawOfficialPreview = (
+    pos: leaflet.LatLngTuple,
+    route: EmergencyRoute | null | undefined,
+    fit = true
+  ) => {
+    const map = mapRef.current
+    const L = leafletRef.current
+    if (!map || !L || !incident) return
+    officialPosRef.current = pos
+    lastOfficialRouteRef.current = route ?? null
+    const size = 26
+    const icon = L.divIcon({
+      className: "eboses-emergency-pin",
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      html: glyphPinHtml({
+        paths: GLYPHS.userResponder,
+        color: MAP_COLORS.you,
+        size,
+        label: "You",
+      }),
+    })
+    if (officialMarkerRef.current) {
+      officialMarkerRef.current.setLatLng(pos)
+      officialMarkerRef.current.setIcon(icon)
+    } else {
+      officialMarkerRef.current = L.marker(pos, {
+        icon,
+        zIndexOffset: 1100,
+      }).addTo(map)
+    }
+    const label = route?.geometry
+      ? `${formatDistance(route.distance_meters)} · ${formatEta(route.eta_seconds)}`
+      : approxPreviewLabel(pos)
+    if (officialTipRef.current) {
+      officialTipRef.current.setLatLng(pos)
+      officialTipRef.current.setContent(label)
+    } else {
+      officialTipRef.current = L.tooltip({
+        permanent: true,
+        direction: "top",
+        offset: [0, -16],
+        className: "eboses-official-eta-tip",
+        interactive: false,
+      })
+        .setLatLng(pos)
+        .setContent(label)
+        .addTo(map)
+    }
+    officialLayersRef.current?.remove()
+    officialLayersRef.current = null
+    currentGuideRef.current?.remove()
+    currentGuideRef.current = null
+    if (route?.geometry) {
+      const geometry = routeRenderGeometry(route, {
+        origin: pos,
+        destination: incident,
+      })
+      officialLayersRef.current = drawRoute(L, map, {
+        ...geometry,
+        live: routeIsLive,
+      })
+    } else {
+      currentGuideRef.current = L.polyline([pos, incident], {
+        color: "#1d4ed8",
+        weight: 4,
+        opacity: 0.9,
+        dashArray: "10 10",
+        className: "eboses-live-route",
+        interactive: false,
+      }).addTo(map)
+    }
+    setRouteHint(label)
+    if (fit) {
+      map.fitBounds(L.latLngBounds([pos, incident]), {
+        padding: [28, 28],
+        maxZoom: 17,
+        animate: true,
+      })
+    }
+  }
+
+  const stopNavigation = () => {
+    navigatingRef.current = false
+    if (watchIdRef.current != null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchIdRef.current)
+    }
+    watchIdRef.current = null
+    officialLayersRef.current?.remove()
+    officialLayersRef.current = null
+    officialTipRef.current?.remove()
+    officialTipRef.current = null
+    officialMarkerRef.current?.remove()
+    officialMarkerRef.current = null
+    officialPosRef.current = null
+    lastOfficialRouteRef.current = null
+    setNavigating(false)
+    setNavBusy(false)
+  }
+
+  const toggleNavigation = () => {
+    if (navigatingRef.current) {
+      stopNavigation()
+      return
+    }
+    if (!navigator.geolocation || !incident || viewerId == null) return
+    navigatingRef.current = true
+    setNavigating(true)
+    setNavBusy(true)
+    void (async () => {
+      try {
+        const position = await readCurrentPosition()
+        if (!navigatingRef.current) return
+        const pos: leaflet.LatLngTuple = [
+          position.coords.latitude,
+          position.coords.longitude,
+        ]
+        let route: EmergencyRoute | null = null
+        try {
+          route =
+            (await getEmergencyRoute(alert.id, {
+              origin: { latitude: pos[0], longitude: pos[1] },
+            })) ?? null
+        } catch {
+          route = null
+        }
+        if (!navigatingRef.current) return
+        drawOfficialPreview(pos, route)
+        lastNavFetchRef.current = Date.now()
+        lastNavPingRef.current = Date.now()
+        void sendEmergencyLocationPing(alert.id, {
+          latitude: pos[0],
+          longitude: pos[1],
+          accuracy: position.coords.accuracy,
+          timestamp: position.timestamp,
+        }).catch(() => {})
+        watchIdRef.current = navigator.geolocation.watchPosition(
+          (fix) => {
+            if (!navigatingRef.current) return
+            const next: leaflet.LatLngTuple = [
+              fix.coords.latitude,
+              fix.coords.longitude,
+            ]
+            officialPosRef.current = next
+            officialMarkerRef.current?.setLatLng(next)
+            officialTipRef.current?.setLatLng(next)
+            const now = Date.now()
+            if (now - lastNavFetchRef.current > 12000) {
+              lastNavFetchRef.current = now
+              void (async () => {
+                try {
+                  const fresh = await getEmergencyRoute(alert.id, {
+                    origin: { latitude: next[0], longitude: next[1] },
+                  })
+                  if (navigatingRef.current)
+                    drawOfficialPreview(next, fresh ?? null, false)
+                } catch {
+                  if (navigatingRef.current)
+                    drawOfficialPreview(
+                      next,
+                      lastOfficialRouteRef.current,
+                      false
+                    )
+                }
+              })()
+            }
+            if (now - lastNavPingRef.current > 15000) {
+              lastNavPingRef.current = now
+              void sendEmergencyLocationPing(alert.id, {
+                latitude: next[0],
+                longitude: next[1],
+                accuracy: fix.coords.accuracy,
+                timestamp: fix.timestamp,
+              }).catch(() => {})
+            }
+          },
+          () => {},
+          { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+        )
+      } catch {
+        navigatingRef.current = false
+        setNavigating(false)
+      } finally {
+        setNavBusy(false)
+      }
+    })()
+  }
+
   if (!incident) {
     return (
       <div className="flex h-full min-h-[200px] items-center justify-center rounded-[16px] bg-neutral-100 text-[13px] text-neutral-400">
@@ -453,20 +759,72 @@ export function IncidentMap({
         ref={containerRef}
         className="eboses-emergency-map pointer-events-auto absolute inset-0 z-0 h-full w-full"
       />
-      <button
-        type="button"
-        onClick={reroute}
-        disabled={routeBusy}
-        title="Follow responder route"
-        aria-label="Follow responder route"
-        className="absolute top-3 right-3 z-10 flex size-9 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 shadow-md transition-colors hover:bg-neutral-50 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
-      >
-        {routeBusy ? (
-          <LoaderCircleIcon className="size-4 animate-spin" />
-        ) : (
-          <LocateFixedIcon className="size-4.5" strokeWidth={1.9} />
-        )}
-      </button>
+      <div className="absolute top-3 right-3 z-10">
+        <MapControlStack tone="light">
+          <MapControlButton
+            tone="light"
+            label="Follow current location to emergency"
+            onClick={reroute}
+            loading={routeBusy}
+          >
+            {routeBusy ? (
+              <LoaderCircleIcon className="size-4 animate-spin" />
+            ) : (
+              <LocateFixedIcon className="size-5" strokeWidth={1.9} />
+            )}
+          </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label="Recenter emergency pin"
+            onClick={() => mapRef.current?.setView(incident, 18, { animate: true })}
+          >
+            <MapPinIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label="Open Street View at emergency pin"
+            onClick={() => setStreetView({ lat: incident[0], lng: incident[1] })}
+          >
+            <FootprintsIcon className="size-5" strokeWidth={1.9} />
+          </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label={
+              navigating
+                ? "Stop navigation to emergency"
+                : "Navigate to emergency"
+            }
+            active={navigating}
+            onClick={toggleNavigation}
+            loading={navBusy}
+          >
+            {navBusy ? (
+              <LoaderCircleIcon className="size-4 animate-spin" />
+            ) : (
+              <NavigationIcon className="size-5" strokeWidth={1.9} />
+            )}
+          </MapControlButton>
+        </MapControlStack>
+      </div>
+      {(routeHint || primaryAssignment) ? (
+        <div className="absolute bottom-3 left-3 z-10 max-w-[min(18rem,calc(100%-5rem))] rounded-xl border border-white/70 bg-white/95 px-3 py-2 shadow-md backdrop-blur-sm">
+          <p className="text-[11px] font-semibold text-brand-navy">
+            {routeHint ? "Route to emergency" : "Responder route"}
+          </p>
+          <p className="mt-0.5 text-[12px] text-neutral-600">
+            {routeHint || routeLabel(alert)}
+          </p>
+        </div>
+      ) : null}
+      {streetView ? (
+        <StreetViewModal
+          coord={streetView}
+          onClose={() => setStreetView(null)}
+        />
+      ) : null}
       <style>{`
         .eboses-emergency-map.leaflet-container {
           width: 100%;
@@ -502,6 +860,29 @@ export function IncidentMap({
         }
         .eboses-emergency-map .eboses-pin__core {
           border: none !important;
+        }
+        .eboses-emergency-map .eboses-live-route {
+          animation: eboses-live-route-dash 1.1s linear infinite;
+        }
+        .eboses-emergency-map .eboses-official-eta-tip {
+          background: #111111;
+          color: #ffffff;
+          border: none;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 700;
+          padding: 6px 10px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+          white-space: nowrap;
+        }
+        .eboses-emergency-map .eboses-official-eta-tip::before {
+          display: none;
+        }
+        @keyframes eboses-live-route-dash {
+          to { stroke-dashoffset: -20; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .eboses-emergency-map .eboses-live-route { animation: none; }
         }
       `}</style>
     </div>

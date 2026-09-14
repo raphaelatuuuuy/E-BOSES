@@ -18,7 +18,10 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 import { apiRequest } from "@/lib/api"
-import { useNotifications, type NotificationItem } from "@/features/dashboard/components/notification-context"
+import {
+  useNotifications,
+  type NotificationItem,
+} from "@/features/dashboard/components/notification-context"
 import {
   AuthenticatedMediaImage,
   MediaLightbox,
@@ -56,12 +59,18 @@ function NotificationImage({
   const images = item.images?.length
     ? item.images
     : item.image_url
-      ? [{ url: item.image_url, filename: "Notification photo", mime_type: "image" }]
+      ? [
+          {
+            url: item.image_url,
+            filename: "Notification photo",
+            mime_type: "image",
+          },
+        ]
       : []
   if (!images.length) return null
 
   const previewItems = images.map((image) =>
-    toMediaPreviewItem(image.url, image.filename, image.mime_type),
+    toMediaPreviewItem(image.url, image.filename, image.mime_type)
   )
 
   return (
@@ -73,7 +82,7 @@ function NotificationImage({
         onPreview(previewItems)
       }}
       onPointerDown={(event) => event.stopPropagation()}
-      className="group relative mt-2 block w-full overflow-hidden rounded-lg border border-neutral-200 text-left empty:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-orange"
+      className="group relative mt-2 block w-full overflow-hidden rounded-lg border border-neutral-200 text-left empty:hidden focus-visible:ring-2 focus-visible:ring-brand-orange focus-visible:outline-none"
     >
       <AuthenticatedMediaImage
         src={images[0].url}
@@ -82,7 +91,7 @@ function NotificationImage({
         hideOnError
       />
       {images.length > 1 ? (
-        <span className="absolute bottom-2 right-2 rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
+        <span className="absolute right-2 bottom-2 rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
           1 / {images.length}
         </span>
       ) : null}
@@ -90,14 +99,26 @@ function NotificationImage({
   )
 }
 
-export function NotificationViewActions({ initialView = "inbox", dark = false }: { initialView?: NotificationView; dark?: boolean }) {
+export function NotificationViewActions({
+  initialView = "inbox",
+  dark = false,
+}: {
+  initialView?: NotificationView
+  dark?: boolean
+}) {
   const [view, setView] = useState<NotificationView>(initialView)
   return (
-    <div role="tablist" aria-label="Notification views" className="flex items-center gap-0.5 rounded-full bg-neutral-100 p-1">
-      {([
-        ["inbox", InboxIcon, "Inbox"],
-        ["archived", ArchiveIcon, "Archived"],
-      ] as const).map(([value, Icon, label]) => {
+    <div
+      role="tablist"
+      aria-label="Notification views"
+      className="flex items-center gap-0.5 rounded-full bg-neutral-100 p-1"
+    >
+      {(
+        [
+          ["inbox", InboxIcon, "Inbox"],
+          ["archived", ArchiveIcon, "Archived"],
+        ] as const
+      ).map(([value, Icon, label]) => {
         const active = view === value
         return (
           <button
@@ -109,7 +130,9 @@ export function NotificationViewActions({ initialView = "inbox", dark = false }:
             title={label}
             onClick={() => {
               setView(value)
-              window.dispatchEvent(new CustomEvent(notificationViewEvent, { detail: value }))
+              window.dispatchEvent(
+                new CustomEvent(notificationViewEvent, { detail: value })
+              )
             }}
             className={cn(
               "flex size-9 items-center justify-center rounded-full transition-colors",
@@ -119,7 +142,7 @@ export function NotificationViewActions({ initialView = "inbox", dark = false }:
                   : "text-nav-muted hover:bg-brand-orange/10 hover:text-brand-orange"
                 : active
                   ? "bg-white/70 text-neutral-900 shadow-sm"
-                  : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
+                  : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900"
             )}
           >
             <Icon className="size-[18px]" />
@@ -159,35 +182,20 @@ export type NotificationsConfig = {
   onOpen: (item: NotificationItem) => void
 }
 
-const dateFmt = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" })
+const dateFmt = new Intl.DateTimeFormat("en", {
+  month: "short",
+  day: "numeric",
+})
 
 function relativeTime(value: string) {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
+  const seconds = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(value).getTime()) / 1000)
+  )
   if (seconds < 60) return "Just now"
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
   return dateFmt.format(new Date(value))
-}
-
-/** Short preview for list rows — avoid full report/chat description. */
-function snippet(text: string | null | undefined, max = 90): string {
-  const cleaned = (text || "").replace(/\s+/g, " ").trim()
-  if (!cleaned) return ""
-  if (cleaned.length <= max) return cleaned
-  const slice = cleaned.slice(0, max)
-  const atWord = slice.replace(/\s+\S*$/, "").trim()
-  const base = atWord.length >= 32 ? atWord : slice.trim()
-  return `${base}...`
-}
-
-function contextSnippet(item: NotificationItem) {
-  const context = item.context
-  if (!context) return ""
-  const unit = context.department?.name || context.department?.short_name
-  const community = context.community?.name
-  const response = context.response
-  const crossCommunity = response?.is_cross_community ? "Cross-community response" : ""
-  return [community, unit, crossCommunity].filter(Boolean).join(" · ")
 }
 
 /**
@@ -242,13 +250,15 @@ export function NotificationsPanel({
   const { user } = useAuthSession()
 
   const [view, setView] = useState<"inbox" | "archived">(
-    () =>
-      initialView ?? (initialFilter === "archived" ? "archived" : "inbox"),
+    () => initialView ?? (initialFilter === "archived" ? "archived" : "inbox")
   )
   const [browserNotificationState, setBrowserNotificationState] =
     useState<BrowserNotificationState | null>(null)
-  const [changingBrowserNotifications, setChangingBrowserNotifications] = useState(false)
-  const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem[] | null>(null)
+  const [changingBrowserNotifications, setChangingBrowserNotifications] =
+    useState(false)
+  const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem[] | null>(
+    null
+  )
 
   useEffect(() => {
     let active = true
@@ -282,11 +292,18 @@ export function NotificationsPanel({
 
   const [filter, setFilter] = useState(() => {
     if (typeof window === "undefined") {
-      return initialFilter === "read" || initialFilter === "unread" ? initialFilter : "unread"
+      return initialFilter === "read" || initialFilter === "unread"
+        ? initialFilter
+        : "unread"
     }
-    const fromUrl = initialFilter === "read" || initialFilter === "unread" ? initialFilter : null
+    const fromUrl =
+      initialFilter === "read" || initialFilter === "unread"
+        ? initialFilter
+        : null
     const stored = window.localStorage.getItem(config.filterStorageKey)
-    return fromUrl ?? (stored === "read" || stored === "unread" ? stored : "unread")
+    return (
+      fromUrl ?? (stored === "read" || stored === "unread" ? stored : "unread")
+    )
   })
 
   useEffect(() => {
@@ -297,9 +314,12 @@ export function NotificationsPanel({
 
   const merged = useMemo(() => {
     const byId = new Map<number, NotificationItem>()
-    for (const item of [...(extraItems ?? []), ...notifications]) byId.set(item.id, item)
+    for (const item of [...(extraItems ?? []), ...notifications])
+      byId.set(item.id, item)
     return [...byId.values()].sort(
-      (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+      (left, right) =>
+        new Date(right.created_at).getTime() -
+        new Date(left.created_at).getTime()
     )
   }, [notifications, extraItems])
 
@@ -315,7 +335,7 @@ export function NotificationsPanel({
 
   const hasArchivableReadNotifications = useMemo(
     () => notifications.some((item) => item.is_read && !item.is_archived),
-    [notifications],
+    [notifications]
   )
 
   async function archiveItem(item: NotificationItem) {
@@ -324,17 +344,22 @@ export function NotificationsPanel({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ is_archived: !item.is_archived }),
-      })
+      }, { csrf: true })
       await refresh()
     } catch {
-      toast.error("Could not update this notification.", { id: "notif-archive" })
+      toast.error("Could not update this notification.", {
+        id: "notif-archive",
+      })
     }
   }
 
   async function deleteItem(item: NotificationItem) {
-    if (!window.confirm("Delete this notification permanently?")) return
     try {
-      await apiRequest(`/notifications/${item.id}/`, { method: "DELETE" })
+      await apiRequest(
+        `/notifications/${item.id}/`,
+        { method: "DELETE" },
+        { csrf: true }
+      )
       await refresh()
     } catch {
       toast.error("Could not delete this notification.", { id: "notif-delete" })
@@ -363,7 +388,9 @@ export function NotificationsPanel({
       await enableBrowserNotifications()
       const nextState = await getBrowserNotificationState()
       setBrowserNotificationState(nextState)
-      await showBrowserNotificationFeedback(user?.lastName, true).catch(() => false)
+      await showBrowserNotificationFeedback(user?.lastName, true).catch(
+        () => false
+      )
       toast.success("Browser notifications enabled on this device.")
     } catch (error) {
       toast.error(browserNotificationErrorMessage(error, "enable"))
@@ -375,7 +402,9 @@ export function NotificationsPanel({
   async function disableNotifications() {
     setChangingBrowserNotifications(true)
     try {
-      await showBrowserNotificationFeedback(user?.lastName, false).catch(() => false)
+      await showBrowserNotificationFeedback(user?.lastName, false).catch(
+        () => false
+      )
       await disableBrowserNotifications()
       const nextState = await getBrowserNotificationState()
       setBrowserNotificationState(nextState)
@@ -391,23 +420,19 @@ export function NotificationsPanel({
   const darkTheme = Boolean(config.dark)
   const browserNotificationsEnabled = Boolean(
     browserNotificationState?.supported &&
-      browserNotificationState.permission === "granted" &&
-      browserNotificationState.subscribed,
+    browserNotificationState.permission === "granted" &&
+    browserNotificationState.subscribed
   )
   const browserNotificationsUnavailable = Boolean(
     browserNotificationState &&
-      (!browserNotificationState.supported || !browserNotificationState.serverConfigured),
+    (!browserNotificationState.supported ||
+      !browserNotificationState.serverConfigured)
   )
-  const browserNotificationsBlocked = browserNotificationState?.permission === "denied"
+  const browserNotificationsBlocked =
+    browserNotificationState?.permission === "denied"
   const browserNotificationButtonLabel = browserNotificationsEnabled
-    ? "Disable notifications"
-    : browserNotificationsBlocked
-      ? "Allow in browser settings"
-    : browserNotificationsUnavailable
-      ? "Notifications unavailable"
-      : browserNotificationState
-        ? "Enable notifications"
-        : "Checking notifications"
+    ? "Disable"
+    : "Enable"
 
   const isEmpty = visible.length === 0
   const emptyTitle = isEmpty
@@ -431,12 +456,17 @@ export function NotificationsPanel({
   const sheetToolbar = null
 
   return (
-    <div className={cn("ops-plain flex w-full flex-col", variant === "sheet" ? "" : "h-full min-h-0")}>
+    <div
+      className={cn(
+        "ops-plain flex w-full flex-col",
+        variant === "sheet" ? "" : "h-full min-h-0"
+      )}
+    >
       {variant === "sheet" ? sheetToolbar : null}
       <header
         className={cn(
           "flex shrink-0 items-center gap-2 border-b border-card-line px-3 py-2.5 md:py-3",
-          variant === "sheet" && "hidden",
+          variant === "sheet" && "hidden"
         )}
       >
         {onBack ? (
@@ -449,9 +479,11 @@ export function NotificationsPanel({
             <ArrowLeftIcon className="size-5" />
           </button>
         ) : null}
-        <span className="text-heading font-semibold text-foreground">{config.heading ?? "Updates"}</span>
+        <span className="text-heading font-semibold text-foreground">
+          {config.heading ?? "Updates"}
+        </span>
         {unreadCount > 0 ? (
-          <span className="shrink-0 text-[11px] font-semibold leading-none text-current tabular-nums">
+          <span className="shrink-0 text-[11px] leading-none font-semibold text-current tabular-nums">
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         ) : null}
@@ -460,7 +492,7 @@ export function NotificationsPanel({
             type="button"
             onClick={() => {
               void markAllAsRead().catch(() =>
-                toast.error("Could not mark all as read.", { id: "mark-all" }),
+                toast.error("Could not mark all as read.", { id: "mark-all" })
               )
             }}
             disabled={loading || unreadCount === 0}
@@ -474,9 +506,13 @@ export function NotificationsPanel({
             type="button"
             onClick={() => {
               void archiveAllRead()
-                .then(() => toast.success("Moved read notifications to the archive."))
+                .then(() =>
+                  toast.success("Moved read notifications to the archive.")
+                )
                 .catch(() =>
-                  toast.error("Could not archive read notifications.", { id: "archive-all" }),
+                  toast.error("Could not archive read notifications.", {
+                    id: "archive-all",
+                  })
                 )
             }}
             disabled={loading || !hasArchivableReadNotifications}
@@ -485,11 +521,17 @@ export function NotificationsPanel({
             <ArchiveIcon className="size-4" />
             <span className="hidden sm:inline">Archive read</span>
           </button>
-          <div role="tablist" aria-label="Notification views" className="flex items-center gap-0.5">
-            {([
-              ["inbox", InboxIcon, "Inbox"],
-              ["archived", ArchiveIcon, "Archived"],
-            ] as const).map(([value, Icon, label]) => {
+          <div
+            role="tablist"
+            aria-label="Notification views"
+            className="flex items-center gap-0.5"
+          >
+            {(
+              [
+                ["inbox", InboxIcon, "Inbox"],
+                ["archived", ArchiveIcon, "Archived"],
+              ] as const
+            ).map(([value, Icon, label]) => {
               const active = view === value
               return (
                 <button
@@ -504,7 +546,7 @@ export function NotificationsPanel({
                     "flex size-10 items-center justify-center rounded-lg transition-colors",
                     active
                       ? "bg-card-raised text-foreground shadow-sm"
-                      : "text-muted-foreground hover:bg-card-raised hover:text-foreground",
+                      : "text-muted-foreground hover:bg-card-raised hover:text-foreground"
                   )}
                 >
                   <Icon className="size-[18px]" />
@@ -532,44 +574,39 @@ export function NotificationsPanel({
           "min-h-0",
           variant === "sheet"
             ? ""
-            : "scrollbar-hide flex-1 overflow-y-auto overscroll-contain px-3 py-3 md:px-6",
+            : "scrollbar-hide flex-1 overflow-y-auto overscroll-contain px-3 py-3 md:px-6"
         )}
-        >
-        <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-3">
-          <div className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-white p-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-700">
-              <BellRingIcon className="size-[18px]" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[14px] font-semibold text-neutral-900">
-                Browser alerts
-              </span>
-              <span className="mt-0.5 block text-[12px] leading-4 text-neutral-500">
-                {browserNotificationsEnabled
-                  ? "You will receive alerts on this device."
-                  : browserNotificationState?.permission === "denied"
-                    ? "Allow notifications in your browser settings."
-                    : browserNotificationState?.permission === "granted"
-                      ? "Permission is allowed, but this device is not subscribed yet. Enable again to finish setup."
-                    : browserNotificationsUnavailable
-                      ? "Browser alerts are not available on this device."
-                      : "Receive updates even when E-Boses is closed."}
-              </span>
-            </span>
-            <span className="flex shrink-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center">
+      >
+        <div className="mx-auto flex max-w-3xl min-w-0 flex-col gap-3">
+          <div className="rounded-2xl border border-neutral-200 bg-white p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-neutral-100 text-neutral-700">
+                  <BellRingIcon className="size-3.5" aria-hidden="true" />
+                </span>
+                <span className="text-[14px] font-semibold text-neutral-900">
+                  Push notification
+                </span>
+              </div>
               <button
-              type="button"
-                onClick={() => void (browserNotificationsEnabled ? disableNotifications() : enableNotifications())}
+                type="button"
+                onClick={() =>
+                  void (browserNotificationsEnabled
+                    ? disableNotifications()
+                    : enableNotifications())
+                }
                 disabled={
                   changingBrowserNotifications ||
                   (!browserNotificationsEnabled &&
-                    (browserNotificationsUnavailable || browserNotificationsBlocked || !browserNotificationState))
+                    (browserNotificationsUnavailable ||
+                      browserNotificationsBlocked ||
+                      !browserNotificationState))
                 }
                 className={cn(
                   "flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 text-[12px] font-semibold transition-colors disabled:cursor-default disabled:opacity-60",
                   browserNotificationsEnabled
                     ? "text-emerald-700 hover:bg-emerald-50"
-                    : "border border-neutral-200 text-neutral-900 hover:bg-neutral-50",
+                    : "border border-neutral-200 text-neutral-900 hover:bg-neutral-50"
                 )}
               >
                 {changingBrowserNotifications || !browserNotificationState ? (
@@ -579,7 +616,7 @@ export function NotificationsPanel({
                 ) : null}
                 {browserNotificationButtonLabel}
               </button>
-            </span>
+            </div>
           </div>
 
           <nav
@@ -595,14 +632,14 @@ export function NotificationsPanel({
                   onClick={() => setFilter(entry.value)}
                   aria-pressed={active}
                   className={cn(
-                    "min-w-0 flex-1 rounded-full px-2 py-2 text-center text-[clamp(10px,1.8vw,14px)] font-semibold leading-tight transition-colors",
-                     darkTheme
-                       ? active
-                         ? "bg-brand-orange/15 text-brand-orange shadow-sm"
-                         : "text-nav-muted hover:bg-brand-orange/10 hover:text-brand-orange"
-                       : active
-                         ? "bg-white text-neutral-900 shadow-sm"
-                         : "text-neutral-500 hover:bg-white/60 hover:text-neutral-900",
+                    "min-w-0 flex-1 rounded-full px-2 py-2 text-center text-[clamp(10px,1.8vw,14px)] leading-tight font-semibold transition-colors",
+                    darkTheme
+                      ? active
+                        ? "bg-brand-orange/15 text-brand-orange shadow-sm"
+                        : "text-nav-muted hover:bg-brand-orange/10 hover:text-brand-orange"
+                      : active
+                        ? "bg-white text-neutral-900 shadow-sm"
+                        : "text-neutral-500 hover:bg-white/60 hover:text-neutral-900"
                   )}
                 >
                   {entry.label}
@@ -638,27 +675,37 @@ export function NotificationsPanel({
               <span className="flex size-12 items-center justify-center text-neutral-800">
                 <InboxIcon className="size-6" />
               </span>
-              <p className="mt-2 text-[15px] font-semibold text-neutral-950">{emptyTitle}</p>
+              <p className="mt-2 text-[15px] font-semibold text-neutral-950">
+                {emptyTitle}
+              </p>
               <p className="mt-1 max-w-sm text-[13px] leading-5 text-neutral-600">
                 {emptySub}
               </p>
             </div>
           ) : (
-            <ul className="space-y-3">
+            <ul className="space-y-2">
               {visible.map((item) => {
                 const configuredIcon = iconFor(item)
                 const urgent = item.priority === "urgent"
                 const Icon = configuredIcon.Icon
                 const iconClass = configuredIcon.chipClass
-                const body = snippet(item.display_body || item.body)
-                const contextLine = contextSnippet(item)
+                const iconColorClass = iconClass.replace(/\bbg-\S+/g, "").trim()
+                const body = (item.display_body || item.body || "")
+                  .replace(/\s+/g, " ")
+                  .trim()
                 const hasMedia = Boolean(item.images?.length || item.image_url)
                 return (
                   <li
                     key={item.id}
                     className={cn(
-                      "relative touch-pan-y overflow-hidden rounded-2xl border border-neutral-200 bg-white",
-                       !item.is_read && (urgent ? "border-sos/30 bg-sos/5" : "bg-neutral-50"),
+                      "relative touch-pan-y overflow-hidden rounded-2xl border border-neutral-200 bg-white transition-colors",
+                      !item.is_read &&
+                        (urgent ? "border-sos/30 bg-sos/5" : "bg-neutral-50"),
+                      urgent && !item.is_read
+                        ? "hover:bg-sos/10"
+                        : darkTheme
+                          ? "hover:bg-brand-orange/10"
+                          : "hover:bg-neutral-100"
                     )}
                   >
                     <button
@@ -671,72 +718,96 @@ export function NotificationsPanel({
                         }
                         void openItem(item)
                       }}
-                       className={cn(
-                         "flex w-full items-start gap-3.5 px-3.5 pt-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-400",
-                         hasMedia ? "pb-1" : "pb-3.5",
-                          urgent && !item.is_read
-                            ? "hover:bg-sos/10"
-                           : darkTheme
-                             ? "hover:bg-brand-orange/10"
-                             : "hover:bg-neutral-100",
-                       )}
-                     onPointerDown={(event) => {
-                       document.querySelectorAll<HTMLElement>("[data-notification-actions]").forEach((actions) => {
-                         actions.style.opacity = ""
-                         actions.style.transform = ""
-                         actions.style.pointerEvents = ""
-                         actions.style.left = ""
-                         actions.style.right = ""
-                         actions.style.background = ""
-                       })
+                      className={cn(
+                        "flex w-full items-start gap-2.5 bg-transparent px-3 py-2.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:outline-none focus-visible:ring-inset",
+                        hasMedia ? "pb-1" : "",
+                      )}
+                      onPointerDown={(event) => {
+                        document
+                          .querySelectorAll<HTMLElement>(
+                            "[data-notification-actions]"
+                          )
+                          .forEach((actions) => {
+                            actions.style.opacity = ""
+                            actions.style.transform = ""
+                            actions.style.pointerEvents = ""
+                            actions.style.left = ""
+                            actions.style.right = ""
+                            actions.style.background = ""
+                          })
                         event.currentTarget.setPointerCapture(event.pointerId)
-                        event.currentTarget.dataset.swipeStart = String(event.clientX)
+                        event.currentTarget.dataset.swipeStart = String(
+                          event.clientX
+                        )
                         delete event.currentTarget.dataset.held
                         const target = event.currentTarget
-                        holdTimers.set(target, window.setTimeout(() => {
-                          const actions = target.parentElement?.querySelector<HTMLElement>("[data-notification-actions]")
-                          if (!actions) return
-                          target.dataset.held = "true"
+                        holdTimers.set(
+                          target,
+                          window.setTimeout(() => {
+                            const actions =
+                              target.parentElement?.querySelector<HTMLElement>(
+                                "[data-notification-actions]"
+                              )
+                            if (!actions) return
+                            target.dataset.held = "true"
+                            actions.style.opacity = "1"
+                            actions.style.transform = "translateX(0)"
+                            actions.style.pointerEvents = "auto"
+                            actions.style.left = "0"
+                            actions.style.right = "0"
+                          }, 450)
+                        )
+                      }}
+                      onPointerMove={(event) => {
+                        const start = Number(
+                          event.currentTarget.dataset.swipeStart
+                        )
+                        if (!Number.isFinite(start)) return
+                        const delta = Math.min(0, event.clientX - start)
+                        const actions =
+                          event.currentTarget.parentElement?.querySelector<HTMLElement>(
+                            "[data-notification-actions]"
+                          )
+                        if (actions && delta < 0) {
                           actions.style.opacity = "1"
-                          actions.style.transform = "translateX(0)"
+                          actions.style.transform = `translateX(${Math.max(delta, -88)}px)`
                           actions.style.pointerEvents = "auto"
-                          actions.style.left = "0"
-                          actions.style.right = "0"
-                        }, 450))
-                    }}
-                    onPointerMove={(event) => {
-                      const start = Number(event.currentTarget.dataset.swipeStart)
-                      if (!Number.isFinite(start)) return
-                      const delta = Math.min(0, event.clientX - start)
-                      const actions = event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-notification-actions]")
-                      if (actions && delta < 0) {
-                        actions.style.opacity = "1"
-                        actions.style.transform = `translateX(${Math.max(delta, -88)}px)`
-                        actions.style.pointerEvents = "auto"
-                      }
-                    }}
-                     onPointerUp={(event) => {
-                        const start = Number(event.currentTarget.dataset.swipeStart)
+                        }
+                      }}
+                      onPointerUp={(event) => {
+                        const start = Number(
+                          event.currentTarget.dataset.swipeStart
+                        )
                         const delta = event.clientX - start
                         const timer = holdTimers.get(event.currentTarget)
                         if (timer) window.clearTimeout(timer)
-                        const actions = event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-notification-actions]")
+                        const actions =
+                          event.currentTarget.parentElement?.querySelector<HTMLElement>(
+                            "[data-notification-actions]"
+                          )
                         if (delta < -48) event.preventDefault()
                         if (event.currentTarget.dataset.held === "true") {
                           event.preventDefault()
                           event.stopPropagation()
                         }
-                        if (actions && delta > -48 && event.currentTarget.dataset.held !== "true") {
+                        if (
+                          actions &&
+                          delta > -48 &&
+                          event.currentTarget.dataset.held !== "true"
+                        ) {
                           actions.style.opacity = ""
                           actions.style.transform = ""
                           actions.style.pointerEvents = ""
                         }
-                        if (actions && event.currentTarget.dataset.held !== "true") {
-                         actions.style.left = ""
-                         actions.style.right = ""
-                         actions.style.background = ""
-                       }
-                       delete event.currentTarget.dataset.swipeStart
+                        if (
+                          actions &&
+                          event.currentTarget.dataset.held !== "true"
+                        ) {
+                          actions.style.left = ""
+                          actions.style.right = ""
+                          actions.style.background = ""
+                        }
+                        delete event.currentTarget.dataset.swipeStart
                       }}
                       onPointerCancel={(event) => {
                         const timer = holdTimers.get(event.currentTarget)
@@ -744,9 +815,10 @@ export function NotificationsPanel({
                         holdTimers.delete(event.currentTarget)
                         delete event.currentTarget.dataset.swipeStart
                         delete event.currentTarget.dataset.held
-                        const actions = event.currentTarget.parentElement?.querySelector<HTMLElement>(
-                          "[data-notification-actions]",
-                        )
+                        const actions =
+                          event.currentTarget.parentElement?.querySelector<HTMLElement>(
+                            "[data-notification-actions]"
+                          )
                         if (actions) {
                           actions.style.opacity = ""
                           actions.style.transform = ""
@@ -757,39 +829,34 @@ export function NotificationsPanel({
                         }
                       }}
                     >
-                      <span
-                        className={cn(
-                          "flex size-12 shrink-0 items-center justify-center rounded-xl",
-                          iconClass,
-                        )}
-                      >
-                           <Icon className="size-5" aria-hidden="true" />
-                      </span>
-                      <span className="min-w-0 flex-1 pr-8">
-                        <span className="flex items-start justify-between gap-3">
-                           <span
-                             className={cn(
-                               "text-[15px] font-semibold text-neutral-950",
-                                urgent && !item.is_read && "text-sos",
-                             )}
-                           >
-                            {item.display_title || item.title}
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                            <span className="flex size-5 shrink-0 items-center justify-center">
+                              <Icon
+                                className={cn("size-3.5", iconColorClass)}
+                                aria-hidden="true"
+                              />
+                            </span>
+                            <span
+                              className={cn(
+                                "min-w-0 text-[14px] leading-5 font-normal text-neutral-950",
+                                urgent && !item.is_read && "text-sos"
+                              )}
+                            >
+                              {item.display_title || item.title}
+                            </span>
                           </span>
-                           <span className="shrink-0 pt-0.5 text-[12px] text-neutral-700">
+                          <span className="shrink-0 text-[11px] text-neutral-700">
                             {relativeTime(item.created_at)}
                           </span>
                         </span>
                         {body ? (
-                           <span className="mt-0.5 block line-clamp-2 text-[13.5px] leading-5 text-neutral-700">
+                          <span className="mt-0.5 block text-[13px] leading-[1.35] break-words whitespace-normal text-neutral-700">
                             {body}
                           </span>
                         ) : null}
-                        {contextLine ? (
-                          <span className="mt-1 block text-[11px] font-medium text-neutral-500">
-                            {contextLine}
-                          </span>
-                        ) : null}
-                         {item.safety_limited ? (
+                        {item.safety_limited ? (
                           <span className="mt-2 block rounded-lg border border-sos/30 bg-sos/10 px-3 py-2.5">
                             <span className="block text-[12px] font-bold tracking-wide text-sos">
                               Nearby safety alert
@@ -799,44 +866,70 @@ export function NotificationsPanel({
                                 "Stay clear of the area and do not intervene."}
                             </span>
                             <span className="mt-1.5 block text-[11px] leading-4 text-sos/70">
-                              For privacy, the reporter's identity, exact location, and media are
-                              not shared.
+                              For privacy, the reporter's identity, exact
+                              location, and media are not shared.
                             </span>
                           </span>
                         ) : null}
                       </span>
                     </button>
                     {hasMedia ? (
-                      <div className="ml-[4.75rem] mr-11 pb-3.5">
-                        <NotificationImage item={item} onPreview={setMediaPreview} />
+                      <div className="mr-11 ml-3.5 pb-3.5">
+                        <NotificationImage
+                          item={item}
+                          onPreview={setMediaPreview}
+                        />
                       </div>
                     ) : null}
-                    <span data-notification-actions className="pointer-events-none absolute inset-0 z-10 flex shrink-0 flex-row items-stretch justify-center gap-0 bg-neutral-100 opacity-0 transition-[opacity,transform] duration-200">
+                    <span
+                      data-notification-actions
+                      className="pointer-events-none absolute inset-0 z-10 flex shrink-0 flex-row items-stretch justify-center gap-0 bg-neutral-100 opacity-0 transition-[opacity,transform] duration-200"
+                    >
                       <button
                         type="button"
-                        onClick={() => void archiveItem(item)}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onPointerUp={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void archiveItem(item)
+                        }}
                         aria-label={
-                          item.is_archived ? "Restore notification" : "Archive notification"
+                          item.is_archived
+                            ? "Restore notification"
+                            : "Archive notification"
                         }
-                        title={item.is_archived ? "Restore notification" : "Archive notification"}
+                        title={
+                          item.is_archived
+                            ? "Restore notification"
+                            : "Archive notification"
+                        }
                         className="flex min-w-24 flex-1 flex-col items-center justify-center gap-1 border-r border-neutral-200 px-4 text-neutral-700 transition-colors hover:bg-neutral-200"
                       >
-                         {item.is_archived ? (
-                           <ArchiveRestoreIcon className="size-4" />
-                         ) : (
-                           <ArchiveIcon className="size-4" />
-                         )}
-                         <span className="text-[11px] font-semibold">{item.is_archived ? "Restore" : "Archive"}</span>
+                        {item.is_archived ? (
+                          <ArchiveRestoreIcon className="size-4" />
+                        ) : (
+                          <ArchiveIcon className="size-4" />
+                        )}
+                        <span className="text-[11px] font-semibold">
+                          {item.is_archived ? "Restore" : "Archive"}
+                        </span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => void deleteItem(item)}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onPointerUp={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void deleteItem(item)
+                        }}
                         aria-label="Delete notification"
                         title="Delete notification"
                         className="flex min-w-24 flex-1 flex-col items-center justify-center gap-1 px-4 text-neutral-700 transition-colors hover:bg-neutral-200"
                       >
-                         <Trash2Icon className="size-4" />
-                         <span className="text-[11px] font-semibold">Delete</span>
+                        <Trash2Icon className="size-4" />
+                        <span className="text-[11px] font-semibold">
+                          Delete
+                        </span>
                       </button>
                     </span>
                   </li>
@@ -860,7 +953,11 @@ export function NotificationsPanel({
         </div>
       </div>
       {mediaPreview ? (
-        <MediaLightbox items={mediaPreview} index={0} onClose={() => setMediaPreview(null)} />
+        <MediaLightbox
+          items={mediaPreview}
+          index={0}
+          onClose={() => setMediaPreview(null)}
+        />
       ) : null}
     </div>
   )

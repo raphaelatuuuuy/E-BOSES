@@ -4,6 +4,7 @@ import * as React from "react"
 import { getMe, type AuthUser, type UserStatus } from "@/features/auth/api"
 import { ApiError, clearAuthTokens, getAccessToken, logoutSession, refreshSession, setAuthTokens } from "@/lib/api"
 import { clearLastKnownPositions } from "@/features/dashboard/lib/last-known-position"
+import { unregisterNativePush } from "@/features/dashboard/native-push"
 
 interface AuthSessionContextValue {
   user: AuthUser | null
@@ -89,6 +90,7 @@ export function AuthSessionProvider({ children }: { children: React.ReactNode })
   const signOut = React.useCallback(async () => {
     setLoading(true)
     try {
+      await unregisterNativePush().catch(() => undefined)
       await logoutSession()
     } finally {
       clearSession()

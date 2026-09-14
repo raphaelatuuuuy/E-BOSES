@@ -2,11 +2,17 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import ResidentProfile, User
-from apps.concerns.models import Concern
+from apps.concerns.models import (
+    Concern,
+    ConcernAiAssessment,
+    ConcernResolutionEvidence,
+    ConcernStatusEvent,
+)
 from apps.emergencies.models import Community, EmergencyAlert, EmergencyCategory
 
 
@@ -51,13 +57,89 @@ class PublicReportMapAndGuestConcernTests(APITestCase):
             longitude=self.longitude,
             validation_status=Concern.ValidationStatus.ACCEPTED,
         )
+        ConcernAiAssessment.objects.create(
+            concern=accepted,
+            status=ConcernAiAssessment.Status.COMPLETED,
+            severity_estimate="high",
+            raw_result={
+                "review": {
+                    "current_danger": True,
+                    "incident_timing": "ongoing",
+                }
+            },
+        )
 
         response = self.client.get(reverse("public-report-map"))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual([row["id"] for row in response.data["concerns"]], [accepted.pk])
+        self.assertEqual(
+            response.data["concerns"][0]["description"],
+            accepted.description,
+        )
+        self.assertEqual(response.data["concerns"][0]["severity"], "critical")
+        self.assertTrue(response.data["concerns"][0]["severity_assessed"])
         self.assertNotIn("public-map-resident@example.com", response.content.decode())
         self.assertIn("Community resident", response.content.decode())
+
+    def test_public_map_includes_resolution_evidence_for_resolved_concerns(self):
+        reporter = User.objects.create_user(
+            email="public-map-resolved@example.com",
+            password="Str0ng!Passw0rd",
+            phone_number="+639170000002",
+            status=User.Status.VERIFIED,
+        )
+        resolved = Concern.objects.create(
+            reporter=reporter,
+            community=self.community,
+            title="Slippery sidewalk",
+            description="The sidewalk was slippery when wet.",
+            address="Champaca Street, Marikina Heights",
+            latitude=self.latitude,
+            longitude=self.longitude,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            status=Concern.Status.RESOLVED,
+        )
+        evidence = ConcernResolutionEvidence.objects.create(
+            concern=resolved,
+            file=SimpleUploadedFile("fixed.jpg", b"resolution", content_type="image/jpeg"),
+            original_filename="fixed.jpg",
+            mime_type="image/jpeg",
+            file_size=10,
+        )
+        ConcernStatusEvent.objects.create(
+            concern=resolved,
+            status=Concern.Status.RESOLVED,
+            note="Sidewalk repaired.",
+        )
+        active = Concern.objects.create(
+            reporter=reporter,
+            community=self.community,
+            title="Active public concern",
+            description="Still being handled.",
+            address="Dao Street, Marikina Heights",
+            latitude=self.latitude,
+            longitude=self.longitude,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+
+        response = self.client.get(reverse("public-report-map"))
+
+        self.assertEqual(response.status_code, 200)
+        rows = {row["id"]: row for row in response.data["concerns"]}
+        self.assertEqual(
+            rows[resolved.pk]["resolution_evidence"],
+            [
+                {
+                    "preview_url": f"/api/concerns/resolution-evidence/{evidence.pk}/preview/",
+                    "original_filename": "fixed.jpg",
+                    "mime_type": "image/jpeg",
+                }
+            ],
+        )
+        self.assertIsNotNone(rows[resolved.pk]["resolved_at"])
+        self.assertEqual(rows[active.pk]["resolution_evidence"], [])
+        self.assertIsNone(rows[active.pk]["resolved_at"])
 
     def test_public_emergency_uses_reported_street_while_reverse_geocoding_is_pending(self):
         reporter = User.objects.create_user(
@@ -96,8 +178,8 @@ class PublicReportMapAndGuestConcernTests(APITestCase):
         self.assertEqual(emergency["address"], f"Champaca Street, {self.community.name}")
 
     @patch("apps.concerns.views.transaction.on_commit", side_effect=lambda callback: callback())
-    @patch("apps.concerns.views.enqueue_concern_ai")
-    def test_guest_report_routes_to_the_incident_community(self, enqueue, on_commit):
+    @patch("apps.concerns.views._validate_concern_before_commit", return_value=None)
+    def test_guest_report_routes_to_the_incident_community(self, validate, on_commit):
         response = self.client.post(
             reverse("public-guest-concern"),
             {
@@ -117,12 +199,13 @@ class PublicReportMapAndGuestConcernTests(APITestCase):
         self.assertTrue(concern.is_anonymous)
         self.assertEqual(concern.community_id, self.community.pk)
         self.assertIsNone(concern.reporter_community_id)
+        self.assertEqual(concern.visibility, Concern.Visibility.COMMUNITY)
         self.assertFalse(concern.reporter.is_active)
         self.assertFalse(concern.reporter.has_usable_password())
         self.assertFalse(ResidentProfile.objects.filter(user=concern.reporter).exists())
-        self.assertEqual(set(response.data), {"submitted", "community", "status"})
+        self.assertEqual(set(response.data), {"submitted", "community", "status", "assigned_unit"})
         self.assertNotIn('"id"', response.content.decode())
-        enqueue.assert_called_once_with(concern.pk)
+        validate.assert_called_once_with(concern)
 
     def test_guest_report_rejects_a_pin_outside_active_communities(self):
         response = self.client.post(

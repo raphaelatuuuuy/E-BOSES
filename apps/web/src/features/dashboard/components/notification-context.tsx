@@ -2,6 +2,7 @@ import * as React from "react"
 import { apiRequest, websocketTicket, websocketUrl } from "@/lib/api"
 import type { Concern } from "@/features/dashboard/api"
 import { registerNotificationWorker, showBrowserNotification } from "@/features/dashboard/browser-notifications"
+import { registerNativePush } from "@/features/dashboard/native-push"
 
 export interface NotificationItem {
   id: number
@@ -84,6 +85,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const socketLiveRef = React.useRef(false)
   const lastBrowserNotifRef = React.useRef(0)
   const seenIdsRef = React.useRef(new Set<number>())
+  const notificationsHydratedRef = React.useRef(false)
 
   async function fetchAll() {
     try {
@@ -91,10 +93,20 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         apiRequest<NotificationItem[]>("/notifications/?include_archived=true"),
         apiRequest<{ count: number }>("/notifications/unread-count/"),
       ])
-      setNotifications(list ?? [])
-      for (const item of list ?? []) seenIdsRef.current.add(item.id)
+      const nextList = list ?? []
+      const newlyFetched = notificationsHydratedRef.current
+        ? nextList.filter((item) => !seenIdsRef.current.has(item.id))
+        : []
+      setNotifications(nextList)
+      for (const item of nextList) seenIdsRef.current.add(item.id)
+      notificationsHydratedRef.current = true
       setUnreadCount(countRes?.count ?? 0)
       setLoadError("")
+      for (const item of newlyFetched) {
+        window.dispatchEvent(
+          new CustomEvent("eboses:notification-created", { detail: item }),
+        )
+      }
     } catch {
       // Notifications are not critical, but a silent empty list reads as "no
       // news" — surface the failure instead of pretending the inbox is empty.
@@ -130,6 +142,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     // the setStates inside fetchAll are all async continuations.
     window.setTimeout(() => void fetchAll(), 0)
     void registerNotificationWorker().catch(() => null)
+    void registerNativePush().catch(() => undefined)
     const interval = setInterval(() => {
       if (!socketLiveRef.current) void fetchAll()
     }, 30_000)

@@ -1,13 +1,7 @@
 import { z } from "zod"
-import { normalizePhoneNumber } from "@/lib/phone"
-
-export type SignInMode = "email" | "phone"
-
-export { normalizePhoneNumber }
 
 export const signInSchema = z
   .object({
-    mode: z.enum(["email", "phone"]),
     identifier: z.string(),
     password: z
       .string()
@@ -21,28 +15,16 @@ export const signInSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["identifier"],
-        message:
-          values.mode === "phone" ? "Enter your phone number." : "Enter your email address.",
+        message: "Enter your email address.",
       })
       return
     }
 
-    if (values.mode === "email") {
-      if (!z.email().safeParse(identifier).success) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["identifier"],
-          message: "Enter a valid email address.",
-        })
-      }
-      return
-    }
-
-    if (!normalizePhoneNumber(identifier)) {
+    if (!z.email().safeParse(identifier).success) {
       ctx.addIssue({
         code: "custom",
         path: ["identifier"],
-        message: "Enter the 10 digits after +63, like 9171234567.",
+        message: "Enter a valid email address.",
       })
     }
   })

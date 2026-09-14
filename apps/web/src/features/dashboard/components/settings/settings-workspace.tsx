@@ -2,10 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  InboxIcon,
   ChevronLeftIcon,
   CircleQuestionMarkIcon,
-  LockIcon,
   UserIcon,
   XIcon,
 } from "lucide-react"
@@ -415,20 +413,6 @@ export function SettingsWorkspace({
                       showChevron
                     />
                     <SheetOptionRow
-                      title="Privacy"
-                      description="What neighbours can see"
-                      leading={<LockIcon className="size-5" strokeWidth={1.75} />}
-                      onClick={() => setPanel("privacy")}
-                      showChevron
-                    />
-                    <SheetOptionRow
-                      title="Notifications"
-                      description="Alerts and report updates"
-                      leading={<InboxIcon className="size-5" strokeWidth={1.75} />}
-                      onClick={() => setPanel("notifications")}
-                      showChevron
-                    />
-                    <SheetOptionRow
                       title="Help center"
                       description="Guides, FAQs and how-to articles"
                       leading={<CircleQuestionMarkIcon className="size-5" strokeWidth={1.75} />}
@@ -439,6 +423,7 @@ export function SettingsWorkspace({
 
                   <div className="mt-6">
                     <SheetPrimaryButton
+                      tone="accent"
                       onClick={() => {
                         void signOut().finally(() => navigate("/"))
                       }}
@@ -543,16 +528,6 @@ export function SettingsWorkspace({
                   onClick={() => setPanel("account")}
                 />
                 <HubRow
-                  icon={LockIcon}
-                  label="Privacy settings"
-                  onClick={() => setPanel("privacy")}
-                />
-                <HubRow
-                  icon={InboxIcon}
-                  label="Notification settings"
-                  onClick={() => setPanel("notifications")}
-                />
-                <HubRow
                   icon={CircleQuestionMarkIcon}
                   label="Help center"
                   description="Guides, FAQs and how-to articles"
@@ -562,6 +537,7 @@ export function SettingsWorkspace({
 
               <div className="mt-8">
                 <SheetPrimaryButton
+                  tone="accent"
                   onClick={() => {
                     void signOut().finally(() => navigate("/"))
                   }}

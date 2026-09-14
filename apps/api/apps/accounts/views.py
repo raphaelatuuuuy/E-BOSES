@@ -14,7 +14,7 @@ from rest_framework import serializers as drf_serializers
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from apps.throttling import LocalScopedRateThrottle
 from rest_framework.views import APIView
 from apps.throttling import LoginIPThrottle, LoginIdentifierThrottle, RefreshSessionThrottle
 from django.utils.decorators import method_decorator
@@ -255,7 +255,7 @@ class RegistrationCommunitiesView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [LocalScopedRateThrottle]
     throttle_scope = "geocode"
 
     def get(self, request):
@@ -269,7 +269,7 @@ class RegistrationStreetSearchView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [LocalScopedRateThrottle]
     throttle_scope = "geocode"
 
     def get(self, request):
@@ -288,7 +288,7 @@ class RegistrationPinAddressView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [LocalScopedRateThrottle]
     throttle_scope = "registration_geocode"
 
     def get(self, request):

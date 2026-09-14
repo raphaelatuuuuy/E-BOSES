@@ -1,5 +1,5 @@
-import { useRef, useState, type ReactNode } from "react"
-import { ChevronLeftIcon, ChevronRightIcon, SearchIcon, XIcon } from "lucide-react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
+import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SearchIcon, XIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -145,6 +145,69 @@ export function FilterRow({
         )
       })}
       {children}
+    </div>
+  )
+}
+
+/** Checkmarked dropdown used when a configuration filter has too many values for a FilterRow. */
+export function ListDropdown({
+  label,
+  value,
+  options,
+  onChange,
+  className,
+}: {
+  label: string
+  value: string
+  options: Array<{ value: string; label: string; description?: string }>
+  onChange: (value: string) => void
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const selected = options.find((option) => option.value === value) ?? options[0]
+
+  useEffect(() => {
+    const close = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", close)
+    return () => document.removeEventListener("mousedown", close)
+  }, [])
+
+  return (
+    <div ref={rootRef} className={cn("relative", className)}>
+      <span className="mb-1.5 block text-meta font-medium text-neutral-500">{label}</span>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className="flex min-h-11 w-full items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-left text-read text-brand-navy transition-colors hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy/20"
+      >
+        <span className="min-w-0 flex-1 truncate">{selected?.label ?? "Choose"}</span>
+        <ChevronDownIcon className={cn("size-4 shrink-0 text-neutral-400 transition-transform", open && "rotate-180")} strokeWidth={1.8} aria-hidden />
+      </button>
+      {open ? (
+        <div role="listbox" aria-label={label} className="absolute z-40 mt-2 max-h-64 w-full min-w-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white py-1 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              onClick={() => { onChange(option.value); setOpen(false) }}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-neutral-50"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-read font-medium text-brand-navy">{option.label}</span>
+                {option.description ? <span className="mt-0.5 block text-meta text-neutral-500">{option.description}</span> : null}
+              </span>
+              {option.value === value ? <CheckIcon className="size-4 shrink-0 text-accent" strokeWidth={2.2} aria-hidden /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

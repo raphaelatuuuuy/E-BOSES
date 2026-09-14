@@ -54,7 +54,7 @@ export function buildEmergencyTimeline(alert: EmergencyAlert): EmergencyTimeline
       actor: actor?.full_name || "System",
       actorUser: actor,
       content: event.note ? (
-        <div className="mt-1 flex items-center justify-between gap-2 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 text-[11px] leading-relaxed text-neutral-600 whitespace-pre-wrap">
+        <div className="mt-1 flex items-center justify-between gap-2 rounded-[10px] bg-neutral-100 px-2.5 py-1.5 text-[13px] leading-relaxed text-neutral-600 whitespace-pre-wrap">
           <span className="min-w-0">{event.note}</span>
         </div>
       ) : null,

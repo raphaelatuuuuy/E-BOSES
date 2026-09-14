@@ -73,12 +73,18 @@ def notify_announcement_published(announcement: Announcement) -> int:
             community=announcement.community,
             type=Notification.Type.ANNOUNCEMENT,
             title=announcement.title,
-            body=announcement.body[:240],
+            # The notification inbox is the first system-feed presentation a
+            # resident sees, so carry the same generated summary as the other
+            # announcement surfaces.
+            body=(announcement.llm_summary or announcement.body)[:240],
             metadata=metadata,
         )
         for recipient_id in recipient_ids
     ]
     Notification.objects.bulk_create(rows, batch_size=500)
+    from apps.notifications.services import generate_notification_copies_after_commit
+
+    generate_notification_copies_after_commit([row.pk for row in rows])
     _deliver_after_commit([row.pk for row in rows])
     return len(rows)
 

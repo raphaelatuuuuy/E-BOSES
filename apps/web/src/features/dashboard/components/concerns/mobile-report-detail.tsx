@@ -1,16 +1,18 @@
 import { useState, type ReactNode } from "react"
-import { toast } from "sonner"
 import {
   InfoIcon,
   ClockIcon,
-  CheckIcon,
   MapPinIcon,
   MessageSquareIcon,
+  PhoneIcon,
   PencilLineIcon,
-  Share2Icon,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import {
+  ReportDescriptionCard,
+  ReportAssignmentFooter,
+} from "@/features/dashboard/components/concerns/report-detail-content"
 
 import type { Concern, PublicUser } from "@/features/dashboard/api"
 import type { EmergencyAlert } from "@/features/dashboard/emergency-api"
@@ -29,18 +31,12 @@ import {
 } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { EmergencyEngagementFooter } from "@/features/dashboard/components/concerns/emergency-queue-item"
 import { unitShortTag } from "@/features/dashboard/components/concerns/concern-display"
-import {
-  canPublishConcern,
-  canShareConcern,
-  shareConcernReport,
-} from "@/features/dashboard/lib/share-report"
 import { streetOnly } from "@/features/dashboard/lib/location-text"
 import {
   AuthenticatedMediaImage,
   MediaLightbox,
 } from "@/features/dashboard/components/authenticated-media"
 import {
-  mediaDisplaySource,
   toMediaPreviewItem,
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
@@ -62,34 +58,26 @@ import {
 
 type MobileTab = "info" | "chat" | "updates"
 
+function residentSummaryLine(value: string) {
+  const clean = value.trim()
+  if (!clean) return "The resident submitted this emergency."
+  if (/^the resident\b/i.test(clean)) return clean
+  const softened = /^[A-Z]/.test(clean)
+    ? `${clean.slice(0, 1).toLowerCase()}${clean.slice(1)}`
+    : clean
+  return `The resident reports ${softened.replace(/[.!?]+$/, "")}.`
+}
+
 /** Info tab content — flat layout, no cards. */
 function InfoTabContent({
   report,
-  fullName,
-  initials,
-  unit,
-  unitTag,
-  unitRole,
-  audience,
   street,
   setProofPreview,
 }: {
   report: Concern
-  fullName: string
-  initials: string
-  unit:
-    | NonNullable<Concern["assigned_department"]>
-    | NonNullable<Concern["community_incident"]>["assigned_unit"]
-    | null
-  unitTag: string
-  unitRole: string
-  audience: "resident" | "official"
   street: string | null
   setProofPreview: (v: { items: MediaPreviewItem[]; index: number }) => void
 }) {
-  const showAssignedUnit = audience === "resident" && Boolean(unit)
-  const identityName = showAssignedUnit ? unit?.name : fullName
-  const identityLabel = showAssignedUnit ? unitRole : "Resident"
   const [showComments, setShowComments] = useState(false)
   const {
     comments,
@@ -99,83 +87,16 @@ function InfoTabContent({
 
   return (
     <div className="space-y-5">
-      {/* Report identity */}
-      <div>
-        <p className="mb-2 text-[10px] font-bold tracking-[0.06em] text-neutral-600 uppercase">
-          {audience === "official" ? "Reported by" : "Assigned to"}
-        </p>
-        <div className="flex flex-col items-center text-center">
-          <span
-            className={cn(
-              "flex size-14 items-center justify-center rounded-full px-1 text-center leading-none",
-              avatarTone,
-              showAssignedUnit
-                ? "text-[13px] font-bold"
-                : "text-[18px] font-bold"
-            )}
-          >
-            {showAssignedUnit ? unitTag : initials}
-          </span>
-          <p className="mt-2 text-[17px] leading-tight font-bold text-neutral-900">
-            {identityName || "Resident"}
-          </p>
-          <p className="text-[12px] text-neutral-500">{identityLabel}</p>
-        </div>
-      </div>
-
-      {/* Description */}
-      {report.description ? (
-        <div>
-          <p className="mb-1 text-[10px] font-bold tracking-[0.06em] text-neutral-600 uppercase">
-            Description
-          </p>
-          <p className="text-[14px] leading-relaxed text-neutral-800">
-            {report.description}
-          </p>
-        </div>
-      ) : null}
+      <ReportDescriptionCard
+        report={report}
+        onMediaPreview={(items, index) => setProofPreview({ items, index })}
+      />
 
       {/* Location */}
       {street ? (
         <div className="flex items-center gap-2 text-[13px] text-neutral-500">
           <MapPinIcon className="size-3.5 shrink-0" aria-hidden="true" />
           {street}
-        </div>
-      ) : null}
-
-      {/* Media grid */}
-      {(report.media ?? []).length > 0 ? (
-        <div>
-          <p className="mb-2 text-[10px] font-bold tracking-[0.06em] text-neutral-600 uppercase">
-            Media
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {(report.media ?? []).map((media, index) =>
-              media.mime_type?.startsWith("image/") ? (
-                <button
-                  key={media.id}
-                  type="button"
-                  onClick={() => {
-                    const items = (report.media ?? []).map((m) =>
-                      toMediaPreviewItem(
-                        mediaDisplaySource(m),
-                        m.original_filename ?? `Media ${index + 1}`,
-                        m.mime_type
-                      )
-                    )
-                    setProofPreview({ items, index })
-                  }}
-                  className="overflow-hidden rounded-xl border border-neutral-300 bg-white transition-colors hover:border-neutral-500 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:outline-none"
-                >
-                  <AuthenticatedMediaImage
-                    src={mediaDisplaySource(media)}
-                    alt={media.original_filename ?? `Media ${index + 1}`}
-                    className="h-24 w-full object-cover"
-                  />
-                </button>
-              ) : null
-            )}
-          </div>
         </div>
       ) : null}
 
@@ -203,7 +124,6 @@ export function MobileReportDetailPage({
   headerAction,
   canDecideAppeals = false,
   audience = "resident",
-  onPublish,
 }: {
   report: Concern
   onBack: () => void
@@ -212,7 +132,6 @@ export function MobileReportDetailPage({
   headerAction?: ReactNode
   canDecideAppeals?: boolean
   audience?: "resident" | "official"
-  onPublish?: (report: Concern) => Promise<Concern>
 }) {
   const { user } = useAuthSession()
   const [tab, setTab] = useState<MobileTab>("info")
@@ -220,9 +139,11 @@ export function MobileReportDetailPage({
     items: MediaPreviewItem[]
     index: number
   } | null>(null)
-  const [shared, setShared] = useState(false)
 
   const fullName = concernReporterName(report)
+  const isGuestReport =
+    Boolean(report.is_anonymous) ||
+    fullName.trim().toLowerCase() === "community reporter"
   const initials = (report.reporter?.initials || initialsOf(fullName)).charAt(0)
   const unit =
     report.validation_status === "accepted"
@@ -235,9 +156,16 @@ export function MobileReportDetailPage({
     unit?.description?.trim() ||
     report.category_ref?.description?.trim() ||
     "Assigned response unit"
-  const showAssignedUnit = audience === "resident" && Boolean(unit)
-  const identityName = showAssignedUnit ? unit?.name : fullName
-  const identityLabel = showAssignedUnit ? unitRole : "Resident"
+  const showAssignedUnit =
+    audience === "resident" && Boolean(unit) && !isGuestReport
+  const identityName = showAssignedUnit
+    ? `${unit?.name ?? "Assigned unit"}${unit?.short_name ? ` (${unit.short_name})` : ""}`
+    : fullName
+  const identityLabel = isGuestReport
+    ? "Anonymous"
+    : showAssignedUnit
+      ? unitRole
+      : "Resident"
   const closedCase = ["rejected", "appealed", "resolved"].includes(
     report.status
   )
@@ -247,25 +175,6 @@ export function MobileReportDetailPage({
     report.status === "rejected" &&
     !(report.appeals ?? []).some((appeal) => appeal.status === "submitted")
   )
-  const publishing = canPublishConcern(report)
-
-  async function handleShare() {
-    try {
-      const shareableReport =
-        publishing && onPublish ? await onPublish(report) : report
-      const didShare = await shareConcernReport(shareableReport)
-      if (didShare) {
-        setShared(true)
-        window.setTimeout(() => setShared(false), 1800)
-      }
-    } catch {
-      toast.error("Could not share this report publicly.")
-    }
-  }
-
-  const canShareAction =
-    canShareConcern(report) || (publishing && Boolean(onPublish))
-
   const timeline = buildConcernTimelineEntries(
     report,
     (items, index) => setProofPreview({ items, index }),
@@ -275,12 +184,13 @@ export function MobileReportDetailPage({
   const street = streetOnly(
     report.community_incident?.address || report.address
   )
+  const assignedUnitName =
+    report.assigned_department?.name?.trim() ||
+    report.community_incident?.assigned_unit?.name?.trim() ||
+    ""
+  const visibleTab = isGuestReport && tab === "chat" ? "info" : tab
 
   const tabOptions: { key: MobileTab; icon: ReactNode }[] = [
-    {
-      key: "chat",
-      icon: <MessageSquareIcon className="size-4" aria-hidden="true" />,
-    },
     {
       key: "updates",
       icon: <ClockIcon className="size-4" aria-hidden="true" />,
@@ -300,9 +210,29 @@ export function MobileReportDetailPage({
       <SheetDialog
         open
         onClose={onBack}
+        showClose={false}
         size="wide"
-        className="max-h-[min(800px,92vh)] sm:max-h-[min(800px,92vh)]"
-        bodyClassName="flex flex-col px-5"
+        className="h-[min(800px,72dvh)] max-h-[min(800px,72dvh)] sm:h-[min(800px,82vh)] sm:max-h-[min(800px,82vh)]"
+        bodyClassName="min-h-0 flex flex-col overflow-y-auto px-5"
+        backdropScrim={false}
+        backdropInteractive
+        backdrop={
+          <ReportLocationMap
+            latitude={report.latitude}
+            longitude={report.longitude}
+            streetAddress={
+              report.community_incident?.address || report.address
+            }
+            category={report.category}
+            iconKey={report.category_ref?.icon_key}
+            status={report.status}
+            severity={report.severity}
+            heightClassName="h-full"
+            focusAboveSheet
+            onBack={visibleTab === "chat" ? () => setTab("info") : onBack}
+            className="h-full w-full rounded-none"
+          />
+        }
         /* Custom header: title + description + actions slot */
         title="Report details"
         actions={
@@ -314,7 +244,7 @@ export function MobileReportDetailPage({
               onClick={() => setTab("info")}
               className={cn(
                 "flex size-10 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:outline-none",
-                tab === "info"
+                visibleTab === "info"
                   ? "text-neutral-900"
                   : "text-neutral-500 hover:text-neutral-800"
               )}
@@ -332,7 +262,7 @@ export function MobileReportDetailPage({
                   onClick={() => setTab(opt.key)}
                   className={cn(
                     "flex items-center justify-center rounded-full p-2 transition-colors focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:outline-none",
-                    tab === opt.key
+                    visibleTab === opt.key
                       ? "bg-white text-neutral-900 shadow-sm"
                       : "text-neutral-500 hover:text-neutral-800"
                   )}
@@ -343,40 +273,29 @@ export function MobileReportDetailPage({
             </div>
           </div>
         }
+        footer={
+          visibleTab === "info" ? (
+            <div className="space-y-3">
+              <ReportAssignmentFooter
+                report={report}
+                onChat={!isGuestReport ? () => setTab("chat") : undefined}
+              />
+              <p className="text-center text-[11px] leading-4 text-neutral-400">
+                Status updates and messages from the barangay will appear here.
+              </p>
+            </div>
+          ) : undefined
+        }
       >
         {/* Tab content */}
-        {tab === "info" ? (
+        {visibleTab === "info" ? (
           <InfoTabContent
             report={report}
-            fullName={fullName}
-            initials={initials}
-            unit={unit}
-            unitTag={unitTag}
-            unitRole={unitRole}
-            audience={audience}
             street={street}
             setProofPreview={(v) => setProofPreview(v)}
           />
-        ) : tab === "chat" ? (
+        ) : visibleTab === "chat" ? (
           <div className="-mx-1 flex min-h-0 flex-1 flex-col">
-            {/* Share to public — pinned to the left corner of the chat container */}
-            {audience === "resident" && canShareAction ? (
-              <div className="flex px-1 pt-1">
-                <button
-                  type="button"
-                  onClick={() => void handleShare()}
-                  title={publishing ? "Share to public" : "Share report"}
-                  aria-label={publishing ? "Share to public" : "Share report"}
-                  className="flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:outline-none"
-                >
-                  {shared ? (
-                    <CheckIcon className="size-4.5" aria-hidden="true" />
-                  ) : (
-                    <Share2Icon className="size-4.5" aria-hidden="true" />
-                  )}
-                </button>
-              </div>
-            ) : null}
             {/* Chat header — the same identity block shown in report info */}
             <div className="flex flex-col items-center px-1 pt-2 pb-4 text-center">
               <span
@@ -402,7 +321,7 @@ export function MobileReportDetailPage({
               showHistory
               plain
               disabled={closedCase}
-              emptyMessage="Message the barangay team about this report — questions, extra photos, or access details stay here."
+              emptyMessage="Ask for updates, questions, extra photos, or access details here."
               appeals={report.appeals ?? []}
               canFileAppeal={canFileAppeal}
               canDecideAppeals={canDecideAppeals}
@@ -413,9 +332,9 @@ export function MobileReportDetailPage({
           </div>
         ) : (
           /* Updates tab */
-          <div className="space-y-5">
-            <div>
-              <div className="flex items-center gap-2.5 pb-3">
+          <div className="space-y-4">
+            <section className="rounded-[20px] border border-neutral-200 bg-white p-4">
+              <div className="flex items-center gap-2.5">
                 <ClockIcon
                   className="size-4 text-neutral-600"
                   aria-hidden="true"
@@ -424,40 +343,21 @@ export function MobileReportDetailPage({
                   Updates
                 </h3>
               </div>
+              <p className="mt-1 text-[12px] leading-5 text-neutral-500">
+                Every status change and update on this report.
+              </p>
+              {assignedUnitName ? (
+                <p className="mt-1 text-[12px] leading-5 text-neutral-500">
+                  Assigned to {assignedUnitName}.
+                </p>
+              ) : null}
               <ConcernTimeline
                 key={report.id}
                 items={timeline}
                 collapsibleHistory
               />
-            </div>
+            </section>
 
-            <div>
-              <div className="flex items-center gap-2.5 pb-3">
-                <MapPinIcon
-                  className="size-4 text-neutral-600"
-                  aria-hidden="true"
-                />
-                <h3 className="text-[15px] font-semibold text-neutral-900">
-                  Location
-                </h3>
-                {street ? (
-                  <span className="min-w-0 truncate text-[12px] font-medium text-neutral-500">
-                    {street}
-                  </span>
-                ) : null}
-              </div>
-              <ReportLocationMap
-                latitude={report.latitude}
-                longitude={report.longitude}
-                streetAddress={
-                  report.community_incident?.address || report.address
-                }
-                category={report.category}
-                iconKey={report.category_ref?.icon_key}
-                heightClassName="h-48"
-                className="overflow-hidden rounded-[16px] border border-neutral-100"
-              />
-            </div>
           </div>
         )}
       </SheetDialog>
@@ -508,6 +408,10 @@ export function MobileEmergencyReportDetailPage({
       alert.barangay
   )
   const description = emergencyDescription(alert)
+  const residentDescription = alert.note?.trim() || description
+  const residentSummary = residentSummaryLine(
+    alert.display_description?.trim() || description
+  )
   const settled = !isEmergencyActive(alert.status)
   const historicalResponders = emergencyResponderAssignments(alert)
   const responderActions = useIncidentActions({
@@ -526,6 +430,8 @@ export function MobileEmergencyReportDetailPage({
   ].includes(alert.status)
   const responderOwnsChat =
     audience !== "responder" || responderActions.hasOwnAssignment
+  const canCallReporter = Boolean(alert.reporter_phone?.trim()) &&
+    viewerId !== alert.reporter?.id
 
   const tabOptions: { key: MobileTab; icon: ReactNode }[] = [
     {
@@ -555,6 +461,9 @@ export function MobileEmergencyReportDetailPage({
         className="max-h-[min(800px,92vh)] sm:max-h-[min(800px,92vh)]"
         bodyClassName="flex flex-col px-5"
         title="Report details"
+        backdropScrim={false}
+        backdropInteractive
+        backdrop={<IncidentMap alert={alert} viewerId={viewerId} />}
         actions={
           <div className="flex items-center gap-1">
             {!terminal &&
@@ -634,13 +543,97 @@ export function MobileEmergencyReportDetailPage({
                 <p className="mt-2 text-[17px] leading-tight font-bold text-neutral-900">
                   {reporterName}
                 </p>
-                <p className="text-[12px] text-neutral-500">Resident</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-[12px] text-neutral-500">Resident</p>
+                  {canCallReporter ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        window.location.href = `tel:${alert.reporter_phone}`
+                      }}
+                      aria-label={`Call ${reporterName}`}
+                      title={`Call ${reporterName}`}
+                      className="inline-flex size-7 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:outline-none"
+                    >
+                      <PhoneIcon className="size-4" aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </div>
 
-            <p className="text-[14px] leading-relaxed text-neutral-800">
-              {description}
-            </p>
+            <div
+              className={cn(
+                "flex items-start gap-2 rounded-2xl px-3.5 py-3 text-[15px] leading-relaxed",
+                settled
+                  ? "bg-neutral-100 text-neutral-700"
+                  : "bg-blue-50 text-blue-900"
+              )}
+            >
+              <InfoIcon
+                className={cn(
+                  "mt-[2px] size-5 shrink-0",
+                  settled ? "text-neutral-600" : "text-blue-900"
+                )}
+                strokeWidth={2.2}
+                aria-hidden
+              />
+              <div className="min-w-0 flex-1">
+                <p className="font-medium break-words whitespace-pre-wrap">
+                  {alert.current_assignment?.responder
+                    ? "A responder has been assigned to your location."
+                    : residentSummary}
+                </p>
+                {residentDescription ? (
+                  <p
+                    className={cn(
+                      "mt-2 border-t pt-2 text-[13px] leading-relaxed",
+                      settled
+                        ? "border-neutral-200 text-neutral-700"
+                        : "border-blue-200 text-blue-900"
+                    )}
+                  >
+                    {residentDescription}
+                  </p>
+                ) : null}
+                {alert.media?.length ? (
+                  <div
+                    className={cn(
+                      "mt-3 border-t pt-3",
+                      settled ? "border-neutral-200" : "border-blue-200"
+                    )}
+                  >
+                    <div className="grid grid-cols-2 gap-2">
+                      {alert.media.slice(0, 5).map((media, index) => (
+                        <button
+                          key={media.id}
+                          type="button"
+                          onClick={() =>
+                            setProofPreview({
+                              items: alert.media!.map((item) =>
+                                toMediaPreviewItem(
+                                  item.preview_url,
+                                  item.original_filename,
+                                  item.mime_type
+                                )
+                              ),
+                              index,
+                            })
+                          }
+                          className="overflow-hidden rounded-xl border border-blue-100 bg-white transition-colors hover:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
+                        >
+                          <AuthenticatedMediaImage
+                            src={media.preview_url}
+                            alt={media.original_filename}
+                            className="h-24 w-full object-cover"
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
 
             {location ? (
               <div className="flex items-center gap-2 text-[13px] text-neutral-500">
@@ -650,8 +643,8 @@ export function MobileEmergencyReportDetailPage({
             ) : null}
 
             {settled && historicalResponders.length ? (
-              <div className="space-y-1.5 rounded-[14px] bg-neutral-50 px-3 py-2.5 text-[12px] leading-relaxed text-neutral-600 ring-1 ring-neutral-200">
-                <p className="font-semibold text-neutral-800">Responded</p>
+              <div className="space-y-1.5 rounded-[14px] bg-status-closed-surface px-3 py-2.5 text-[12px] leading-relaxed text-status-closed-ink ring-1 ring-neutral-200">
+                <p className="font-semibold">Responded</p>
                 {historicalResponders.map((assignment) => (
                   <p key={`mobile-past-response-${assignment.id}`}>
                     {assignment.responder.full_name || "Responder"} responded.
@@ -660,49 +653,10 @@ export function MobileEmergencyReportDetailPage({
                 ))}
               </div>
             ) : alert.current_assignment?.responder ? null : (
-              <p className="rounded-[14px] bg-neutral-50 px-3 py-2 text-[12px] leading-relaxed text-neutral-600 ring-1 ring-neutral-200">
+              <p className="rounded-[14px] bg-status-closed-surface px-3 py-2 text-[12px] leading-relaxed text-status-closed-ink ring-1 ring-neutral-200">
                 Automatically routing to the nearest available responder.
               </p>
             )}
-
-            <div>
-              <p className="mb-2 text-[10px] font-bold tracking-[0.06em] text-neutral-600 uppercase">
-                Media
-              </p>
-              {alert.media?.length ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {alert.media.slice(0, 5).map((media, index) => (
-                    <button
-                      key={media.id}
-                      type="button"
-                      onClick={() =>
-                        setProofPreview({
-                          items: alert.media!.map((item) =>
-                            toMediaPreviewItem(
-                              item.preview_url,
-                              item.original_filename,
-                              item.mime_type
-                            )
-                          ),
-                          index,
-                        })
-                      }
-                      className="overflow-hidden rounded-xl border border-neutral-300 bg-white transition-colors hover:border-neutral-500 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:outline-none"
-                    >
-                      <AuthenticatedMediaImage
-                        src={media.preview_url}
-                        alt={media.original_filename}
-                        className="h-24 w-full object-cover"
-                      />
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[13px] text-neutral-500">
-                  No media attached.
-                </p>
-              )}
-            </div>
 
             <EmergencyEngagementFooter
               alert={alert}

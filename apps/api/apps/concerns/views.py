@@ -21,7 +21,7 @@ from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
+from apps.throttling import LocalAnonRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.media_services import build_redacted_preview_bytes, log_raw_media_access, placeholder_preview_jpeg
@@ -91,7 +91,9 @@ from .models import (
     RoutingRule,
 )
 from .announcement_services import dispatch_due_announcements, mark_announcement_published
+from .announcement_summary import refresh_announcement_summary
 from .severity import priority_score as compute_priority_score, severity_label, severity_level
+from .units import assigned_unit_for
 
 from .serializers import (
     ActiveResponderSerializer,
@@ -154,6 +156,8 @@ ACTIVE_STATUSES = {
     Concern.Status.IN_PROGRESS,
     Concern.Status.APPEALED,
 }
+
+MAX_CONCERN_MEDIA_FILES = 3
 
 
 def _discard_unaccepted_concern(concern):
@@ -246,89 +250,6 @@ def _validate_concern_before_commit(concern):
         status=status.HTTP_400_BAD_REQUEST,
     )
 
-
-def _auto_escalate_concern(concern, request, *, emergency_type: str, auto_escalate: bool, ip_meta: dict):
-    """Create and route the emergency companion selected by the resident
-    precheck.
-
-    The resident never chooses an emergency type. The precheck supplies the
-    model's configured, ongoing-emergency result. The normal emergency router
-    remains authoritative: the configured unit owns the incident immediately,
-    while automatic dispatch waits for an eligible responder from that unit.
-    """
-    if not auto_escalate or not emergency_type:
-        return None
-
-    emergency_models = import_module("apps.emergencies.models")
-    EmergencyAlert = emergency_models.EmergencyAlert
-    EmergencyCategory = emergency_models.EmergencyCategory
-    from apps.emergencies.views import (
-        auto_route_alert,
-        create_status_event,
-        create_witness_notifications,
-        send_app_emergency_sms,
-        serialize_alert,
-    )
-    from apps.emergencies.location_services import classify_location_confidence, schedule_location_resolution
-    from apps.notifications.services import notify_emergency_status
-    from apps.concerns.ai.gemma_analyzer import has_concrete_emergency_evidence
-
-    if not EmergencyCategory.objects.filter(
-        community=concern.community, code=emergency_type, is_active=True
-    ).exists():
-        return None
-    if not has_concrete_emergency_evidence(emergency_type, f"{concern.title} {concern.description}"):
-        # `auto_escalate` comes from the resident precheck, but the submit
-        # endpoint must still reject a stale or fabricated emergency match.
-        return None
-    if EmergencyAlert.objects.filter(
-        reporter=concern.reporter,
-        source_concern=concern,
-        status__in={
-            EmergencyAlert.Status.SUBMITTED,
-            EmergencyAlert.Status.ROUTING,
-            EmergencyAlert.Status.ROUTED,
-            EmergencyAlert.Status.AWAITING_ACKNOWLEDGMENT,
-            EmergencyAlert.Status.ACKNOWLEDGED,
-            EmergencyAlert.Status.EN_ROUTE,
-            EmergencyAlert.Status.NEARBY,
-            EmergencyAlert.Status.ARRIVED,
-            EmergencyAlert.Status.IN_PROGRESS,
-            EmergencyAlert.Status.ESCALATION_REQUIRED,
-        },
-    ).exists():
-        existing = EmergencyAlert.objects.filter(reporter=concern.reporter, source_concern=concern).order_by("-created_at").first()
-        return serialize_alert(existing, request) if existing else None
-
-    alert = EmergencyAlert.objects.create(
-        reporter=concern.reporter,
-        type=emergency_type,
-        note=concern.description,
-        community=concern.community,
-        barangay=concern.barangay,
-        latitude=concern.latitude,
-        longitude=concern.longitude,
-        location_source=concern.location_source or "manual_pin",
-        location_accuracy=concern.location_accuracy,
-        address=concern.address,
-        reported_area=concern.address,
-        source_concern=concern,
-        ip_asn=ip_meta.get("asn", ""),
-        ip_country=ip_meta.get("country", ""),
-        ip_org=ip_meta.get("org", ""),
-        ip_verdict=ip_meta.get("verdict", ""),
-        ip_score=ip_meta.get("score"),
-    )
-    alert.location_confidence = classify_location_confidence(alert)
-    alert.save(update_fields=["location_confidence"])
-    create_status_event(alert, EmergencyAlert.Status.SUBMITTED, concern.reporter, event_key="received_app")
-    notify_emergency_status(alert, type=EmergencyAlert.Status.SUBMITTED, body="Your emergency alert was submitted.")
-    auto_route_alert(alert, request)
-    create_witness_notifications(alert)
-    if alert.latitude is not None and alert.longitude is not None:
-        schedule_location_resolution(alert)
-    transaction.on_commit(lambda alert_id=alert.pk: send_app_emergency_sms(EmergencyAlert.objects.get(pk=alert_id)))
-    return serialize_alert(alert, request)
 
 def create_timeline_entry(*, concern, event_type, message, actor=None, status="", visible_to_resident=True, is_custom=False, metadata=None):
     return ConcernTimelineEntry.objects.create(
@@ -512,13 +433,38 @@ def _media_check_configuration(request):
         return ConcernClassificationConfiguration.current_fresh(community)
 
 
-def _attachment_authenticity_results(uploaded_files, *, config):
+def _attachment_authenticity_results(uploaded_files, *, config, run_ai=True):
     """Run duplicate-independent authenticity checks without persisting files.
 
     The final submit endpoint still repeats the complete validation pipeline;
     this function only provides early feedback while the composer is open.
     """
     from apps.accounts.media_forensics import forensics_findings
+
+    if not run_ai:
+        checked = []
+        for file_index, uploaded_file in enumerate(uploaded_files):
+            try:
+                uploaded_file.seek(0)
+                raw_content = uploaded_file.read()
+                uploaded_file.seek(0)
+            except Exception:
+                raw_content = b""
+            forensic = forensics_findings(raw_content) if raw_content else {
+                "checked": False,
+                "flagged": False,
+            }
+            flagged = bool(forensic.get("flagged"))
+            checked.append({
+                "index": file_index,
+                "name": uploaded_file.name,
+                "status": "rejected" if flagged else "accepted",
+                "authenticity_status": "blocked" if flagged else "passed",
+                "authenticity_verdict": "forensics_flagged" if flagged else "forensics_clear",
+                "message": "Please upload an original, unedited photo." if flagged else "",
+            })
+        return checked
+
     from apps.concerns.ai.classification import classification_payload
     from apps.concerns.ai.gemma_analyzer import INTEGRITY_FLAGGED_VERDICTS
     from apps.concerns.classification_api import (
@@ -604,10 +550,7 @@ def _attachment_authenticity_results(uploaded_files, *, config):
                     "status": "rejected",
                     "authenticity_status": "blocked",
                     "authenticity_verdict": verdict,
-                    "message": (
-                        "This photo appears to be AI-generated or edited. "
-                        "Please upload a genuine photo taken with your camera."
-                    ),
+                    "message": "Please upload an original, unedited photo.",
                 }
             )
             continue
@@ -628,6 +571,131 @@ def _attachment_authenticity_results(uploaded_files, *, config):
             }
         )
     return checked
+
+
+def _deterministic_concern_media_check(media_files):
+    """Return accepted files and per-file failures before the AI probe.
+
+    Duplicate detection used to return one request-level 400 immediately.
+    That left the browser unable to tell which file in a multi-file selection
+    failed, so the composer previewed every file anyway. Keep checking the
+    remaining files and attach the failure to its original index instead.
+    """
+    current_phashes = []
+    current_hashes = set()
+    accepted_files = []
+    accepted_indices = []
+    rejected = {}
+
+    for file_index, uploaded_file in enumerate(media_files):
+        try:
+            validated_file = validate_concern_media_file(uploaded_file)
+        except ValidationError as exc:
+            messages = [str(message) for message in getattr(exc, "messages", [])]
+            if not messages and getattr(exc, "message_dict", None):
+                for value in exc.message_dict.values():
+                    if isinstance(value, (list, tuple)):
+                        messages.extend(str(item) for item in value)
+                    else:
+                        messages.append(str(value))
+            if not messages:
+                messages = [str(exc)]
+            cleaned = []
+            for message in messages:
+                text = str(message).strip()
+                if text.startswith("[") and text.endswith("]"):
+                    text = text[1:-1].strip().strip("'\"")
+                if text:
+                    cleaned.append(text)
+            rejected[file_index] = cleaned[0] if cleaned else "This photo could not be validated."
+            continue
+
+        media_hash = sha256_file(validated_file)
+        raw_content = validated_file.read()
+        validated_file.seek(0)
+        media_phash = phash_file(raw_content)
+        media_phash_blocks = phash_blocks_file(raw_content)
+        if media_hash in current_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
+            rejected[file_index] = "This photo was already uploaded before."
+            continue
+
+        candidate_ids = phash_candidate_ids(
+            SCOPE_CONCERN_MEDIA,
+            phashes=[media_phash],
+            blocks=media_phash_blocks,
+        )
+        existing_phashes = (
+            list(
+                ConcernMedia.objects.filter(pk__in=candidate_ids)
+                .exclude(phash="")
+                .values_list("phash", "phash_blocks")
+            )
+            if candidate_ids
+            else []
+        )
+        if media_looks_duplicate(
+            media_phash,
+            media_phash_blocks,
+            [*existing_phashes, *current_phashes],
+        ):
+            rejected[file_index] = "This image appears to have been uploaded before."
+            continue
+
+        current_hashes.add(media_hash)
+        current_phashes.append((media_phash, media_phash_blocks))
+        accepted_files.append(uploaded_file)
+        accepted_indices.append(file_index)
+
+    return accepted_files, accepted_indices, rejected
+
+
+def _concern_media_check_results(media_files, *, config, run_ai=True):
+    """Build an indexed result for every uploaded file without persisting it."""
+    accepted_files, accepted_indices, rejected = _deterministic_concern_media_check(media_files)
+    ai_results = (
+        _attachment_authenticity_results(
+            accepted_files,
+            config=config,
+            run_ai=run_ai,
+        )
+        if accepted_files
+        else []
+    )
+    ai_by_index = {
+        int(item.get("index", -1)): item
+        for item in ai_results
+        if isinstance(item, dict)
+    }
+    accepted_position_by_original = {
+        original_index: position
+        for position, original_index in enumerate(accepted_indices)
+    }
+
+    results = []
+    for original_index, uploaded_file in enumerate(media_files):
+        if original_index in rejected:
+            results.append(
+                {
+                    "index": original_index,
+                    "name": uploaded_file.name,
+                    "status": "rejected",
+                    "authenticity_status": "blocked",
+                    "authenticity_verdict": "deterministic_rejection",
+                    "message": rejected[original_index],
+                }
+            )
+            continue
+
+        accepted_position = accepted_position_by_original[original_index]
+        result = dict(ai_by_index.get(accepted_position) or {})
+        result["index"] = original_index
+        result["name"] = uploaded_file.name
+        result.setdefault("status", "accepted")
+        result.setdefault("authenticity_status", "review_required")
+        result.setdefault("authenticity_verdict", "inconclusive")
+        result.setdefault("message", "")
+        results.append(result)
+    return results
 
 
 def can_access_concern(user, concern):
@@ -841,86 +909,37 @@ class ConcernMediaCheckView(APIView):
         media_files = request.FILES.getlist("media")
         if not media_files:
             return Response({"media": ["Choose a photo to check."]}, status=status.HTTP_400_BAD_REQUEST)
-
-        current_phashes = []
-        current_hashes = set()
-        checked = []
-        for uploaded_file in media_files:
-            try:
-                validated_file = validate_concern_media_file(uploaded_file)
-            except ValidationError as exc:
-                # Return clean user-facing messages only (no filename / list repr)
-                messages = []
-                if hasattr(exc, "messages") and exc.messages:
-                    messages = [str(m) for m in exc.messages]
-                elif getattr(exc, "message_dict", None):
-                    for value in exc.message_dict.values():
-                        if isinstance(value, (list, tuple)):
-                            messages.extend(str(v) for v in value)
-                        else:
-                            messages.append(str(value))
-                else:
-                    messages = [str(exc)]
-                cleaned = []
-                for msg in messages:
-                    text = str(msg).strip()
-                    # Strip accidental list-repr wrappers: "['...']"
-                    if text.startswith("[") and text.endswith("]"):
-                        text = text[1:-1].strip().strip("'\"")
-                    if text:
-                        cleaned.append(text)
-                return Response(
-                    {"media": cleaned or ["This photo could not be validated."]},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            media_hash = sha256_file(validated_file)
-            raw_content = validated_file.read()
-            validated_file.seek(0)
-            media_phash = phash_file(raw_content)
-            media_phash_blocks = phash_blocks_file(raw_content)
-            if media_hash in current_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
-                return Response(
-                    {"media": ["This photo was already uploaded before."]},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            # Banded candidates replace the whole-table scan; the exact
-            # comparison still runs over everything the index could match.
-            candidate_ids = phash_candidate_ids(
-                SCOPE_CONCERN_MEDIA, phashes=[media_phash], blocks=media_phash_blocks
+        if len(media_files) > MAX_CONCERN_MEDIA_FILES:
+            return Response(
+                {"media": [f"You can attach up to {MAX_CONCERN_MEDIA_FILES} photos."]},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            existing_phashes = list(
-                ConcernMedia.objects.filter(pk__in=candidate_ids).exclude(phash="").values_list("phash", "phash_blocks")
-            ) if candidate_ids else []
-            if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
-                return Response(
-                    {"media": ["This image appears to have been uploaded before."]},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            current_hashes.add(media_hash)
-            current_phashes.append((media_phash, media_phash_blocks))
-            checked.append({"name": uploaded_file.name, "status": "accepted"})
+
         return Response(
             {
-                "files": _attachment_authenticity_results(
+                "files": _concern_media_check_results(
                     media_files,
                     config=_media_check_configuration(request),
+                    run_ai=str(request.data.get("forensics_only", "")).lower() not in {"1", "true", "yes"},
                 )
             }
         )
 
 
-class GuestConcernThrottle(AnonRateThrottle):
+class GuestConcernThrottle(LocalAnonRateThrottle):
     """Keep the public intake bounded even when settings are changed."""
 
     scope = "public_guest_concern"
-    rate = "5/hour"
+    rate = "15/hour"
 
 
-class GuestConcernMediaCheckThrottle(AnonRateThrottle):
+class GuestConcernMediaCheckThrottle(LocalAnonRateThrottle):
     """Bound anonymous image-only checks separately from report submissions."""
 
     scope = "public_guest_concern_media"
-    rate = "20/hour"
+    # A short rolling window prevents an accidental hour-long lockout while
+    # still bounding this unauthenticated, compute-heavy image analysis route.
+    rate = "6/minute"
 
 
 class GuestConcernMediaCheckView(APIView):
@@ -939,51 +958,18 @@ class GuestConcernMediaCheckView(APIView):
         media_files = request.FILES.getlist("media")
         if not media_files:
             return Response({"media": ["Choose a photo to check."]}, status=status.HTTP_400_BAD_REQUEST)
-        if len(media_files) > 5:
-            return Response({"media": ["You can attach up to 5 photos."]}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Reuse the same deterministic duplicate gate as authenticated uploads.
-        current_phashes = []
-        current_hashes = set()
-        for uploaded_file in media_files:
-            try:
-                validated_file = validate_concern_media_file(uploaded_file)
-            except ValidationError as exc:
-                messages = [str(message) for message in getattr(exc, "messages", [])] or [str(exc)]
-                return Response({"media": messages}, status=status.HTTP_400_BAD_REQUEST)
-            media_hash = sha256_file(validated_file)
-            raw_content = validated_file.read()
-            validated_file.seek(0)
-            media_phash = phash_file(raw_content)
-            media_phash_blocks = phash_blocks_file(raw_content)
-            if media_hash in current_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
-                return Response(
-                    {"media": ["This photo was already uploaded before."]},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            candidate_ids = phash_candidate_ids(
-                SCOPE_CONCERN_MEDIA,
-                phashes=[media_phash],
-                blocks=media_phash_blocks,
+        if len(media_files) > MAX_CONCERN_MEDIA_FILES:
+            return Response(
+                {"media": [f"You can attach up to {MAX_CONCERN_MEDIA_FILES} photos."]},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            existing_phashes = (
-                list(ConcernMedia.objects.filter(pk__in=candidate_ids).exclude(phash="").values_list("phash", "phash_blocks"))
-                if candidate_ids
-                else []
-            )
-            if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
-                return Response(
-                    {"media": ["This image appears to have been uploaded before."]},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            current_hashes.add(media_hash)
-            current_phashes.append((media_phash, media_phash_blocks))
 
         return Response(
             {
-                "files": _attachment_authenticity_results(
+                "files": _concern_media_check_results(
                     media_files,
                     config=_media_check_configuration(request),
+                    run_ai=str(request.data.get("forensics_only", "")).lower() not in {"1", "true", "yes"},
                 )
             }
         )
@@ -1038,7 +1024,7 @@ class GuestConcernCreateView(APIView):
     @transaction.atomic
     def post(self, request):
         from apps.accounts.ip_intel import evaluate_request, ip_blocked_response
-        from apps.geo_services import active_communities_for_point
+        from apps.geo_services import active_communities_for_coverage_point
         from .anonymous_intake import get_anonymous_intake_user
 
         _, ip_meta, ip_reason = evaluate_request(request)
@@ -1049,7 +1035,9 @@ class GuestConcernCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         latitude = serializer.validated_data["latitude"]
         longitude = serializer.validated_data["longitude"]
-        matches = active_communities_for_point(latitude, longitude)
+        # Match the public location picker and authenticated report flow:
+        # configured boundary and acceptance radius/zone are both valid.
+        matches = active_communities_for_coverage_point(latitude, longitude)
         if len(matches) != 1:
             return Response(
                 {
@@ -1136,8 +1124,11 @@ class GuestConcernCreateView(APIView):
         media_hashes = set()
         current_phashes = []
         media_files = request.FILES.getlist("media")
-        if len(media_files) > 5:
-            return Response({"media": ["You can attach up to 5 photos."]}, status=status.HTTP_400_BAD_REQUEST)
+        if len(media_files) > MAX_CONCERN_MEDIA_FILES:
+            return Response(
+                {"media": [f"You can attach up to {MAX_CONCERN_MEDIA_FILES} photos."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         for uploaded_file in media_files:
             try:
                 validated_file = validate_concern_media_file(uploaded_file)
@@ -1212,11 +1203,10 @@ class GuestConcernCreateView(APIView):
             longitude=longitude,
             location_source=serializer.validated_data.get("location_source", "manual_pin"),
             barangay=community.name,
-            visibility=(
-                Concern.Visibility.COMMUNITY
-                if not category_ref or category_ref.public_feed_allowed
-                else Concern.Visibility.PRIVATE
-            ),
+            # Guest reports are explicitly community-visible after validation.
+            # The guest intake has no private-report option, so category feed
+            # settings must not silently hide a successfully submitted report.
+            visibility=Concern.Visibility.COMMUNITY,
             report_fingerprint=fingerprints["report_fingerprint"],
             report_text_fingerprint=fingerprints["report_text_fingerprint"],
             report_location_bucket=fingerprints["report_location_bucket"],
@@ -1295,7 +1285,7 @@ class ConcernListCreateView(APIView):
         summary="File a report",
         description=(
             "Submit a new concern. Multipart form-data: `title`, `description`, "
-            "`category`, location fields, optional `media` photos (up to 5). Every "
+            "`category`, location fields, optional `media` photos (up to 3). Every "
             "photo passes signature + pixel validation; duplicates by hash or "
             "perceptual similarity are rejected with 400. Automated validation "
             "finishes before an accepted report is committed; rejected reports "
@@ -1401,6 +1391,11 @@ class ConcernListCreateView(APIView):
         validated_media = []
         media_hashes = set()
         media_files = request.FILES.getlist("media")
+        if len(media_files) > MAX_CONCERN_MEDIA_FILES:
+            return Response(
+                {"media": [f"You can attach up to {MAX_CONCERN_MEDIA_FILES} photos."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if category_ref and category_ref.photo_required and not media_files:
             return Response(
                 {"media": ["Add at least one clear photo as evidence."]},
@@ -1551,15 +1546,6 @@ class ConcernListCreateView(APIView):
         transaction.on_commit(lambda: broadcast_live_map_event("concern.created", {"concern": concern_payload(decorated)}))
         transaction.on_commit(lambda: _schedule_concern_location(concern.pk))
         response_payload = ConcernSerializer(decorated, context={"request": request}).data
-        escalated_alert = _auto_escalate_concern(
-            concern,
-            request,
-            emergency_type=serializer.validated_data.get("emergency_type", "").strip(),
-            auto_escalate=bool(serializer.validated_data.get("auto_escalate")),
-            ip_meta=ip_meta,
-        )
-        if escalated_alert is not None:
-            response_payload["escalated_alert"] = escalated_alert
         return Response(response_payload, status=status.HTTP_201_CREATED)
 
 
@@ -1632,24 +1618,59 @@ class AssignedConcernListView(APIView):
                 {"detail": "You do not have permission to view assigned concerns."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        assigned_filter = Q(
-            assignments__assignee=request.user,
-            assignments__status=ConcernAssignment.Status.ACTIVE,
-        )
-        # Responders see only work explicitly assigned to their account. The
-        # department-wide unassigned fallback remains for officials managing
-        # a queue, never for a responder's personal workspace.
-        if request.user.role == User.Role.BARANGAY_OFFICIAL or request.user.is_superuser:
-            assigned_filter |= Q(
-                assignments__status=ConcernAssignment.Status.ACTIVE,
-                assignments__assignee__isnull=True,
-                assignments__department__designations__user=request.user,
-                assignments__department__designations__is_active=True,
+        scope = request.query_params.get("scope")
+        if scope == "unit" and request.user.role == User.Role.FIRST_RESPONDER:
+            # The current unit comes from the server-side designation (with the
+            # legacy responder enum handled by assigned_unit_for). A responder
+            # cannot turn this into a cross-unit report query.
+            assigned_unit = assigned_unit_for(request.user)
+            unit = (
+                Department.objects.filter(
+                    pk=assigned_unit.get("id") if assigned_unit else None,
+                    is_active=True,
+                ).first()
+                if assigned_unit
+                else None
             )
-        queryset = Concern.objects.filter(
-            assigned_filter,
-            validation_status=Concern.ValidationStatus.ACCEPTED,
-        ).exclude(status__in=[Concern.Status.RESOLVED, Concern.Status.REJECTED]).distinct().order_by("-created_at", "-id")
+            if unit is None:
+                queryset = Concern.objects.none()
+            else:
+                queryset = Concern.objects.filter(
+                    Q(assigned_department_id=unit.pk)
+                    | Q(
+                        assigned_department_id__isnull=True,
+                        category_ref__department_id=unit.pk,
+                    ),
+                    validation_status=Concern.ValidationStatus.ACCEPTED,
+                )
+        else:
+            include_closed = scope == "all"
+            assignment_statuses = [ConcernAssignment.Status.ACTIVE]
+            if include_closed:
+                assignment_statuses.append(ConcernAssignment.Status.COMPLETED)
+            assigned_filter = Q(
+                assignments__assignee=request.user,
+                assignments__status__in=assignment_statuses,
+            )
+            # Responders see only work explicitly assigned to their account.
+            # The department-wide unassigned fallback remains for officials
+            # managing a queue, never for a responder's personal workspace.
+            if request.user.role == User.Role.BARANGAY_OFFICIAL or request.user.is_superuser:
+                assigned_filter |= Q(
+                    assignments__status=ConcernAssignment.Status.ACTIVE,
+                    assignments__assignee__isnull=True,
+                    assignments__department__designations__user=request.user,
+                    assignments__department__designations__is_active=True,
+                )
+            queryset = Concern.objects.filter(
+                assigned_filter,
+                validation_status=Concern.ValidationStatus.ACCEPTED,
+            )
+        if scope not in {"all", "unit"}:
+            queryset = queryset.exclude(
+                status__in=[Concern.Status.RESOLVED, Concern.Status.REJECTED]
+            )
+        queryset = queryset.distinct().order_by("-created_at", "-id")
         queryset = queryset.select_related("assigned_department", "category_ref")
         return paginate_response(
             request,
@@ -1793,6 +1814,11 @@ class ConcernPublishView(APIView):
             pk=pk,
             reporter=request.user,
         )
+        if concern.category_ref and not concern.category_ref.public_feed_allowed:
+            return Response(
+                {"visibility": ["This report category is private."]},
+                status=status.HTTP_409_CONFLICT,
+            )
         if concern.validation_status != Concern.ValidationStatus.ACCEPTED:
             return Response(
                 {"validation_status": ["This report must be accepted before it can be shared publicly."]},
@@ -3656,6 +3682,28 @@ class AnnouncementListView(APIView):
             lambda page: AnnouncementSerializer(page, many=True).data,
         )
 
+def _announcement_audit_snapshot(announcement):
+    """Immutable, human-readable context for announcement audit details."""
+    return {
+        "announcement_id": announcement.pk,
+        "announcement_title": announcement.title,
+        "publication_status": AnnouncementSerializer().get_status_label(announcement),
+        "is_published": announcement.is_published,
+        "is_pinned": announcement.is_pinned,
+        "audience": announcement.audience,
+        "urgency": announcement.urgency,
+        "tag": announcement.tag,
+        "community": announcement.community.name if announcement.community else announcement.barangay,
+        "place": announcement.place_label,
+        "affected_streets": announcement.affected_streets,
+        "starts_at": announcement.starts_at.isoformat() if announcement.starts_at else None,
+        "expires_at": announcement.expires_at.isoformat() if announcement.expires_at else None,
+        "published_at": announcement.published_at.isoformat() if announcement.published_at else None,
+        "has_image": bool(announcement.image),
+        "image_alt": announcement.image_alt,
+    }
+
+
 class AnnouncementManageListCreateView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -3689,11 +3737,12 @@ class AnnouncementManageListCreateView(APIView):
         if not community:
             return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
         announcement = serializer.save(community=community, barangay=community.name)
+        refresh_announcement_summary(announcement, force=True)
         if announcement.is_published:
             mark_announcement_published(announcement)
             dispatch_due_announcements()
             announcement.refresh_from_db()
-        create_audit_log("announcement.created", actor=request.user, metadata={"announcement_id": announcement.pk, "is_published": announcement.is_published}, request_meta=request_meta(request))
+        create_audit_log("announcement.created", actor=request.user, metadata=_announcement_audit_snapshot(announcement), request_meta=request_meta(request))
         return Response(AnnouncementSerializer(announcement, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 class AnnouncementManageDetailView(APIView):
@@ -3706,10 +3755,17 @@ class AnnouncementManageDetailView(APIView):
             return Response({"detail": "You do not have permission to update announcements."}, status=status.HTTP_403_FORBIDDEN)
         from apps.community_scope import community_ids_for_user
         announcement = get_object_or_404(Announcement, pk=pk, community_id__in=community_ids_for_user(request.user))
+        before = _announcement_audit_snapshot(announcement)
+        before_title = announcement.title
+        before_body = announcement.body
         old_image_name = announcement.image.name if announcement.image else ""
         serializer = AnnouncementSerializer(announcement, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         announcement = serializer.save()
+        refresh_announcement_summary(
+            announcement,
+            force=(announcement.title != before_title or announcement.body != before_body),
+        )
         if old_image_name and announcement.image.name != old_image_name:
             # A replaced upload must not leave the previous blob orphaned.
             try:
@@ -3720,7 +3776,13 @@ class AnnouncementManageDetailView(APIView):
             mark_announcement_published(announcement)
             dispatch_due_announcements()
             announcement.refresh_from_db()
-        create_audit_log("announcement.updated", actor=request.user, metadata={"announcement_id": announcement.pk}, request_meta=request_meta(request))
+        after = _announcement_audit_snapshot(announcement)
+        changes = {
+            key: {"before": before.get(key), "after": value}
+            for key, value in after.items()
+            if key != "announcement_id" and before.get(key) != value
+        }
+        create_audit_log("announcement.updated", actor=request.user, metadata={**after, "changes": changes}, request_meta=request_meta(request))
         return Response(AnnouncementSerializer(announcement, context={"request": request}).data)
 
     def delete(self, request, pk):
@@ -3729,7 +3791,7 @@ class AnnouncementManageDetailView(APIView):
             return Response({"detail": "You do not have permission to delete announcements."}, status=status.HTTP_403_FORBIDDEN)
         from apps.community_scope import community_ids_for_user
         announcement = get_object_or_404(Announcement, pk=pk, community_id__in=community_ids_for_user(request.user))
-        create_audit_log("announcement.deleted", actor=request.user, metadata={"announcement_id": announcement.pk}, request_meta=request_meta(request))
+        create_audit_log("announcement.deleted", actor=request.user, metadata=_announcement_audit_snapshot(announcement), request_meta=request_meta(request))
         announcement.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

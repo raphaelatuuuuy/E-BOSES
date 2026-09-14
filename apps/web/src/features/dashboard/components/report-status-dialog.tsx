@@ -5,7 +5,6 @@ import {
   CopyIcon,
   PencilLineIcon,
   SearchIcon,
-  Share2Icon,
   XIcon,
 } from "lucide-react"
 
@@ -30,10 +29,6 @@ import {
   statusModeFromReport,
   type StatusDialogMode,
 } from "@/features/dashboard/components/report-status-mode"
-import {
-  canShareConcern,
-  shareConcernReport,
-} from "@/features/dashboard/lib/share-report"
 
 const STATUS_STEPS: Array<{ key: ConcernStatus; label: string }> = [
   { key: "submitted", label: "Submitted" },
@@ -312,7 +307,6 @@ export function ReportStatusDialog({
   onTrack?: () => void
 }) {
   const [copied, setCopied] = useState(false)
-  const [shared, setShared] = useState(false)
   const resolvedMode = mode ?? statusModeFromReport(report)
   const config = MODE_CONFIG[resolvedMode]
   const isInProgress =
@@ -345,14 +339,6 @@ export function ReportStatusDialog({
   function handleTrack() {
     handleClose()
     onTrack?.()
-  }
-
-  async function handleShare() {
-    const didShare = await shareConcernReport(report)
-    if (didShare) {
-      setShared(true)
-      window.setTimeout(() => setShared(false), 1800)
-    }
   }
 
   return (
@@ -541,16 +527,6 @@ export function ReportStatusDialog({
             >
               Done
             </button>
-            {canShareConcern(report) ? (
-              <button
-                type="button"
-                onClick={() => void handleShare()}
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-neutral-300 bg-white px-6 text-[15px] font-bold text-neutral-900 transition-colors hover:bg-neutral-50 sm:h-14 sm:px-7 sm:text-[16px]"
-              >
-                <Share2Icon className="size-5" strokeWidth={2.25} />
-                {shared ? "Link ready" : "Share report"}
-              </button>
-            ) : null}
             <button
               type="button"
               onClick={handleTrack}

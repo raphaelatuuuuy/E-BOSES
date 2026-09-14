@@ -29,3 +29,15 @@ export function displayPosition(user: AuthUser | null): string {
   if (isOfficialUser(user)) return "Barangay Official"
   return "Resident"
 }
+
+/** The assigned unit label shown under an official or responder's name. */
+export function displayUnit(user: AuthUser | null): string {
+  if (!user) return "Unit not assigned"
+  const unit = user.units?.[0]
+  if (unit) return unit.name || unit.short_name
+  if (isResponderUser(user)) {
+    return LEGACY_UNIT_LABELS[user.responder_unit || ""] || "Unit not assigned"
+  }
+  if (user.is_superuser) return "All units"
+  return "Unit not assigned"
+}

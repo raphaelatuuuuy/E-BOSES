@@ -34,21 +34,21 @@ export function CommentToggleButton({
   // "N comments" text — minus the upvote part, which announcements do
   // not have. Right-aligned on its own, matching the feed card footer.
   return (
-    <div className="flex items-center justify-end">
+    <div className="-mx-3.5 rounded-b-lg px-1.5">
       <button
         type="button"
         onClick={onClick}
         aria-expanded={active}
         aria-label={label}
         className={cn(
-          "flex shrink-0 items-center gap-1 text-[11px] font-medium transition-colors",
+          "flex min-h-12 w-full items-center justify-center gap-2 text-[14px] font-semibold transition-colors",
           active
             ? "text-neutral-800"
             : "text-neutral-500 hover:text-neutral-800"
         )}
       >
-        <MessageCircleIcon className="size-3.5 shrink-0" strokeWidth={2} />
-        <span>{count > 0 ? `${count} comments` : "Add a Comment"}</span>
+        <MessageCircleIcon className="size-[22px] shrink-0" strokeWidth={2} />
+        <span className="leading-none">{count > 0 ? `${count} ${count === 1 ? "comment" : "comments"}` : "Comment"}</span>
       </button>
     </div>
   )

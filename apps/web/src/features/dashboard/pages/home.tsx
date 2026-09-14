@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
-import { AlertTriangleIcon, ChevronRightIcon, CheckIcon } from "lucide-react"
+import { AlertTriangleIcon, ChevronRightIcon, CheckIcon, SearchIcon, SlidersHorizontalIcon } from "lucide-react"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isStaffUser } from "@/features/auth/roles"
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
 import { geocodeCommunityStreet } from "@/features/auth/lib/forward-geocode"
 import {
@@ -26,8 +27,11 @@ import {
 } from "@/features/dashboard/api"
 import { streetLabelFromAddress } from "@/features/dashboard/components/feed-post-text"
 import { CreateReportDialog } from "@/features/dashboard/components/create-report-dialog"
-import { ComposerCard } from "@/features/dashboard/components/home/composer-card"
 import { HomeRail } from "@/features/dashboard/components/home/home-rail"
+import {
+  LiveDot,
+  liveDotAriaLabel,
+} from "@/features/dashboard/components/home/live-dot"
 import { FeedPostCard } from "@/features/dashboard/components/feed-post-card"
 import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
 import {
@@ -45,6 +49,7 @@ import {
   rankFeed,
   type FeedOrigin,
 } from "@/features/dashboard/lib/feed-ranking"
+import { isCriticalConcern } from "@/features/dashboard/lib/critical-concern"
 import { AnnouncementCarousel } from "@/features/dashboard/components/home/announcement-carousel"
 import { usePageTitle } from "@/hooks/use-page-title"
 
@@ -58,16 +63,27 @@ const FEED_TABS = [
 type FeedTab = (typeof FEED_TABS)[number]["id"]
 
 export default function HomePage() {
-  usePageTitle("Home")
+  usePageTitle("Feed")
   const { user, loading: authLoading } = useAuthSession()
+  const staffFeed = isStaffUser(user)
 
   const [createOpen, setCreateOpen] = useState(false)
+
+  useEffect(() => {
+    function open() {
+      setCreateOpen(true)
+    }
+    window.addEventListener("eboses:open-report", open)
+    return () => window.removeEventListener("eboses:open-report", open)
+  }, [])
+
   const [feedTab, setFeedTab] = useState<FeedTab>("recent")
   const [origin, setOrigin] = useState<FeedOrigin | null>(null)
   /** True when we could not determine any position (geolocation denied / no
       geocoder hit) — drives the Nearby tab's empty-state wording. */
   const [nearbyUnavailable, setNearbyUnavailable] = useState(false)
   const [feedFilterOpen, setFeedFilterOpen] = useState(false)
+  const [feedSearch, setFeedSearch] = useState("")
 
   const [profileOpen, setProfileOpen] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -75,23 +91,46 @@ export default function HomePage() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [events, setEvents] = useState<BarangayEvent[]>([])
   const [concerns, setConcerns] = useState<Concern[]>([])
+  const location = useLocation()
+  const highlightId =
+    (location.state as { highlightConcernId?: number } | null)
+      ?.highlightConcernId ?? null
   const [expandedComments, setExpandedComments] = useState<Set<number>>(
-    new Set()
+    () => new Set(highlightId != null ? [highlightId] : [])
   )
   const [barangayActiveEmergencies, setBarangayActiveEmergencies] = useState(0)
+
+  useEffect(() => {
+    if (!loaded || highlightId == null) return
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    const timer = window.setTimeout(() => {
+      document
+        .getElementById(`feed-post-${highlightId}`)
+        ?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" })
+    }, 150)
+    return () => window.clearTimeout(timer)
+  }, [loaded, highlightId])
 
   const displayName = user
     ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
     : "Resident"
 
   const hasOngoingAlerts = barangayActiveEmergencies > 0
+  const activeCriticalReports = concerns.filter(
+    (concern) =>
+      !["resolved", "partially_resolved", "rejected", "appealed"].includes(
+        concern.status
+      ) && isCriticalConcern(concern)
+  ).length
+  const hasCriticalReports = activeCriticalReports > 0
+  const urgentAlertCount = barangayActiveEmergencies + activeCriticalReports
+  const hasUrgentAlerts = urgentAlertCount > 0
+  const hasLiveCriticalActivity = hasOngoingAlerts || hasCriticalReports
   const communityName = user?.barangay || "Your community"
 
   /** True when there is nothing at all to show in any tab — drives the
       "Nothing in the feed yet" onboarding card instead of a filter miss. */
-  const feedTotallyEmpty =
-    announcements.length === 0 &&
-    concerns.length === 0
+  const feedTotallyEmpty = announcements.length === 0 && concerns.length === 0
 
   const streetLabel = streetLabelFromAddress(user?.address)
 
@@ -147,14 +186,7 @@ export default function HomePage() {
         mapSnapshot,
       ] = await Promise.all([
         listAnnouncements(),
-        listFeedConcerns(
-          "all",
-          undefined,
-          undefined,
-          undefined,
-          "all",
-          origin
-        ),
+        listFeedConcerns("all", undefined, undefined, undefined, "all", origin),
         listBarangayEventCalendar(),
         getResidentDashboardSummary().catch(() => null),
         getResidentAlertsMap().catch(() => null),
@@ -332,10 +364,31 @@ export default function HomePage() {
     }
   }, [feedTab, origin, streetLabel, communityName])
 
-  const sortedConcerns = useMemo(
-    () => rankFeed(concerns, feedTab, origin),
-    [concerns, feedTab, origin]
-  )
+  const sortedConcerns = useMemo(() => {
+    const ranked = rankFeed(concerns, feedTab, origin)
+    if (highlightId == null) return ranked
+    const at = ranked.findIndex((post) => post.id === highlightId)
+    if (at <= 0) return ranked
+    const next = [...ranked]
+    const [hit] = next.splice(at, 1)
+    next.unshift(hit)
+    return next
+  }, [concerns, feedTab, origin, highlightId])
+
+  const visibleConcerns = useMemo(() => {
+    const q = feedSearch.trim().toLowerCase()
+    if (!q) return sortedConcerns
+    return sortedConcerns.filter((post) =>
+      [
+        post.title,
+        post.description,
+        post.address,
+        post.barangay,
+        post.tracking_id,
+        post.reporter?.full_name,
+      ].some((value) => value?.toLowerCase().includes(q))
+    )
+  }, [sortedConcerns, feedSearch])
 
   if (!loaded) {
     return (
@@ -366,141 +419,38 @@ export default function HomePage() {
       {/* Mobile top — also used at ~200% zoom (CSS width < 1024) */}
       <style>{`
         .resident-mobile-top { display: none; }
+        .resident-mobile-top.staff-feed-top { display: none !important; }
         .resident-home-rail { min-width: 0; }
         @media (max-width: ${RESIDENT_DESKTOP_MIN_PX - 1}px) {
           .resident-mobile-top { display: block; }
           .resident-home-desktop-grid { display: block !important; }
           .resident-home-rail { display: none !important; }
         }
-        /* Live Carto-light map badge; scan rings only on the green status dot */
-        .rail-live-dot {
-          position: relative;
-          display: inline-flex;
-          width: 40px;
-          height: 40px;
-          flex-shrink: 0;
-          align-items: center;
-          justify-content: center;
-        }
-        .rail-live-dot__map {
-          position: relative;
-          z-index: 1;
-          width: 40px;
-          height: 40px;
-          overflow: hidden;
-          border-radius: 9999px;
-          background: #e8eef5;
-        }
-        .rail-live-dot__map img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          display: block;
-        }
-        /* Green live dot — centered on the map; rings attach only to this dot */
-        .rail-live-dot__status-wrap {
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          z-index: 2;
-          width: 12px;
-          height: 12px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transform: translate(-50%, -50%);
-        }
-        .rail-live-dot__status {
-          position: relative;
-          z-index: 2;
-          width: 10px;
-          height: 10px;
-          border-radius: 9999px;
-          background: var(--color-brand-navy);
-          border: 1.5px solid #fff;
-          box-shadow: 0 0 0 1px rgb(7 20 95 / 0.25);
-        }
-        .rail-live-dot__status--alert {
-          background: var(--color-sos);
-          box-shadow: 0 0 0 1px rgb(242 59 53 / 0.35);
-        }
-        .rail-live-dot__ring {
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          width: 10px;
-          height: 10px;
-          margin-left: -5px;
-          margin-top: -5px;
-          border-radius: 9999px;
-          border: 1.5px solid rgba(34, 197, 94, 0.55);
-          animation: rail-live-scan 3.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
-          pointer-events: none;
-        }
-        .rail-live-dot__ring--alert {
-          border-color: rgba(239, 68, 68, 0.6);
-        }
-        .rail-live-dot__ring--delay {
-          animation-delay: 1.9s;
-        }
-        @keyframes rail-live-scan {
-          0% {
-            transform: scale(1);
-            opacity: 0.65;
-          }
-          70% {
-            transform: scale(2.6);
-            opacity: 0;
-          }
-          100% {
-            transform: scale(2.6);
-            opacity: 0;
-          }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .rail-live-dot__ring { animation: none; opacity: 0.3; transform: scale(1.4); }
-        }
+        /* Live Carto-light map badge styles live with the shared LiveDot. */
       `}</style>
       {/* Mobile top: map+status dot · community · notif · avatar */}
-      <header className="resident-mobile-top sticky top-0 z-30 bg-white">
+      <header className={cn("resident-mobile-top sticky top-0 z-30 mt-5 bg-white", staffFeed && "staff-feed-top")}>
         <div className="flex h-12 items-center gap-2 px-4">
-          <Link
-            to="/dashboard/alerts-map"
-            className="rail-live-dot shrink-0 no-underline"
-            aria-label={
+          <LiveDot
+            src={railMapSrc}
+            alert={hasLiveCriticalActivity}
+            label={
               hasOngoingAlerts
-                ? `Live map — ${barangayActiveEmergencies} ongoing alert${barangayActiveEmergencies === 1 ? "" : "s"}`
-                : `Live map — ${user?.barangay || "your community"}`
+                ? liveDotAriaLabel(
+                    user?.barangay || "your community",
+                    true,
+                    barangayActiveEmergencies
+                  )
+                : hasCriticalReports
+                  ? `Live map — critical reports in ${user?.barangay || "your community"}`
+                  : liveDotAriaLabel(
+                      user?.barangay || "your community",
+                      false,
+                      0
+                    )
             }
-            title="Open alerts map"
-          >
-            <span className="rail-live-dot__map">
-              <img src={railMapSrc} alt="" loading="lazy" decoding="async" />
-            </span>
-            <span className="rail-live-dot__status-wrap">
-              <span
-                className={cn(
-                  "rail-live-dot__ring",
-                  hasOngoingAlerts && "rail-live-dot__ring--alert"
-                )}
-                aria-hidden
-              />
-              <span
-                className={cn(
-                  "rail-live-dot__ring rail-live-dot__ring--delay",
-                  hasOngoingAlerts && "rail-live-dot__ring--alert"
-                )}
-                aria-hidden
-              />
-              <span
-                className={cn(
-                  "rail-live-dot__status",
-                  hasOngoingAlerts && "rail-live-dot__status--alert"
-                )}
-                aria-hidden
-              />
-            </span>
-          </Link>
+            to="/dashboard/alerts-map"
+          />
           <p className="min-w-0 flex-1 truncate text-[16px] font-bold tracking-tight text-neutral-900">
             {communityName}
           </p>
@@ -528,12 +478,29 @@ export default function HomePage() {
       <ResidentContentGrid className="resident-home-desktop-grid min-w-0 flex-1 pt-3 pb-6 max-lg:pt-3.5 lg:pt-3 lg:pb-8">
         {/* CENTER feed column */}
         <div className="w-full min-w-0 max-lg:px-3.5">
-          {/* Composer — mobile: rounded pill (avatar→Report); filter sits beside outside */}
-          <ComposerCard
-            user={sessionUserAsPublic}
-            onOpenComposer={() => setCreateOpen(true)}
-            onOpenFilter={() => setFeedFilterOpen(true)}
-          />
+          <div className="mb-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setFeedFilterOpen(true)}
+              aria-label="Filter feed"
+              className="flex size-12 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-700 transition-colors hover:bg-neutral-200"
+            >
+              <SlidersHorizontalIcon className="size-5" aria-hidden="true" />
+            </button>
+            <label className="flex h-12 min-w-0 flex-1 items-center gap-2 rounded-full bg-neutral-100 pr-4 pl-4">
+              <SearchIcon
+                className="size-5 shrink-0 text-neutral-500"
+                aria-hidden="true"
+              />
+              <input
+                value={feedSearch}
+                onChange={(event) => setFeedSearch(event.target.value)}
+                placeholder="Search feed"
+                aria-label="Search feed"
+                className="min-w-0 flex-1 bg-transparent text-[15px] text-neutral-900 outline-none placeholder:text-neutral-400"
+              />
+            </label>
+          </div>
 
           {/* Desktop: inline chips only */}
           <div className="mb-3 hidden flex-wrap items-center gap-1.5 lg:flex">
@@ -562,22 +529,26 @@ export default function HomePage() {
             <p className="mb-3 text-[15px] text-destructive">{error}</p>
           ) : null}
 
-          {hasOngoingAlerts ? (
+          {hasUrgentAlerts ? (
             <Link
               to="/dashboard/alerts-map"
               className="hover:bg-sos/10/80 mb-3 flex items-center gap-3 rounded-2xl border border-neutral-300 bg-sos/10 px-3.5 py-3 no-underline transition-colors lg:mb-2.5 lg:rounded-lg"
             >
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sos/10 text-sos">
-                <AlertTriangleIcon className="size-5" strokeWidth={2.25} />
+              <span className="flex size-12 shrink-0 items-center justify-center text-sos">
+                <AlertTriangleIcon
+                  className="size-7 motion-safe:animate-sos-icon-blink"
+                  strokeWidth={2.25}
+                  aria-hidden="true"
+                />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[15px] font-bold text-sos">
-                  {barangayActiveEmergencies} ongoing alert
-                  {barangayActiveEmergencies === 1 ? "" : "s"} in{" "}
+                  {urgentAlertCount} ongoing urgent alert
+                  {urgentAlertCount === 1 ? "" : "s"} in{" "}
                   {communityName}
                 </span>
                 <span className="mt-0.5 block text-[13px] font-medium text-sos/90">
-                  See concerns, emergencies, and announcements on the map
+                  View on the map
                 </span>
               </span>
               <ChevronRightIcon
@@ -587,44 +558,50 @@ export default function HomePage() {
             </Link>
           ) : null}
 
-          <div className="flex flex-col gap-3 lg:gap-2.5">
+          <div className="flex flex-col gap-2">
             <AnnouncementCarousel announcements={announcements} />
 
-            {sortedConcerns.map((post) => (
-              <FeedPostCard
-                key={post.id}
-                post={post}
-                sessionUser={sessionUserAsPublic}
-                commentsExpanded={expandedComments.has(post.id)}
-                onCommentsExpandedChange={(open) =>
-                  setExpandedComments((prev) => {
-                    const next = new Set(prev)
-                    if (open) next.add(post.id)
-                    else next.delete(post.id)
-                    return next
-                  })
-                }
-                onVote={(p) => void handleVote(p)}
-                onComment={(postId, body, parent) =>
-                  submitComment(postId, body, parent ?? null)
-                }
-                onEditComment={saveCommentEdit}
-                onDeleteComment={removeComment}
-              />
+            {visibleConcerns.map((post) => (
+              <div key={post.id} id={`feed-post-${post.id}`}>
+                <FeedPostCard
+                  post={post}
+                  sessionUser={sessionUserAsPublic}
+                  commentsExpanded={expandedComments.has(post.id)}
+                  onCommentsExpandedChange={(open) =>
+                    setExpandedComments((prev) => {
+                      const next = new Set(prev)
+                      if (open) next.add(post.id)
+                      else next.delete(post.id)
+                      return next
+                    })
+                  }
+                  onVote={(p) => void handleVote(p)}
+                  onComment={(postId, body, parent) =>
+                    submitComment(postId, body, parent ?? null)
+                  }
+                  onEditComment={saveCommentEdit}
+                  onDeleteComment={removeComment}
+                />
+              </div>
             ))}
 
-            {sortedConcerns.length === 0 && !error && !feedTotallyEmpty ? (
+            {visibleConcerns.length === 0 && !error && !feedTotallyEmpty ? (
               <div className="rounded-lg border border-neutral-300 bg-white px-5 py-8 text-center">
                 <p className="text-[15px] font-semibold text-neutral-700">
-                  {feedTab === "nearby"
-                    ? nearbyUnavailable
-                      ? "Location unavailable — allow location access to see posts near you."
-                      : "Nothing reported within 1.5 km of you."
-                    : "No posts match this filter."}
+                  {feedSearch.trim()
+                    ? "No posts match your search."
+                    : feedTab === "nearby"
+                      ? nearbyUnavailable
+                        ? "Location unavailable — allow location access to see posts near you."
+                        : "Nothing reported within 1.5 km of you."
+                      : "No posts match this filter."}
                 </p>
                 <button
                   type="button"
-                  onClick={() => setFeedTab("recent")}
+                  onClick={() => {
+                    setFeedSearch("")
+                    setFeedTab("recent")
+                  }}
                   className="mt-2 text-[14px] font-semibold text-brand-orange"
                 >
                   Show all recent posts
@@ -653,6 +630,7 @@ export default function HomePage() {
         {/* RIGHT RAIL — sticky while feed scrolls */}
         <HomeRail
           hasOngoingAlerts={hasOngoingAlerts}
+          hasCriticalReports={hasCriticalReports}
           barangayActiveEmergencies={barangayActiveEmergencies}
           railMapSrc={railMapSrc}
           streetLabel={streetLabel}

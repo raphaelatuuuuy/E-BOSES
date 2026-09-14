@@ -2,8 +2,8 @@
 
 Order of operations, and why:
 
-1. **Gemma** reads the title, description, selected category and — when one
-   decoded — the photo. It produces the whole assessment in a single call,
+1. **Gemma** reads the title, description, configured category catalog and —
+   when one decoded — the photo. It produces the whole assessment in a single call,
    including whether the photo *might* contain something privacy-sensitive.
 2. **The SAM3 gate** (`should_run_sam3`) decides whether a privacy scan is
    warranted. It is deliberately conservative: all four conditions must hold, so
@@ -425,18 +425,21 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     details["media_integrity"] = integrity_check["findings"]
     details["media_integrity_overall"] = integrity_check["overall"]
     photo_evidence_contradicted = _photo_evidence_contradicted(details)
-    photo_evidence_unsupported = _photo_evidence_unsupported(details)
+    photo_evidence_unsupported = _photo_evidence_unsupported(
+        details,
+        photo_count=len(image_media_list),
+    )
     if photo_evidence_contradicted or photo_evidence_unsupported:
         details["recommended_action"] = "request_more_information"
 
-    category_match = details.get("selected_category_match")
-    if category_match is None:
-        category_match = bool(gemma_result.category) and gemma_result.category == concern.category
+    # The model owns category selection. The report's initial category is only
+    # a storage fallback until the model returns a configured category.
+    category_match = bool(gemma_result.category)
+    initial_category = concern.category
 
     recommended_action = details.get("recommended_action") or "accept"
     recommendation = _recommendation(
         recommended_action,
-        category_match=bool(category_match),
         possible_duplicate=duplicate_match.possible_duplicate,
     )
 
@@ -469,7 +472,6 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         is_suspicious=gemma_result.is_suspicious,
         is_irrelevant=gemma_result.is_irrelevant,
         label=gemma_result.label,
-        category_match=bool(category_match),
         possible_duplicate=duplicate_match.possible_duplicate,
         urgent_attention=bool(details.get("urgent_attention")),
         integrity_check=integrity_check,
@@ -545,6 +547,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             concern,
             run_status=run_status,
             details=details,
+            photo_count=len(image_media_list),
             suggested_category=gemma_result.category,
             duplicate_match=duplicate_match,
             config=config,
@@ -559,6 +562,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             street_check=street_check,
             model_version=gemma_result.model_version,
             duration_ms=gemma_duration_ms,
+            initial_category=initial_category,
         )
 
         if media_to_queue:
@@ -596,7 +600,16 @@ def _apply_formatted_summary(concern, *, details, run_status) -> None:
     concern.save(update_fields=list(updates))
 
 
-def _record_decision_log(concern, *, details, integrity_check, street_check, model_version, duration_ms) -> None:
+def _record_decision_log(
+    concern,
+    *,
+    details,
+    integrity_check,
+    street_check,
+    model_version,
+    duration_ms,
+    initial_category,
+) -> None:
     """Append one audit row for this run.
 
     The concern pipeline is the highest-volume model path in the system and
@@ -618,8 +631,6 @@ def _record_decision_log(concern, *, details, integrity_check, street_check, mod
         "automated_street_imagery_inconclusive_resubmit": "Street-view location check",
         "automated_media_integrity": "Photo authenticity check",
         "automated_media_integrity_resubmit": "Photo authenticity check",
-        "automated_category_mismatch": "Category check",
-        "automated_category_mismatch_resubmit": "Category check",
         "automated_irrelevant": "Relevance check",
         "automated_incomplete": "Required information check",
     }
@@ -645,7 +656,7 @@ def _record_decision_log(concern, *, details, integrity_check, street_check, mod
             input_snapshot={
                 "title": (concern.title or "")[:300],
                 "description": (concern.description or "")[:2000],
-                "selected_category": concern.category,
+                "initial_category": initial_category,
                 "location": (concern.address or "")[:255],
             },
             output_snapshot={
@@ -745,6 +756,7 @@ def _apply_automated_validation(
     *,
     run_status: str,
     details: dict,
+    photo_count: int = 0,
     suggested_category: str,
     duplicate_match,
     config,
@@ -752,8 +764,10 @@ def _apply_automated_validation(
     integrity_check: dict | None = None,
 ) -> None:
     """Finish validation without creating an AI-review task for an official."""
-    uncertain = run_status != ConcernAiAssessment.Status.COMPLETED or (
-        bool(details.get("ai_result_uncertain")) and not bool(details.get("low_information"))
+    uncertain = (
+        run_status != ConcernAiAssessment.Status.COMPLETED
+        or (bool(details.get("ai_result_uncertain")) and not bool(details.get("low_information")))
+        or not suggested_category
     )
     relevance = str(details.get("relevance") or "").upper()
     action = str(details.get("recommended_action") or "")
@@ -786,7 +800,7 @@ def _apply_automated_validation(
         )
         return
 
-    if _photo_evidence_unsupported(details):
+    if _photo_evidence_unsupported(details, photo_count=photo_count):
         _reject_concern(
             concern,
             rejection_code="automated_photo_unsupported",
@@ -797,30 +811,10 @@ def _apply_automated_validation(
         )
         return
 
-    category_mismatch = not uncertain and bool(suggested_category) and suggested_category != concern.category
-    if category_mismatch:
-        mismatch_action = config.mismatch_action
-        if mismatch_action == ConcernClassificationConfiguration.MismatchAction.REJECT:
-            _reject_concern(
-                concern,
-                rejection_code="automated_category_mismatch",
-                summary=(
-                    "The selected category does not match what the report describes, so it was "
-                    "rejected automatically. Please submit a new report with the correct category."
-                ),
-            )
-            return
-        if mismatch_action == ConcernClassificationConfiguration.MismatchAction.RESUBMIT:
-            _reject_concern(
-                concern,
-                rejection_code="automated_category_mismatch_resubmit",
-                summary=(
-                    "The selected category does not match what the report describes. Please "
-                    "resubmit this report using the correct category."
-                ),
-            )
-            return
-        _apply_suggested_category(concern, suggested_category)
+    # The LLM classification is authoritative. Apply the configured category
+    # it selected before resolving the department routing rule; there is no
+    # resident-category mismatch decision in this flow anymore.
+    _apply_suggested_category(concern, suggested_category)
 
     # Placed after the category correction and before everything else: a photo
     # that may be fabricated is a more serious finding than a wrong category,
@@ -947,14 +941,28 @@ def _apply_automated_validation(
 
 
 def _apply_suggested_category(concern: Concern, suggested_category: str) -> None:
-    category = ConcernCategory.objects.filter(
-        code=suggested_category,
-        community=concern.community,
-        is_active=True,
-    ).select_related("department").first()
+    category = (
+        ConcernCategory.objects.filter(
+            code=suggested_category,
+            community=concern.community,
+            is_active=True,
+        )
+        .select_related("department")
+        .first()
+        or ConcernCategory.objects.filter(
+            code=suggested_category,
+            community__isnull=True,
+            is_active=True,
+        )
+        .select_related("department")
+        .first()
+    )
     if not category:
         if suggested_category in Concern.Category.values:
             concern.category = suggested_category
+            # Never route with the previous category's department when the
+            # LLM selected a legacy enum without a configured category row.
+            concern.category_ref = None
         return
     concern.category = suggested_category
     concern.category_ref = category
@@ -971,22 +979,21 @@ def _photo_evidence_contradicted(details: dict) -> bool:
     )
 
 
-def _photo_evidence_unsupported(details: dict) -> bool:
-    """Require at least one reviewed photo to visibly support the report.
+def _photo_evidence_unsupported(details: dict, *, photo_count: int | None = None) -> bool:
+    """Require every successfully reviewed photo to visibly support the report.
 
     Location context and a generally related scene are not evidence of the
     claimed defect. For example, a photo of an intact wet road does not support
-    a report of road damage even when the pin and surrounding street match.
+    a report of road damage even when another attached photo shows the damage.
     """
     if details.get("image_review_succeeded") is not True:
         return False
     verdicts = [item for item in details.get("photo_verdicts") or [] if isinstance(item, dict)]
     if not verdicts:
         return True
-    return not any(
-        str(item.get("relevance") or "").lower() == "supports_report"
-        for item in verdicts
-    )
+    if photo_count is not None and len(verdicts) < photo_count:
+        return True
+    return any(str(item.get("relevance") or "").lower() != "supports_report" for item in verdicts)
 
 
 def _routing_department_for_concern(concern: Concern):
@@ -1060,7 +1067,6 @@ def _flag_reasons(
     is_suspicious: bool,
     is_irrelevant: bool,
     label: str,
-    category_match: bool,
     possible_duplicate: bool,
     urgent_attention: bool,
     integrity_check: dict | None = None,
@@ -1072,8 +1078,6 @@ def _flag_reasons(
         reasons.append({"reason": "suspicious_text", "label": label})
     if config.flag_irrelevant and is_irrelevant:
         reasons.append({"reason": "irrelevant_text", "label": label})
-    if not category_match:
-        reasons.append({"reason": "category_mismatch", "configured_action": config.mismatch_action})
     if possible_duplicate:
         reasons.append({"reason": "possible_duplicate"})
     if urgent_attention:
@@ -1091,7 +1095,7 @@ def _flag_reasons(
     return reasons
 
 
-def _recommendation(action: str, *, category_match: bool, possible_duplicate: bool) -> str:
+def _recommendation(action: str, *, possible_duplicate: bool) -> str:
     """One short line for the queue list. The full wording lives in the UI.
 
     Duplicates and emergencies outrank the model's own suggestion because both
@@ -1108,8 +1112,6 @@ def _recommendation(action: str, *, category_match: bool, possible_duplicate: bo
         return "Ask the resident to submit the missing details."
     if action == "accept_with_privacy_review":
         return "Continue using the protected image."
-    if not category_match:
-        return "Use the detected category for routing."
     if action == "accept":
         return "Valid report; continue to routing."
     return "Continue through the automatic validation rules."

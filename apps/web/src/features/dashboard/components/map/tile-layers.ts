@@ -98,14 +98,60 @@ export function addBaseTiles(
     }, 1800)
   })
   if (!navigator.onLine) showFallback()
-  const refresh = () => tiles.redraw()
+
+  // Leaflet can create its tile grid while the map is still hidden or has a
+  // zero-sized parent (for example while a dialog/page transition settles).
+  // In that state the map pane is grey until a later zoom forces Leaflet to
+  // recalculate the grid. Repaint after the container gets a real size so the
+  // first online render does not depend on user interaction.
+  let repaintFrame: number | null = null
+  let initialPaintTimer: number | null = null
+  let settledPaintTimer: number | null = null
+  let hasUsableSize = false
+  let lastSize = ""
+  const repaint = () => {
+    repaintFrame = null
+    const box = map.getContainer().getBoundingClientRect()
+    if (!box.width || !box.height) return
+
+    const size = `${Math.round(box.width)}x${Math.round(box.height)}`
+    const sizeChanged = size !== lastSize
+    const wasCollapsed = !hasUsableSize
+    map.invalidateSize({ animate: false })
+    if (wasCollapsed || sizeChanged) {
+      tiles.redraw()
+    }
+    if (wasCollapsed) {
+      const zoom = map.getZoom()
+      map.setZoom(zoom, { animate: false })
+    }
+    hasUsableSize = true
+    lastSize = size
+  }
+  const scheduleRepaint = () => {
+    if (repaintFrame != null) window.cancelAnimationFrame(repaintFrame)
+    repaintFrame = window.requestAnimationFrame(repaint)
+  }
+  const refresh = () => {
+    tiles.redraw()
+    scheduleRepaint()
+  }
   window.addEventListener("online", refresh)
-  const observer = new ResizeObserver(() => map.invalidateSize())
+  const observer = new ResizeObserver(scheduleRepaint)
   observer.observe(map.getContainer())
+  scheduleRepaint()
+  initialPaintTimer = window.setTimeout(scheduleRepaint, 120)
+  settledPaintTimer = window.setTimeout(scheduleRepaint, 320)
   map.once("unload", () => {
     window.removeEventListener("online", refresh)
     if (fallbackTimer != null) window.clearTimeout(fallbackTimer)
+    if (repaintFrame != null) window.cancelAnimationFrame(repaintFrame)
+    if (initialPaintTimer != null) window.clearTimeout(initialPaintTimer)
+    if (settledPaintTimer != null) window.clearTimeout(settledPaintTimer)
     fallbackTimer = null
+    repaintFrame = null
+    initialPaintTimer = null
+    settledPaintTimer = null
     removeFallback()
     observer.disconnect()
   })

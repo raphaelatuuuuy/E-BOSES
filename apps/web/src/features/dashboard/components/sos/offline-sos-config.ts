@@ -1,5 +1,11 @@
 export const SOS_SMS_NUMBER = "09640746068"
-export const SOS_CONFIG_VERSION = 2
+import type {
+  EmergencyCategory,
+  EmergencyQuickQuestion,
+} from "@/features/dashboard/emergency-api"
+import { defaultQuickQuestionsForCategory } from "./sos-questions.ts"
+
+export const SOS_CONFIG_VERSION = 3
 
 export type OfflineStreet = {
   name: string
@@ -12,6 +18,15 @@ export type OfflineStreetEstimate = {
   distanceMeters: number
   confidence: "high" | "medium"
   secondaryStreet: string
+}
+
+export type OfflineEmergencyCategory = {
+  code: string
+  label: string
+  subtext: string
+  icon_key?: string
+  custom_icon_label?: string
+  quick_questions?: EmergencyQuickQuestion[]
 }
 
 export type OfflineSosConfig = {
@@ -35,10 +50,60 @@ export type OfflineSosConfig = {
       geometry?: GeoJSON.Geometry | null
     }
     streets: OfflineStreet[]
+    categories?: OfflineEmergencyCategory[]
   }
 }
 
-const STORAGE_KEY = "eboses:offline-sos-config:v2"
+const STORAGE_KEY = "eboses:offline-sos-config:v3"
+
+const BASELINE_CATEGORIES: OfflineEmergencyCategory[] = [
+  ["fire", "Fire", "Fire, smoke, burning", "flame"],
+  [
+    "medical",
+    "Medical Emergency",
+    "Injury, collapse, hard breathing",
+    "activity",
+  ],
+  ["flood", "Flood", "Rising water, flooding", "waves"],
+  [
+    "crime",
+    "Crime or Public Safety",
+    "Theft, fight, public safety",
+    "shield-alert",
+  ],
+  [
+    "domestic_violence",
+    "Domestic Violence",
+    "Violence at home, VAWC cases",
+    "heart-crack",
+  ],
+  [
+    "child_protection",
+    "Child Protection",
+    "Child abuse, neglect, exploitation",
+    "baby",
+  ],
+  [
+    "dangerous_animal",
+    "Dangerous Animal",
+    "Loose or dangerous animal",
+    "siren",
+  ],
+  ["disaster", "Disaster", "Earthquake, landslide, storm", "cloud-rain-wind"],
+  [
+    "drug_related",
+    "Drug-Related Incident",
+    "Drug-related incident or concern",
+    "pill",
+  ],
+  ["other", "Other Emergency", "Emergency not listed above", "siren"],
+].map(([code, label, subtext, icon_key]) => ({
+  code,
+  label,
+  subtext,
+  icon_key,
+  quick_questions: defaultQuickQuestionsForCategory(code),
+}))
 
 // Versioned, build-shipped fallback for the one-phone Marikina Heights pilot.
 // The polygon is the locally stored simplified outline; the API refresh replaces
@@ -62,6 +127,7 @@ export const BASELINE_OFFLINE_SOS_CONFIG: OfflineSosConfig = {
       radiusMeters: 1468,
       geometry: null,
     },
+    categories: BASELINE_CATEGORIES,
     streets: [
       {
         name: "Champaca Street",
@@ -131,6 +197,28 @@ export function loadOfflineSosConfig(): OfflineSosConfig {
     // Storage can be disabled in private browsing; the bundled copy still works.
   }
   return BASELINE_OFFLINE_SOS_CONFIG
+}
+
+export function offlineCategoriesFromConfig(
+  config = loadOfflineSosConfig()
+): EmergencyCategory[] {
+  return (config.community?.categories ?? []).map((category, index) => ({
+    id: -(index + 1),
+    code: category.code,
+    label: category.label,
+    subtext: category.subtext,
+    icon_key: category.icon_key ?? "siren",
+    custom_icon_label: category.custom_icon_label ?? "",
+    icon_image: "",
+    icon_image_url: "",
+    is_covered: true,
+    sort_order: index,
+    is_active: true,
+    visible_to_residents: true,
+    quick_questions: category.quick_questions ?? [],
+    created_at: "",
+    updated_at: "",
+  }))
 }
 
 export function cacheOfflineSosConfig(config: OfflineSosConfig) {
@@ -212,7 +300,8 @@ export function estimateOfflineStreet(
   )
     return null
 
-  const candidates = (config.communities ?? [config.community]).flatMap((community) => community.streets)
+  const candidates = (config.communities ?? [config.community])
+    .flatMap((community) => community.streets)
     .map((street) => ({
       name: street.name.trim(),
       distanceMeters: streetDistanceMeters(latitude, longitude, street),
@@ -262,7 +351,12 @@ export function nearestOfflineStreet(
 export async function refreshOfflineSosConfig() {
   if (!navigator.onLine) return loadOfflineSosConfig()
   try {
-    const response = await fetch("/api/public/offline-sos-config/", {
+    const rawApiBase = (import.meta.env?.VITE_API_BASE_URL ?? "/api").trim()
+    const apiBase =
+      !rawApiBase || rawApiBase === "/" || rawApiBase === "/api"
+        ? "/api"
+        : rawApiBase.replace(/\/$/, "")
+    const response = await fetch(`${apiBase}/public/offline-sos-config/`, {
       credentials: "omit",
       cache: "no-store",
     })

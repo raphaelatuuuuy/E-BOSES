@@ -1,8 +1,4 @@
-import {
-  AlertTriangleIcon,
-  ChevronLeftIcon,
-  SignalIcon,
-} from "lucide-react"
+import { ChevronLeftIcon, TriangleAlertIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -73,53 +69,53 @@ export function EmergencyPreviewCard({
         onClick={onOpen}
         className="w-full px-3 py-3 text-left sm:px-3.5"
       >
-        <div className="flex items-start gap-2.5 sm:gap-3">
-          <span
-            className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-full sm:size-10",
-              settled
-                ? "bg-neutral-100 text-neutral-500"
-                : "bg-severity-critical-surface text-sos"
-            )}
-          >
-            <AlertTriangleIcon className="size-5" strokeWidth={1.9} />
-          </span>
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <div className="flex items-start justify-between gap-2">
-              <p className="min-w-0 flex-1 text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
-                {live
-                  ? `Ongoing ${brief.title.toLowerCase()} around ${brief.street}`
-                  : brief.title}
-              </p>
-              {!live ? (
-                <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
-                  Resolved
-                </span>
-              ) : showCriticalPriority ? (
-                <span
-                  className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-severity-critical-ink sm:text-[12px]"
-                  title="Critical priority"
-                >
-                  <SignalIcon className="size-3.5 shrink-0" strokeWidth={2} />
-                  Critical priority
-                </span>
-              ) : null}
-            </div>
-            <p className="mt-1 text-[11px] text-neutral-500 sm:text-[12px]">
-              {[emergency.community.name, brief.street, dist, ago]
-                .filter(Boolean)
-                .join(" · ")}
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="flex items-start justify-between gap-2">
+            <p className="min-w-0 flex-1 text-[13px] leading-snug font-bold break-words text-neutral-900 sm:text-[14px]">
+              <span
+                className={cn(
+                  "mr-1.5 inline-flex size-5 shrink-0 items-center justify-center align-[-4px]",
+                  settled ? "text-neutral-500" : "text-sos"
+                )}
+                aria-hidden="true"
+              >
+                <TriangleAlertIcon className="size-5" strokeWidth={1.9} />
+              </span>
+              {live
+                ? `Ongoing ${brief.title.toLowerCase()} around ${brief.street}`
+                : brief.title}
             </p>
-            <div className="mt-1">
-              {displayNoteLabel ? (
-                <p className="mb-0.5 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
-                  {displayNoteLabel}
-                </p>
-              ) : null}
-              <p className="line-clamp-2 text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
-                {displayNote}
+            {!live ? (
+              <span className="inline-flex shrink-0 items-center text-[11px] font-semibold text-neutral-500 sm:text-[12px]">
+                Resolved
+              </span>
+            ) : showCriticalPriority ? (
+              <span
+                className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-severity-critical-map-ink sm:text-[12px]"
+                title="Critical priority"
+              >
+                <TriangleAlertIcon
+                  className="size-3.5 shrink-0"
+                  strokeWidth={2.25}
+                />
+                Critical priority
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-1 text-[11px] text-neutral-500 sm:text-[12px]">
+            {[emergency.community.name, brief.street, dist, ago]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+          <div className="mt-1">
+            {displayNoteLabel ? (
+              <p className="mb-0.5 text-[10px] font-bold tracking-[0.06em] text-neutral-400 uppercase">
+                {displayNoteLabel}
               </p>
-            </div>
+            ) : null}
+            <p className="line-clamp-2 text-[12px] leading-snug text-neutral-600 sm:text-[13px]">
+              {displayNote}
+            </p>
           </div>
         </div>
       </button>
@@ -173,9 +169,7 @@ export function EmergencyDetailPanel({
         : ""
 
   return (
-    <div
-      className="flex h-full min-h-0 flex-col bg-white text-neutral-900"
-    >
+    <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900">
       <div className="flex shrink-0 items-center gap-1 px-2 pt-3 pb-1">
         <button
           type="button"
@@ -200,7 +194,7 @@ export function EmergencyDetailPanel({
                 : "bg-severity-critical-surface text-sos"
             )}
           >
-            <AlertTriangleIcon className="size-6" strokeWidth={1.9} />
+            <TriangleAlertIcon className="size-6" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">

@@ -92,7 +92,20 @@ export function LocationPinMap({
       null) as CoverageInput["boundary"]
     return { boundary, policy: context?.dispatch_policy ?? null }
   }, [context])
-  const [svPicking, setSvPicking] = useState(false)
+
+  function openStreetViewAtPin() {
+    const map = mapRef.current
+    if (!map) return
+    const center = map.getCenter()
+    const lat = pin?.lat ?? center.lat
+    const lng = pin?.lng ?? center.lng
+    if (!insideCoverage(lat, lng, coverageRef.current)) {
+      toast.error(OUT_OF_SCOPE_MESSAGE)
+      return
+    }
+    map.setView([lat, lng], Math.max(map.getZoom(), 16))
+    setSvCoord({ lat, lng })
+  }
 
   function scheduleStreetLookup(lat: number, lng: number) {
     const lookupKey = `${lat.toFixed(5)},${lng.toFixed(5)}`
@@ -103,7 +116,7 @@ export function LocationPinMap({
       const wait = Math.max(
         0,
         STREET_LOOKUP_MIN_INTERVAL_MS -
-          (Date.now() - lastStreetLookupAtRef.current),
+          (Date.now() - lastStreetLookupAtRef.current)
       )
       if (wait > 0) {
         reverseTimer.current = window.setTimeout(run, wait)
@@ -415,38 +428,6 @@ export function LocationPinMap({
     )
   }
 
-  useEffect(() => {
-    if (!svPicking) return
-    const map = mapRef.current
-    if (!map) return
-    const container = map.getContainer()
-    container.classList.add("eboses-sv-pick")
-    function onMapClick(event: leaflet.LeafletMouseEvent) {
-      const lat = event.latlng.lat
-      const lng = event.latlng.lng
-      if (!insideCoverage(lat, lng, coverageRef.current)) {
-        toast.error(OUT_OF_SCOPE_MESSAGE)
-        return
-      }
-      setSvPicking(false)
-      mapRef.current?.setView(
-        [lat, lng],
-        Math.max(mapRef.current.getZoom(), 16)
-      )
-      setSvCoord({ lat, lng })
-    }
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setSvPicking(false)
-    }
-    map.on("click", onMapClick)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      container.classList.remove("eboses-sv-pick")
-      map.off("click", onMapClick)
-      document.removeEventListener("keydown", onKey)
-    }
-  }, [svPicking])
-
   return (
     <div>
       <div
@@ -485,13 +466,8 @@ export function LocationPinMap({
             <MapStackDivider className="bg-neutral-200" />
             <MapStackButton
               className="bg-white text-neutral-900 hover:bg-white hover:text-neutral-900"
-              active={svPicking}
-              label={
-                svPicking
-                  ? "Cancel Street View pick"
-                  : "Click the map, then open Street View there"
-              }
-              onClick={() => setSvPicking((value) => !value)}
+              label="Open Street View here"
+              onClick={openStreetViewAtPin}
             >
               <FootprintsIcon
                 className="size-5"
@@ -500,14 +476,6 @@ export function LocationPinMap({
               />
             </MapStackButton>
           </MapControlStack>
-        ) : null}
-
-        {svPicking && !svCoord ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-[1100] flex justify-center px-4">
-            <p className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-neutral-700 shadow-md">
-              Click the map to open Street View there · Esc cancels
-            </p>
-          </div>
         ) : null}
 
         {svCoord ? (
@@ -537,7 +505,7 @@ export function LocationPinMap({
           />
         ) : null}
 
-        {!svCoord && !svPicking ? (
+        {!svCoord ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-3 z-[1100] flex flex-col items-center gap-2 px-4">
             {outOfScope ? (
               <p

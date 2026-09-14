@@ -1,4 +1,13 @@
-import { useEffect, type ReactNode } from "react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react"
 import { createPortal } from "react-dom"
 import { ArrowLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
 
@@ -23,12 +32,40 @@ import { cn } from "@workspace/ui/lib/utils"
 export const SHEET_SURFACE =
   "border-neutral-200 bg-white p-0 [border-radius:28px] overflow-hidden"
 
+type SheetFooterRegistrar = (footer: ReactNode | null) => void
+
+const SheetFooterContext = createContext<SheetFooterRegistrar | null>(null)
+
+/**
+ * Lets an embedded workspace pin a footer into its owning SheetDialog rather
+ * than placing controls inside the scrollable body.
+ */
+export function useSheetDialogFooter(
+  footer: ReactNode | null,
+  active = true,
+) {
+  const registerFooter = useContext(SheetFooterContext)
+
+  useEffect(() => {
+    if (!registerFooter || !active) return
+    registerFooter(footer)
+    return () => registerFooter(null)
+  }, [active, footer, registerFooter])
+
+  return Boolean(registerFooter && active)
+}
+
 export function SheetDialog({
   open,
   onClose,
   onBack,
   title,
+  titleClassName,
   description,
+  headerTop,
+  backdrop,
+  backdropScrim = true,
+  backdropInteractive = false,
   titleId = "sheet-dialog-title",
   size = "compact",
   actions,
@@ -36,13 +73,24 @@ export function SheetDialog({
   footer,
   className,
   bodyClassName,
+  draggable = false,
+  showClose = true,
 }: {
   open: boolean
   onClose: () => void
   /** Shows the back arrow. Omit on a first-step / single-step dialog. */
   onBack?: () => void
   title: string
+  titleClassName?: string
   description?: ReactNode
+  /** Optional centered line shown above the sheet title. */
+  headerTop?: ReactNode
+  /** Optional visual context rendered behind the sheet (for example a map). */
+  backdrop?: ReactNode
+  /** Keep the visual context at full brightness when false. */
+  backdropScrim?: boolean
+  /** Allow the visual context to receive pointer input behind the sheet. */
+  backdropInteractive?: boolean
   titleId?: string
   /** `wide` is for dialogs holding a workspace rather than a short list. */
   size?: "compact" | "wide"
@@ -53,7 +101,18 @@ export function SheetDialog({
   footer?: ReactNode
   className?: string
   bodyClassName?: string
+  draggable?: boolean
+  showClose?: boolean
 }) {
+  const [dragY, setDragY] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const [registeredFooter, setRegisteredFooter] = useState<ReactNode>(null)
+  const sheetRef = useRef<HTMLDivElement>(null)
+  const startY = useRef(0)
+  const lastY = useRef(0)
+  const lastT = useRef(0)
+  const flickV = useRef(0)
+
   useEffect(() => {
     if (!open) return
     const prev = document.body.style.overflow
@@ -72,50 +131,182 @@ export function SheetDialog({
     return () => document.removeEventListener("keydown", onKey)
   }, [open, onClose])
 
+  useEffect(() => {
+    if (!dragging) return
+    function move(e: PointerEvent) {
+      onHandlePointerMove(e as unknown as ReactPointerEvent<HTMLDivElement>)
+    }
+    function up(e: PointerEvent) {
+      onHandlePointerUp(e as unknown as ReactPointerEvent<HTMLDivElement>)
+    }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up)
+    window.addEventListener("pointercancel", up)
+    return () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+      window.removeEventListener("pointercancel", up)
+    }
+  })
+
+  function beginDrag(clientY: number) {
+    startY.current = clientY
+    lastY.current = clientY
+    lastT.current = performance.now()
+    flickV.current = 0
+    setDragging(true)
+  }
+
+  function onHandlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!draggable) return
+    beginDrag(e.clientY)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  function onHeaderPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!draggable) return
+    if ((e.target as HTMLElement).closest("button,input,textarea,a")) return
+    beginDrag(e.clientY)
+  }
+
+  const registerFooter = useCallback<SheetFooterRegistrar>((next) => {
+    setRegisteredFooter(() => next)
+  }, [])
+
+  function onHandlePointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragging) return
+    const now = performance.now()
+    const dt = Math.max(now - lastT.current, 1)
+    flickV.current = (e.clientY - lastY.current) / dt
+    lastY.current = e.clientY
+    lastT.current = now
+    const dy = e.clientY - startY.current
+    setDragY(Math.max(dy, 0))
+  }
+
+  function onHandlePointerUp(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragging) return
+    setDragging(false)
+    const dy = e.clientY - startY.current
+    const fresh = performance.now() - lastT.current < 120
+    const velocity = fresh ? flickV.current : 0
+    const height = sheetRef.current?.offsetHeight ?? 600
+    if (dy > Math.min(140, height * 0.25) || (velocity > 0.6 && dy > 40)) {
+      setDragY(0)
+      onClose()
+    } else {
+      setDragY(0)
+    }
+  }
+
   if (typeof document === "undefined" || !open) return null
 
+  const activeFooter = footer ?? registeredFooter
+
   return createPortal(
-    <div className="fixed inset-0 z-[400] flex items-end justify-center sm:items-center sm:p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden />
+    <SheetFooterContext.Provider value={registerFooter}>
+      <div className="fixed inset-0 z-[400] flex items-end justify-center sm:items-center sm:p-4">
+      {backdrop ? (
+        <div
+          className={cn(
+            "absolute inset-0 z-0 isolate overflow-hidden",
+            backdropInteractive ? "pointer-events-auto" : "pointer-events-none"
+          )}
+          aria-hidden={!backdropInteractive}
+        >
+          {backdrop}
+        </div>
+      ) : null}
+      {backdropScrim ? (
+        <div
+          className={cn("absolute inset-0", backdrop ? "bg-black/20" : "bg-black/50")}
+          onClick={onClose}
+          aria-hidden
+        />
+      ) : null}
 
       <div
+        ref={sheetRef}
+        data-sheet-dialog="true"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        style={
+          draggable && dragY !== 0
+            ? { transform: `translateY(${dragY}px)` }
+            : undefined
+        }
         className={cn(
           "relative z-10 flex w-full flex-col overflow-hidden bg-white shadow-2xl",
           "max-h-[min(720px,92dvh)] rounded-t-[28px] sm:rounded-[28px]",
           size === "wide" ? "sm:max-w-2xl" : "sm:max-w-[440px]",
+          draggable && !dragging && "transition-transform duration-200 ease-out",
           className,
         )}
       >
+        {draggable ? (
+          <div
+            onPointerDown={onHandlePointerDown}
+            onPointerMove={onHandlePointerMove}
+            onPointerUp={onHandlePointerUp}
+            onPointerCancel={onHandlePointerUp}
+            className="shrink-0 cursor-grab touch-none px-5 pt-2.5 pb-1 active:cursor-grabbing"
+          >
+            <div
+              aria-hidden
+              className="mx-auto h-1 w-10 rounded-full bg-neutral-300"
+            />
+          </div>
+        ) : null}
         {/* Back arrow, title, then every icon action seated together on the
             right. The title's left edge lines up with the body when there is
             no back arrow, and with the arrow's label position when there is. */}
-        <div className="flex shrink-0 items-center gap-2 px-5 pb-3 pt-5">
-          {onBack ? (
-            <SheetIconButton label="Back" onClick={onBack} className="-ml-2">
-              <ArrowLeftIcon className="size-6" strokeWidth={2} />
-            </SheetIconButton>
+        <div
+          onPointerDown={onHeaderPointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerUp}
+          className={cn(
+            "shrink-0 px-5 pb-3",
+            headerTop ? "pt-3" : "pt-5",
+            draggable && "touch-none select-none"
+          )}
+        >
+          {headerTop ? (
+            <p className="mb-1 truncate text-center text-[12px] leading-4 font-normal text-neutral-500">
+              {headerTop}
+            </p>
           ) : null}
-
-          <div className="min-w-0 flex-1">
-            <h2
-              id={titleId}
-              className="text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900"
-            >
-              {title}
-            </h2>
-            {description ? (
-              <p className="mt-1.5 text-[15px] leading-snug text-neutral-500">{description}</p>
+          <div className="flex items-center gap-2">
+            {onBack ? (
+              <SheetIconButton label="Back" onClick={onBack} className="-ml-2">
+                <ArrowLeftIcon className="size-6" strokeWidth={2} />
+              </SheetIconButton>
             ) : null}
-          </div>
 
-          <div className="-mr-2 flex shrink-0 items-center gap-0.5">
-            {actions}
-            <SheetIconButton label="Close" onClick={onClose}>
-              <XIcon className="size-6" strokeWidth={2} />
-            </SheetIconButton>
+            <div className="min-w-0 flex-1">
+              <h2
+                id={titleId}
+                className={cn(
+                  "text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900",
+                  titleClassName
+                )}
+              >
+                {title}
+              </h2>
+              {description ? (
+                <p className="mt-1.5 text-[15px] leading-snug text-neutral-500">{description}</p>
+              ) : null}
+            </div>
+
+            <div className="-mr-2 flex shrink-0 items-center gap-0.5">
+              {actions}
+              {showClose ? (
+                <SheetIconButton label="Close" onClick={onClose}>
+                  <XIcon className="size-6" strokeWidth={2} />
+                </SheetIconButton>
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -123,9 +314,10 @@ export function SheetDialog({
           {children}
         </div>
 
-        {footer ? <div className="shrink-0 px-5 pb-6 pt-2">{footer}</div> : null}
+        {activeFooter ? <div className="shrink-0 px-5 pb-6 pt-2">{activeFooter}</div> : null}
       </div>
-    </div>,
+      </div>
+    </SheetFooterContext.Provider>,
     document.body,
   )
 }
@@ -354,24 +546,45 @@ export function SheetPrimaryButton({
   )
 }
 
-/** Secondary, quieter action stacked under the primary one. */
+/** Secondary, quieter action used beside the primary one. */
 export function SheetSecondaryButton({
   onClick,
+  disabled = false,
   children,
   className,
 }: {
   onClick: () => void
+  disabled?: boolean
   children: ReactNode
   className?: string
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className={cn("mt-2 flex h-[52px] w-full items-center justify-center rounded-full text-[17px] font-semibold text-neutral-600 transition-colors hover:bg-neutral-200 bg-neutral-100", className)}
+      className={cn(
+        "flex h-[52px] w-full items-center justify-center rounded-full bg-neutral-100 text-[17px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-200 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400",
+        className,
+      )}
     >
       {children}
     </button>
+  )
+}
+
+/** One-row action hierarchy: secondary first, primary second. */
+export function SheetActionRow({
+  children,
+  className,
+}: {
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={cn("flex gap-2 [&>*]:min-w-0 [&>*]:flex-1", className)}>
+      {children}
+    </div>
   )
 }
 

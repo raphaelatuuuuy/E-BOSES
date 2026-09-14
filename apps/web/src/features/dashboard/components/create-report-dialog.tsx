@@ -14,6 +14,8 @@ import {
   CameraIcon,
   CircleXIcon,
   ImageIcon,
+  InfoIcon,
+  LoaderCircleIcon,
   MapPinIcon,
   PlusIcon,
   XIcon,
@@ -49,9 +51,228 @@ const LocationPickerModal = lazy(
 const ALLOWED_TYPES = ["image/png", "image/jpeg"]
 const ACCEPT_STRING = ".png,.jpg,.jpeg," + ALLOWED_TYPES.join(",")
 const MAX_FILE_SIZE = 10 * 1024 * 1024
-const MAX_FILES = 5
+const MAX_FILES = 3
 const descriptionMin = 40
 const descriptionMax = 1500
+const PHOTO_MISMATCH_MESSAGE =
+  "The photo does not show the issue described in the report. Please submit a photo that clearly shows the reported issue."
+const PHOTO_MISMATCH_FRIENDLY_MESSAGE =
+  "Please remove photos that don't show the reported issue and upload clear ones."
+const STREET_IMAGERY_FEEDBACK =
+  "Please pin the exact area where the issue is found and upload a matching photo."
+
+type FooterErrorTone = "error" | "info"
+
+const FRIENDLY_ERROR_TEXT: Record<string, string> = {
+  "Describe what happened.":
+    "Tell us what happened — a short description is required.",
+  "Describe the issue in at least 40 characters.":
+    "Add a bit more detail (at least 40 characters) so officials understand the issue.",
+  "Attach at least one image.":
+    "Add at least one photo so officials can see the issue.",
+  "Unsupported format. Use JPG or PNG.":
+    "That file type isn't supported. Please choose a JPG or PNG photo.",
+  "File must be 10 MB or smaller.":
+    "That photo is over 10 MB. Try a smaller version or take a new photo.",
+  "This file is already selected.": "You've already added this photo.",
+  "You can attach up to 3 photos.":
+    "You can add up to 3 photos — remove one to add another.",
+  "One or more photos could not be validated.":
+    "We couldn't check one or more photos. Try adding them again.",
+  "This photo was already uploaded before.":
+    "This photo was already used in another report. Please use a different photo.",
+  "This image appears to have been uploaded before.":
+    "This photo was already used in another report. Please use a different photo.",
+  "Report attachment files must be 10MB or smaller.":
+    "That photo is over 10 MB. Try a smaller version or take a new photo.",
+  "Report attachment files must be JPG, JPEG, or PNG.":
+    "That file type isn't supported. Please choose a JPG or PNG photo.",
+  "Report attachment files must be valid JPG, JPEG, or PNG files.":
+    "That file looks damaged or isn't a real photo. Please choose another one.",
+  "Uploaded file content does not match its extension or MIME type.":
+    "That file doesn't look like a real photo. Please choose another one.",
+  "This photo appears to be AI-generated. Please upload a genuine photo taken with your camera.":
+    "Please upload an original, unedited photo taken with your camera.",
+  "This photo appears to be edited or digitally altered. Please upload the original, unedited photo.":
+    "Please upload an original, unedited photo taken with your camera.",
+  "This photo appears digitally manipulated. Please upload a genuine, unedited photo taken with your camera.":
+    "Please upload an original, unedited photo taken with your camera.",
+  "This photo could not pass the authenticity check. Please upload the original photo.":
+    "Please upload an original, unedited photo taken with your camera.",
+  "Proof image is too small. Use a clearer, larger photo.":
+    "That photo is too small to see clearly. Move closer and take a bigger, clearer photo.",
+  "Proof image has no visible detail. Upload a clearer photo.":
+    "That photo came out blank or unclear. Please take a clearer photo with good lighting.",
+  "Uploaded file failed malware scanning.":
+    "That file didn't pass our safety check. Please try a different photo.",
+  "Image uploads must be valid JPG or PNG files.":
+    "That file isn't a valid photo. Please choose a JPG or PNG image.",
+  "The photo contradicts the issue described. Upload a matching photo.":
+    PHOTO_MISMATCH_MESSAGE,
+  "The photo contradicts the issue described. Please submit a photo that shows the reported issue.":
+    PHOTO_MISMATCH_MESSAGE,
+  [PHOTO_MISMATCH_MESSAGE]: PHOTO_MISMATCH_MESSAGE,
+  "The photo does not clearly show the issue described.":
+    "It's hard to tell the issue from this photo. Try one that shows the problem more clearly.",
+  "This photo appears to be AI-generated or edited. Please upload a genuine photo taken with your camera.":
+    "Please upload an original, unedited photo taken with your camera.",
+  "This report does not describe a valid community issue.":
+    "This doesn't look like a community issue we handle.",
+  "Add a clearer description of the issue.":
+    "Tell us a little more — what is the issue, and where exactly is it?",
+  "We could not determine the type of concern. Add a little more detail and try again.":
+    "We couldn't tell what kind of issue this is. Add a little more detail and try again.",
+  "A similar report already exists near this location.":
+    "Someone nearby already reported this. Add details only if yours is a different issue.",
+  "Choose the report location before submitting.":
+    "Choose where this happened on the map before submitting.",
+  "Pin a location with a street name before submitting.":
+    "Drop a pin where the issue is — we need a street name, not just coordinates.",
+  "Pin a location with a street name.":
+    "Drop a pin where the issue is — we need a street name, not just coordinates.",
+  "Choose a location inside an active community.":
+    "That spot is outside our covered areas. Please pin a location inside your community.",
+  "Choose a concern category.": "Pick what kind of issue this is.",
+  "You already have an active emergency.":
+    "You already have an active emergency alert. Please wait for it to be handled first.",
+  "Automated review could not be completed. Your report was not assigned to a unit.":
+    "Our automatic check couldn't finish, so your report wasn't assigned yet. Please try submitting again.",
+  "This report was not accepted.":
+    "Sorry, this report wasn't accepted. Check the feedback above and try again.",
+}
+
+const INFO_ERROR_TEXT: Record<string, string> = {
+  "This photo could not be checked automatically. An official will review it.":
+    "We couldn't check this photo automatically — an official will review it. No need to do anything.",
+  "Authenticity could not be confirmed automatically; an official will review it.":
+    "We'll let an official take a look at this photo. Nothing for you to fix.",
+  "This photo could not be read. An official will review it.":
+    "We couldn't read this photo, so an official will review it. No need to do anything.",
+  "Your photo could not be checked automatically. An official will review it.":
+    "We couldn't check your photo automatically — an official will review it. No need to do anything.",
+}
+
+function friendlyFooterError(raw: string): {
+  text: string
+  tone: FooterErrorTone
+} {
+  const text = raw.trim()
+  const info = INFO_ERROR_TEXT[text]
+  if (info) return { text: info, tone: "info" }
+  const friendly = FRIENDLY_ERROR_TEXT[text]
+  if (friendly) return { text: friendly, tone: "error" }
+  if (text.startsWith("Image resolution is too high")) {
+    return {
+      text: "That photo is too large to process. Try a smaller version.",
+      tone: "error",
+    }
+  }
+  if (text.startsWith("Location is too far from")) {
+    return {
+      text: "That spot is outside your community. Please pin a place inside your community.",
+      tone: "error",
+    }
+  }
+  return { text, tone: "error" }
+}
+
+function isPhotoRejectionMessage(raw: unknown): boolean {
+  if (typeof raw !== "string") return false
+  return (
+    raw === PHOTO_MISMATCH_MESSAGE ||
+    raw === PHOTO_MISMATCH_FRIENDLY_MESSAGE ||
+    raw ===
+      "The photo contradicts the issue described. Upload a matching photo." ||
+    raw ===
+      "The photo contradicts the issue described. Please submit a photo that shows the reported issue." ||
+    raw === "The photo does not clearly show the issue described." ||
+    raw === STREET_IMAGERY_FEEDBACK ||
+    raw.startsWith(
+      "Some of the photos could not pass the authenticity check."
+    ) ||
+    raw.startsWith("This photo could not pass the authenticity check.") ||
+    raw.startsWith("Some of the photos could not be validated.") ||
+    raw.startsWith("This photo could not be validated.") ||
+    raw === "Please upload an original, unedited photo." ||
+    raw.startsWith("This photo could not pass the authenticity check.") ||
+    isHardMediaRejectionMessage(raw)
+  )
+}
+
+function isHardMediaRejectionMessage(raw: unknown): boolean {
+  if (typeof raw !== "string") return false
+  const text = raw.trim()
+  if (!text) return false
+  // A review-required result is accepted into the composer and must not be
+  // treated as a hard rejection just because it mentions authenticity.
+  if (
+    /could not be (?:checked|confirmed) automatically|official will review/i.test(
+      text
+    )
+  ) {
+    return false
+  }
+  return (
+    /already used in another report|already uploaded|uploaded before/i.test(
+      text
+    ) ||
+    /original,?\s*unedited|ai[- ]generated|digitally (?:altered|manipulated)/i.test(
+      text
+    ) ||
+    /could not pass the authenticity check/i.test(text)
+  )
+}
+
+function mediaCheckErrorMessages(error: unknown): string[] {
+  if (!(error instanceof ApiError)) return []
+  const messages = [error.message]
+  if (error.data && typeof error.data === "object") {
+    const media = (error.data as { media?: unknown }).media
+    if (typeof media === "string") messages.push(media)
+    if (Array.isArray(media)) {
+      for (const item of media) {
+        if (typeof item === "string") messages.push(item)
+        if (Array.isArray(item) && typeof item[0] === "string") {
+          messages.push(item[0])
+        }
+      }
+    }
+  }
+  return [...new Set(messages.map((message) => message.trim()).filter(Boolean))]
+}
+
+function photoVerdictErrorMessage(
+  verdicts: ConcernPhotoVerdict[],
+  multiplePhotos = verdicts.length > 1
+) {
+  if (
+    verdicts.some(
+      (verdict) => verdict.state === "unrelated" || verdict.state === "unclear"
+    )
+  ) {
+    return multiplePhotos
+      ? PHOTO_MISMATCH_FRIENDLY_MESSAGE
+      : PHOTO_MISMATCH_MESSAGE
+  }
+  if (verdicts.some((verdict) => verdict.state === "flagged")) {
+    return multiplePhotos
+      ? "Some of the photos could not pass the authenticity check. Please remove them and upload original, unedited photos."
+      : "This photo could not pass the authenticity check. Please remove it and upload an original, unedited photo."
+  }
+  return multiplePhotos
+    ? "Some of the photos could not be validated. Please remove them and upload different photos."
+    : "This photo could not be validated. Please remove it and upload a different photo."
+}
+
+function isAutomatedPhotoMismatchError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false
+  if (error.message.trim() === "automated_photo_mismatch") return true
+  if (!error.data || typeof error.data !== "object") return false
+  const payload = error.data as Record<string, unknown>
+  return ["code", "detail", "rejection_code"].some(
+    (key) => payload[key] === "automated_photo_mismatch"
+  )
+}
 
 function titleFromDescription(text: string, max = 80): string {
   const cleaned = text.trim().replace(/\s+/g, " ")
@@ -69,7 +290,7 @@ function validationFeedbackFor(report: Concern) {
     return "The photo contradicts the issue described. Please submit a photo that shows the reported issue."
   }
   if (report.rejection_code.startsWith("automated_street_imagery")) {
-    return "Please pin the exact area where the issue is found and upload a matching photo."
+    return STREET_IMAGERY_FEEDBACK
   }
   const summary = report.validation_summary?.trim()
   if (summary) return summary
@@ -192,7 +413,9 @@ export function CreateReportDialog({
     addressSecondary?: string
     source?: "gps" | "manual_pin"
   } | null
-  onGuestSubmitted?: (assignedUnit: { name: string; short_name: string } | null) => void
+  onGuestSubmitted?: (
+    assignedUnit: { name: string; short_name: string } | null
+  ) => void
 } = {}) {
   const navigate = useNavigate()
   const { user } = useAuthSession()
@@ -223,8 +446,8 @@ export function CreateReportDialog({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [awaitingValidation, setAwaitingValidation] = useState(false)
-  const [isCheckingMedia, setIsCheckingMedia] = useState(false)
   const [submittedReport, setSubmittedReport] = useState<Concern | null>(null)
+  const [isCheckingMedia, setIsCheckingMedia] = useState(false)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [draftRestored, setDraftRestored] = useState(false)
   const [resolvedMatch, setResolvedMatch] =
@@ -258,7 +481,7 @@ export function CreateReportDialog({
     [mediaFiles]
   )
   const displayName = guest
-    ? "Community Reporter"
+    ? "Community reporter"
     : user
       ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
       : "Resident"
@@ -296,6 +519,7 @@ export function CreateReportDialog({
           setAwaitingValidation(false)
           setSubmittedReport(latest)
           setOpen(false)
+          window.dispatchEvent(new Event("eboses:report-created"))
         } else if (hasValidationError(latest)) {
           setAwaitingValidation(false)
           setFieldErrors((previous) => ({
@@ -521,56 +745,21 @@ export function CreateReportDialog({
     return Object.keys(errors).length === 0
   }
 
-  function cleanMediaErrorMessage(raw: string): string {
-    let text = raw.trim()
-
-    const afterColon = text.includes(":")
-      ? text.slice(text.lastIndexOf(":") + 1).trim()
-      : text
-    text = afterColon || text
-
-    if (
-      (text.startsWith("[") && text.endsWith("]")) ||
-      (text.startsWith("('") && text.endsWith("')"))
-    ) {
-      text = text.replace(/^[[(]+|[)\]]+$/g, "").trim()
-    }
-    text = text.replace(/^['"]+|['"]+$/g, "").trim()
-    return text || "This photo could not be validated."
-  }
-
-  function mediaErrorFromUnknown(error: unknown): string {
-    if (
-      error instanceof ApiError &&
-      error.data &&
-      typeof error.data === "object"
-    ) {
-      const data = error.data as Record<string, unknown>
-      const media = data.media
-      if (Array.isArray(media) && media.length > 0) {
-        return media
-          .map((item) => cleanMediaErrorMessage(String(item)))
-          .filter(Boolean)
-          .join(" ")
-      }
-      const detail = data.detail
-      if (typeof detail === "string") return cleanMediaErrorMessage(detail)
-    }
-    if (error instanceof Error && error.message) {
-      return cleanMediaErrorMessage(error.message)
-    }
-    return "This photo could not be validated."
-  }
-
   async function addFiles(files: File[]): Promise<File[]> {
     const errors: string[] = []
-    const valid: File[] = []
     const candidates: File[] = []
-    // A new attachment set needs a fresh precheck; never carry a verdict from
-    // an earlier photo into the new preview.
-    setPhotoVerdicts([])
+    // Keep existing verdicts until their photos are removed. A retry should
+    // not hide a still-attached invalid photo or its latest feedback.
+    const existingInvalidVerdict = photoVerdicts.some(
+      (verdict) => verdict.state !== "relevant" && Boolean(verdict.message)
+    )
+    setFieldErrors((current) => {
+      const next: Record<string, string> = { ...current }
+      if (!existingInvalidVerdict) next.media = ""
+      if (isPhotoRejectionMessage(current.description)) next.description = ""
+      return next
+    })
     setPrivacyPreview(null)
-    setIsCheckingMedia(true)
     for (const file of files) {
       if (!ALLOWED_TYPES.includes(file.type)) {
         errors.push("Unsupported format. Use JPG or PNG.")
@@ -599,48 +788,99 @@ export function CreateReportDialog({
     if (candidates.length > room) {
       errors.push(`You can attach up to ${MAX_FILES} photos.`)
     }
-
+    // Duplicate and authenticity failures are hard upload rejections: the
+    // failed file never enters the preview. Relevance/location failures are
+    // different; they come from final report validation and remain visible
+    // with a red border so the resident can remove or replace them.
+    let added: File[] = filesToCheck
     if (filesToCheck.length > 0) {
+      setIsCheckingMedia(true)
       try {
-        // Check the whole batch once so the AI authenticity review does not
-        // make the resident wait once per attachment.
         const checkData = new FormData()
+        checkData.append("forensics_only", "true")
         for (const file of filesToCheck) checkData.append("media", file)
         const result = guest
           ? await checkGuestConcernMedia(checkData)
           : await checkConcernMedia(checkData)
-        const checkedFiles = result.files ?? []
-        const accepted = checkedFiles
-          .map((checkedFile, resultIndex) => ({
-            ...checkedFile,
-            index:
-              Number.isInteger(checkedFile.index) ? checkedFile.index : resultIndex,
-          }))
-          .filter((checkedFile) => checkedFile.status === "accepted")
-        const rejectedMessages = checkedFiles
-          .filter((checkedFile) => checkedFile.status === "rejected")
-          .map((checkedFile) => checkedFile.message)
-          .filter(Boolean)
-        valid.push(
-          ...accepted
-            .map((checkedFile) => filesToCheck[checkedFile.index])
-            .filter((file): file is File => Boolean(file))
-        )
-        errors.push(...rejectedMessages)
+        const checkedFiles = Array.isArray(result.files) ? result.files : []
+        const rejectedIndexes = new Set<number>()
+        for (const [resultIndex, checkedFile] of checkedFiles.entries()) {
+          if (checkedFile.status !== "rejected") continue
+          const fileIndex = checkedFile.index ?? resultIndex
+          if (Number.isInteger(fileIndex) && filesToCheck[fileIndex]) {
+            rejectedIndexes.add(fileIndex)
+          }
+          errors.push(
+            checkedFile.message ||
+              "This photo could not be accepted. Please upload a different photo."
+          )
+        }
+        added = filesToCheck.filter((_, index) => !rejectedIndexes.has(index))
       } catch (error) {
-        errors.push(mediaErrorFromUnknown(error))
+        const messages = mediaCheckErrorMessages(error)
+        errors.push(
+          ...(messages.length
+            ? messages
+            : ["This photo could not be checked. Please try again."])
+        )
+        // Older API instances can still return a request-level 400 for a
+        // duplicate/authenticity failure. Do not let those files slip into
+        // the preview while keeping files visible for a transient check error.
+        if (messages.some(isHardMediaRejectionMessage)) added = []
+      } finally {
+        setIsCheckingMedia(false)
       }
     }
-    const added = valid.slice(0, room)
     setMediaFiles((prev) => [...prev, ...added])
     const unique = [...new Set(errors.filter(Boolean))]
     setFieldErrors((current) => ({
       ...current,
       // Newline-separated so the UI can list every media check message
-      media: unique.length ? unique.join("\n") : "",
+      media: unique[0] ?? (existingInvalidVerdict ? current.media : ""),
     }))
-    setIsCheckingMedia(false)
     return added
+  }
+
+  function applyPhotoVerdicts(
+    verdicts: ConcernPhotoVerdict[],
+    options?: { includeUnclear?: boolean }
+  ) {
+    const invalidStates = new Set<ConcernPhotoVerdict["state"]>([
+      "unrelated",
+      "flagged",
+    ])
+    if (options?.includeUnclear) {
+      invalidStates.add("unclear")
+      invalidStates.add("unsupported")
+    }
+    const invalidVerdicts = verdicts.filter((verdict) =>
+      invalidStates.has(verdict.state)
+    )
+    setPhotoVerdicts(verdicts)
+    if (invalidVerdicts.length === 0) {
+      setFieldErrors((current) => ({
+        ...current,
+        media: isPhotoRejectionMessage(current.media) ? "" : current.media,
+      }))
+      return
+    }
+    setFieldErrors((current) => ({
+      ...current,
+      media: photoVerdictErrorMessage(invalidVerdicts, mediaFiles.length > 1),
+    }))
+  }
+
+  function showPhotoMismatchError() {
+    setAwaitingValidation(false)
+    setSubmittedReport(null)
+    setOpen(true)
+    setFieldErrors((current) => ({
+      ...current,
+      media:
+        mediaFiles.length > 1
+          ? PHOTO_MISMATCH_FRIENDLY_MESSAGE
+          : PHOTO_MISMATCH_MESSAGE,
+    }))
   }
 
   /** Probe GPS → pin + reverse-geocoded street name. True when coords resolved. */
@@ -850,10 +1090,7 @@ export function CreateReportDialog({
     return formData
   }
 
-  async function finalizeSubmit(options?: {
-    escalate?: boolean
-    emergencyType?: string
-  }) {
+  async function finalizeSubmit() {
     const formData = buildSubmitFormData()
     if (!formData) return
     setIsSubmitting(true)
@@ -862,12 +1099,11 @@ export function CreateReportDialog({
         const result = await submitGuestConcern(formData)
         setOpen(false)
         resetForm()
+        window.dispatchEvent(new Event("eboses:report-created"))
         onGuestSubmitted?.(result.assigned_unit ?? null)
         return
       }
       const report = await createConcern(formData, {
-        escalate: options?.escalate,
-        emergencyType: options?.emergencyType,
         recurrenceOf: recurrenceOfRef.current ?? undefined,
         duplicateOf: duplicateOfRef.current ?? undefined,
       })
@@ -941,7 +1177,55 @@ export function CreateReportDialog({
               ]
             })
           : []
-        setPhotoVerdicts(responsePhotoVerdicts)
+        const responseFieldMessages = ["media", "description"].flatMap(
+          (key) => {
+            const value = responseData[key]
+            if (Array.isArray(value)) {
+              return value.filter(
+                (item): item is string => typeof item === "string"
+              )
+            }
+            return typeof value === "string" ? [value] : []
+          }
+        )
+        const hardPhotoVerdicts = responsePhotoVerdicts.filter((verdict) =>
+          isHardMediaRejectionMessage(verdict.message)
+        )
+        const hardMediaMessages = [
+          ...responseFieldMessages.filter(isHardMediaRejectionMessage),
+          ...hardPhotoVerdicts.map((verdict) => verdict.message),
+        ]
+        const hardPhotoIndexes = new Set(
+          hardPhotoVerdicts.map((verdict) => verdict.index)
+        )
+        // A legacy/fallback final response can report a hard media failure at
+        // request level without an index. In that case none of the submitted
+        // files can be trusted to stay in the composer; remove them all. New
+        // responses carry per-photo verdict indexes, so mixed uploads retain
+        // their valid photos.
+        const removeAllSubmittedPhotos =
+          hardMediaMessages.length > 0 && hardPhotoIndexes.size === 0
+        const visiblePhotoVerdicts = responsePhotoVerdicts.filter(
+          (verdict) => !hardPhotoIndexes.has(verdict.index)
+        )
+        if (removeAllSubmittedPhotos || hardPhotoIndexes.size > 0) {
+          setMediaFiles((current) =>
+            current.filter(
+              (_, index) =>
+                removeAllSubmittedPhotos || !hardPhotoIndexes.has(index)
+            )
+          )
+          setPrivacyPreview(null)
+        }
+        const invalidPhotoVerdicts = visiblePhotoVerdicts.filter((verdict) =>
+          new Set<ConcernPhotoVerdict["state"]>([
+            "unrelated",
+            "unclear",
+            "unsupported",
+            "flagged",
+          ]).has(verdict.state)
+        )
+        applyPhotoVerdicts(visiblePhotoVerdicts, { includeUnclear: true })
 
         const nextErrors: Record<string, string> = {}
         const userFacingFields = new Set([
@@ -954,16 +1238,38 @@ export function CreateReportDialog({
         ])
         for (const [key, value] of Object.entries(responseData)) {
           if (!userFacingFields.has(key)) continue
+          // The per-photo verdict message is rendered in the existing media
+          // error row. Do not also show the same rejection as a description
+          // error when the server returned verdicts for the uploaded files.
+          if (
+            key === "description" &&
+            (invalidPhotoVerdicts.length > 0 || hardMediaMessages.length > 0)
+          ) {
+            continue
+          }
           const first = Array.isArray(value) ? value[0] : value
           if (typeof first === "string") nextErrors[key] = first
+        }
+        if (hardMediaMessages.length > 0) {
+          nextErrors.media = hardMediaMessages[0]
         }
         if (Object.keys(nextErrors).length > 0) {
           setAwaitingValidation(false)
           setSubmittedReport(null)
           setOpen(true)
-          setFieldErrors(nextErrors)
+          setFieldErrors((current) => ({ ...current, ...nextErrors }))
           return
         }
+        if (invalidPhotoVerdicts.length > 0) {
+          setAwaitingValidation(false)
+          setSubmittedReport(null)
+          setOpen(true)
+          return
+        }
+      }
+      if (isAutomatedPhotoMismatchError(submitError)) {
+        showPhotoMismatchError()
+        return
       }
       toast.error(
         submitError instanceof ApiError
@@ -996,10 +1302,7 @@ export function CreateReportDialog({
         return
       }
     }
-    await finalizeSubmit({
-      escalate: Boolean(precheck.auto_escalate),
-      emergencyType: precheck.emergency_type || undefined,
-    })
+    await finalizeSubmit()
   }
 
   /**
@@ -1035,7 +1338,7 @@ export function CreateReportDialog({
       for (const file of mediaFiles) precheckData.append("media", file)
 
       const precheck = await precheckConcern(precheckData)
-      setPhotoVerdicts(precheck.photo_verdicts || [])
+      applyPhotoVerdicts(precheck.photo_verdicts || [])
       setPrivacyPreview(precheck.privacy_preview ?? null)
 
       if (precheck.resolved_address) {
@@ -1043,8 +1346,9 @@ export function CreateReportDialog({
         // pin outside the street catalog — a different community, a new
         // subdivision — degrades to the "Pinned location" placeholder. That
         // must never overwrite the real street the map picker already
-        // reverse-geocoded for the resident: adopt the server answer only
-        // when it is a usable street or the picker had nothing better.
+        // reverse-geocoded for the resident. Adopt the server answer only when
+        // the picker had nothing usable, retaining its secondary line as a
+        // fallback when the catalog returns only a street.
         const currentPrimary = (addressPrimary || address).trim()
         const currentUsable =
           Boolean(currentPrimary) && !looksLikeCoordinates(currentPrimary)
@@ -1053,20 +1357,30 @@ export function CreateReportDialog({
         ).trim()
         const precheckUsable =
           Boolean(precheckPrimary) && !looksLikeCoordinates(precheckPrimary)
-        if (!currentUsable || precheckUsable) {
+        if (!currentUsable && precheckUsable) {
+          const resolvedSecondary =
+            precheck.resolved_address.address_secondary?.trim() ||
+            addressSecondary.trim()
+          const resolvedFull =
+            precheck.resolved_address.address?.trim() ||
+            [precheckPrimary, resolvedSecondary].filter(Boolean).join(", ")
           resolvedAddressRef.current = {
-            address: precheck.resolved_address.address,
-            primary: precheck.resolved_address.address_primary,
-            secondary: precheck.resolved_address.address_secondary,
+            address: resolvedFull,
+            primary: precheckPrimary,
+            secondary: resolvedSecondary,
           }
-          setAddress(precheck.resolved_address.address)
-          setAddressPrimary(precheck.resolved_address.address_primary)
-          setAddressSecondary(precheck.resolved_address.address_secondary)
+          setAddress(resolvedFull)
+          setAddressPrimary(precheckPrimary)
+          setAddressSecondary(resolvedSecondary)
         }
       }
 
       if (!precheck.can_submit) {
-        setFieldErrors((current) => ({ ...current, ...precheck.field_errors }))
+        setFieldErrors((current) => ({
+          ...current,
+          ...precheck.field_errors,
+          ...(current.media ? { media: current.media } : {}),
+        }))
         setIsSubmitting(false)
         return
       }
@@ -1085,6 +1399,10 @@ export function CreateReportDialog({
       }
       await advance("duplicate")
     } catch (submitError) {
+      if (isAutomatedPhotoMismatchError(submitError)) {
+        showPhotoMismatchError()
+        return
+      }
       toast.error(
         submitError instanceof ApiError
           ? submitError.message
@@ -1102,6 +1420,46 @@ export function CreateReportDialog({
   // at least 40 characters, one photo, and a set location pin.
   const formReady =
     descriptionLength >= descriptionMin && hasMedia && Boolean(locationPin)
+  const footerErrors = useMemo(() => {
+    const items: {
+      text: string
+      kind: "media" | "address" | "other"
+      tone: FooterErrorTone
+    }[] = []
+    const seen = new Set<string>()
+    const push = (raw: unknown, kind: "media" | "address" | "other") => {
+      if (typeof raw !== "string") return
+      const mapped = friendlyFooterError(raw)
+      if (!mapped.text || seen.has(mapped.text)) return
+      seen.add(mapped.text)
+      items.push({ text: mapped.text, kind, tone: mapped.tone })
+    }
+    const kindForKey = (key: string) =>
+      key === "media" ||
+      key === "concern" ||
+      key === "precheck" ||
+      key === "title" ||
+      key === "category"
+        ? ("media" as const)
+        : key === "address" || key === "location"
+          ? ("address" as const)
+          : ("other" as const)
+    for (const [key, value] of Object.entries(fieldErrors)) {
+      if (
+        key === "media" &&
+        typeof value === "string" &&
+        value.includes("\n")
+      ) {
+        for (const part of value.split("\n")) push(part, "media")
+      } else {
+        push(value, kindForKey(key))
+      }
+    }
+    for (const verdict of photoVerdicts) push(verdict.message, "media")
+    return items.slice(0, 1)
+  }, [fieldErrors, photoVerdicts])
+
+  const showFooterErrors = footerErrors.length > 0
   const isControlled = controlledOpen !== undefined
 
   return (
@@ -1126,10 +1484,12 @@ export function CreateReportDialog({
         onClose={requestClose}
         maxW="max-w-[520px]"
         mobileSheet
+        mobileSheetInitialMode="max"
+        sheetClassName="bg-white"
       >
         <DialogBody className="!flex !h-full !min-h-0 !flex-1 !flex-col !space-y-0 !overflow-hidden bg-white !p-0">
           {/* h-full keeps the composer/footer pinned on mobile. */}
-          <div className="relative flex h-full min-h-0 flex-1 flex-col pt-[max(0.75rem,env(safe-area-inset-top))] md:h-[min(560px,88vh)] md:flex-row md:pt-5">
+          <div className="relative flex h-full min-h-0 flex-1 flex-col pt-[max(0.75rem,env(safe-area-inset-top))] md:h-auto md:max-h-[88vh] md:min-h-[min(560px,88vh)] md:flex-row md:pt-5">
             {/* Main composer */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <div className="flex min-h-0 flex-1 flex-col">
@@ -1153,16 +1513,33 @@ export function CreateReportDialog({
                         !formReady
                       }
                       onClick={() => void handleSubmit()}
+                      aria-label={
+                        isSubmitting || awaitingValidation
+                          ? "Submitting report"
+                          : undefined
+                      }
                       className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-5 text-[14px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:cursor-not-allowed disabled:bg-neutral-200 disabled:text-neutral-500 disabled:opacity-100 sm:h-11 sm:px-6 sm:text-[15px]"
                     >
-                      {isSubmitting || awaitingValidation
-                        ? "Reporting…"
-                        : guest
-                          ? "Submit"
-                          : "Report"}
+                      {isSubmitting || awaitingValidation ? (
+                        <LoaderCircleIcon
+                          className="size-4 animate-spin"
+                          aria-hidden
+                        />
+                      ) : (
+                        "Report"
+                      )}
                     </button>
                   </div>
                 </div>
+
+                {isSubmitting || awaitingValidation || isCheckingMedia ? (
+                  <div
+                    className="mt-1.5 shrink-0 overflow-hidden bg-brand-orange-soft"
+                    aria-hidden
+                  >
+                    <div className="h-0.5 w-1/4 animate-load-slide bg-brand-orange motion-reduce:animate-none" />
+                  </div>
+                ) : null}
 
                 {/* Report form body */}
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -1188,7 +1565,7 @@ export function CreateReportDialog({
                   </div>
 
                   {/* Scrollable body — description / media / location chip only */}
-                  <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-4 sm:px-5">
+                  <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-4 pb-3 sm:px-5">
                     <textarea
                       value={description}
                       maxLength={descriptionMax}
@@ -1222,14 +1599,33 @@ export function CreateReportDialog({
                       className="max-h-[220px] min-h-[72px] w-full resize-none overflow-y-auto border-0 bg-transparent text-[17px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400"
                     />
 
-                    <div
-                      className={cn(
-                        "mt-3 flex flex-wrap gap-2.5",
-                        hasMedia ? "min-h-[168px]" : "min-h-0"
-                      )}
-                    >
-                      {hasMedia
-                        ? mediaFiles.map((file, index) => {
+                    {privacyPreview?.protected_image ? (
+                      <div className="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                        <p className="text-xs font-semibold text-neutral-800">
+                          Private details will be blurred
+                        </p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
+                          This is the version the community will see
+                          {privacyPreview.detected_classes.length
+                            ? ` — ${privacyPreview.detected_classes.join(", ")} hidden`
+                            : ""}
+                          . Officials still see the original.
+                        </p>
+                        <img
+                          src={privacyPreview.protected_image}
+                          alt=""
+                          className="mt-2 h-32 w-full rounded-lg object-cover"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Bottom chrome: optional location row and the attachment/location toolbar. */}
+                  <div className="shrink-0 bg-white">
+                    {hasMedia ? (
+                      <div className="px-4 pt-3 sm:px-5">
+                        <div className="flex flex-wrap gap-2.5">
+                          {mediaFiles.map((file, index) => {
                             const url = previewUrls[index]
                             const rejected = Boolean(
                               photoVerdicts.find(
@@ -1260,7 +1656,47 @@ export function CreateReportDialog({
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    setPhotoVerdicts([])
+                                    const nextPhotoVerdicts = photoVerdicts
+                                      .filter(
+                                        (verdict) => verdict.index !== index
+                                      )
+                                      .map((verdict) =>
+                                        verdict.index > index
+                                          ? {
+                                              ...verdict,
+                                              index: verdict.index - 1,
+                                            }
+                                          : verdict
+                                      )
+                                    const remainingRejectedPhotos =
+                                      nextPhotoVerdicts.filter(
+                                        (verdict) =>
+                                          verdict.state !== "relevant" &&
+                                          Boolean(verdict.message)
+                                      )
+                                    setPhotoVerdicts(nextPhotoVerdicts)
+                                    setFieldErrors((current) => {
+                                      const next = { ...current }
+                                      if (
+                                        isPhotoRejectionMessage(
+                                          current.description
+                                        )
+                                      ) {
+                                        next.description = ""
+                                      }
+                                      if (
+                                        isPhotoRejectionMessage(current.media)
+                                      ) {
+                                        next.media =
+                                          remainingRejectedPhotos.length > 0
+                                            ? photoVerdictErrorMessage(
+                                                remainingRejectedPhotos,
+                                                mediaFiles.length - 1 > 1
+                                              )
+                                            : ""
+                                      }
+                                      return next
+                                    })
                                     setPrivacyPreview(null)
                                     setMediaFiles((prev) =>
                                       prev.filter((_, i) => i !== index)
@@ -1276,82 +1712,13 @@ export function CreateReportDialog({
                                 </button>
                               </div>
                             )
-                          })
-                        : null}
-                    </div>
-
-                    {fieldErrors.description ? (
-                      <p
-                        className="mt-2 flex items-start gap-1.5 text-xs font-medium text-destructive"
-                        role="alert"
-                      >
-                        <CircleXIcon
-                          className="mt-0.5 size-3.5 shrink-0"
-                          strokeWidth={2}
-                          aria-hidden
-                        />
-                        <span>{fieldErrors.description}</span>
-                      </p>
-                    ) : null}
-
-                    {(() => {
-                      const messages = [
-                        fieldErrors.concern,
-                        ...(fieldErrors.media
-                          ? fieldErrors.media
-                              .split("\n")
-                              .map((m) => m.trim())
-                              .filter(Boolean)
-                          : []),
-                        fieldErrors.address,
-                        fieldErrors.precheck,
-                      ].filter((msg): msg is string =>
-                        Boolean(msg && msg.trim())
-                      )
-                      if (messages.length === 0) return null
-                      return (
-                        <ul
-                          className="mt-2 list-none space-y-1 text-xs font-medium text-destructive"
-                          role="alert"
-                        >
-                          {messages.map((msg) => (
-                            <li key={msg} className="flex items-start gap-1.5">
-                              <CircleXIcon
-                                className="mt-0.5 size-3.5 shrink-0"
-                                strokeWidth={2}
-                                aria-hidden
-                              />
-                              <span>{msg}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      )
-                    })()}
-                    {privacyPreview?.protected_image ? (
-                      <div className="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-                        <p className="text-xs font-semibold text-neutral-800">
-                          Private details will be blurred
-                        </p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
-                          This is the version the community will see
-                          {privacyPreview.detected_classes.length
-                            ? ` — ${privacyPreview.detected_classes.join(", ")} hidden`
-                            : ""}
-                          . Officials still see the original.
-                        </p>
-                        <img
-                          src={privacyPreview.protected_image}
-                          alt=""
-                          className="mt-2 h-32 w-full rounded-lg object-cover"
-                        />
+                          })}
+                        </div>
                       </div>
                     ) : null}
-                  </div>
 
-                  {/* Bottom chrome: optional location row and the attachment/location toolbar. */}
-                  <div className="shrink-0 border-t border-neutral-100 bg-white">
                     {locationPin && address ? (
-                      <div className="px-4 pt-3 pb-2 sm:px-5">
+                      <div className="px-4 pt-2 pb-1 sm:px-5">
                         <div className="flex w-full items-center gap-3 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5 text-left">
                           <button
                             type="button"
@@ -1371,26 +1738,120 @@ export function CreateReportDialog({
                               ) : null}
                             </span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPhotoVerdicts([])
-                              setPrivacyPreview(null)
-                              setLocationPin(null)
-                              setAddress("")
-                              setAddressPrimary("")
-                              setAddressSecondary("")
-                            }}
-                            className="flex size-10 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
-                            aria-label="Remove location"
-                          >
-                            <XIcon className="size-6" strokeWidth={1.75} />
-                          </button>
                         </div>
                       </div>
                     ) : null}
 
-                    <div className="flex items-center gap-1 px-3 pt-1.5 sm:px-4">
+                    {showFooterErrors ? (
+                      <div className="px-4 pt-1 sm:px-5">
+                        <div
+                          role="alert"
+                          className={cn(
+                            "rounded-md border px-3 py-2.5",
+                            footerErrors.some((item) => item.tone === "error")
+                              ? "border-destructive/25 bg-destructive/5"
+                              : "border-neutral-200 bg-neutral-50"
+                          )}
+                        >
+                          {footerErrors.length === 1 ? (
+                            <div className="flex items-center gap-2">
+                              {footerErrors[0]?.tone === "info" ? (
+                                <InfoIcon
+                                  className="size-5 shrink-0 text-neutral-500"
+                                  strokeWidth={2}
+                                  aria-hidden
+                                />
+                              ) : (
+                                <CircleXIcon
+                                  className="size-5 shrink-0 text-destructive"
+                                  strokeWidth={2}
+                                  aria-hidden
+                                />
+                              )}
+                              <p
+                                className={cn(
+                                  "min-w-0 flex-1 text-[13px] leading-snug font-medium",
+                                  footerErrors[0]?.tone === "info"
+                                    ? "text-neutral-700"
+                                    : "text-destructive"
+                                )}
+                              >
+                                {footerErrors[0]?.text}
+                              </p>
+                            </div>
+                          ) : (
+                            <div>
+                              <div className="flex items-center gap-2">
+                                {footerErrors.some(
+                                  (item) => item.tone === "error"
+                                ) ? (
+                                  <CircleXIcon
+                                    className="size-5 shrink-0 text-destructive"
+                                    strokeWidth={2}
+                                    aria-hidden
+                                  />
+                                ) : (
+                                  <InfoIcon
+                                    className="size-5 shrink-0 text-neutral-500"
+                                    strokeWidth={2}
+                                    aria-hidden
+                                  />
+                                )}
+                                <p
+                                  className={cn(
+                                    "min-w-0 flex-1 text-[13px] leading-snug font-semibold",
+                                    footerErrors.some(
+                                      (item) => item.tone === "error"
+                                    )
+                                      ? "text-destructive"
+                                      : "text-neutral-700"
+                                  )}
+                                >
+                                  {footerErrors.length} issues need attention
+                                </p>
+                              </div>
+                              <ul className="mt-1.5 max-h-28 list-disc space-y-1 overflow-y-auto pr-1 pl-8 text-[13px] leading-snug font-medium">
+                                {footerErrors.map((item) => (
+                                  <li
+                                    key={item.text}
+                                    className={cn(
+                                      item.tone === "info"
+                                        ? "text-neutral-600 marker:text-neutral-300"
+                                        : "text-destructive marker:text-destructive/60"
+                                    )}
+                                  >
+                                    <span className="inline-flex items-start gap-1.5">
+                                      {item.tone === "info" ? (
+                                        <InfoIcon
+                                          className="mt-0.5 size-3.5 shrink-0 text-neutral-400"
+                                          strokeWidth={2}
+                                          aria-hidden
+                                        />
+                                      ) : item.kind === "media" ? (
+                                        <ImageIcon
+                                          className="mt-0.5 size-3.5 shrink-0 text-destructive/70"
+                                          strokeWidth={2}
+                                          aria-hidden
+                                        />
+                                      ) : item.kind === "address" ? (
+                                        <MapPinIcon
+                                          className="mt-0.5 size-3.5 shrink-0 text-destructive/70"
+                                          strokeWidth={2}
+                                          aria-hidden
+                                        />
+                                      ) : null}
+                                      <span>{item.text}</span>
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="flex shrink-0 items-center gap-1 px-3 pt-1 sm:px-4">
                       <input
                         ref={fileInputRef}
                         type="file"
@@ -1426,27 +1887,27 @@ export function CreateReportDialog({
                           isCheckingMedia || mediaFiles.length >= MAX_FILES
                         }
                         className={cn(
-                          "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
+                          "flex size-12 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
                           hasMedia
                             ? "text-neutral-800"
                             : "text-neutral-500 hover:text-neutral-800"
                         )}
                         aria-label="Add photo"
                       >
-                        <ImageIcon className="size-5" strokeWidth={1.75} />
+                        <ImageIcon className="size-6" strokeWidth={1.75} />
                       </button>
                       <button
                         type="button"
                         onClick={() => setLocationOpen(true)}
                         className={cn(
-                          "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
+                          "flex size-12 items-center justify-center rounded-full transition-colors hover:bg-neutral-100",
                           locationPin
                             ? "text-neutral-800"
                             : "text-neutral-500 hover:text-neutral-800"
                         )}
                         aria-label="Add location"
                       >
-                        <MapPinIcon className="size-5" strokeWidth={1.75} />
+                        <MapPinIcon className="size-6" strokeWidth={1.75} />
                       </button>
                       <button
                         type="button"
@@ -1465,19 +1926,19 @@ export function CreateReportDialog({
                           isCheckingMedia || mediaFiles.length >= MAX_FILES
                         }
                         className={cn(
-                          "flex size-10 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
+                          "flex size-12 items-center justify-center rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50",
                           hasMedia
                             ? "text-neutral-800"
                             : "text-neutral-500 hover:text-neutral-800"
                         )}
                         aria-label="Take photo"
                       >
-                        <CameraIcon className="size-5" strokeWidth={1.75} />
+                        <CameraIcon className="size-6" strokeWidth={1.75} />
                       </button>
                     </div>
 
                     {/* Mobile safe-area padding under the icon row */}
-                    <div className="pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(0.75rem,env(safe-area-inset-bottom))]" />
+                    <div className="pb-[max(0.5rem,env(safe-area-inset-bottom))] md:pb-[max(0.5rem,env(safe-area-inset-bottom))]" />
                   </div>
                 </div>
               </div>
@@ -1497,6 +1958,9 @@ export function CreateReportDialog({
           guestReport={guest}
           coverageScope="served"
           onConfirm={(payload) => {
+            // A newly selected pin supersedes any address cached by an earlier
+            // authenticated precheck.
+            resolvedAddressRef.current = null
             setPhotoVerdicts([])
             setPrivacyPreview(null)
             setLocationPin({
@@ -1508,7 +1972,11 @@ export function CreateReportDialog({
             setAddress(payload.address)
             setAddressPrimary(payload.addressPrimary)
             setAddressSecondary(payload.addressSecondary)
-            setFieldErrors((prev) => ({ ...prev, address: "" }))
+            setFieldErrors((prev) => ({
+              ...prev,
+              address: "",
+              location: "",
+            }))
           }}
         />
       </Suspense>
@@ -1530,11 +1998,6 @@ export function CreateReportDialog({
             setSubmittedReport(null)
             setOpen(false)
           }}
-          canShare={
-            submittedReport.validation_status === "accepted" &&
-            submittedReport.visibility === "community" &&
-            !submittedReport.escalated_alert
-          }
           onTrack={() => {
             const reportId = submittedReport.public_id
             resetForm()

@@ -1672,8 +1672,19 @@ def reverse_geocode(latitude, longitude) -> dict[str, Any]:
 
 def map_context_payload(community) -> dict[str, Any]:
     # v3: real OSM POIs + admin MapServicePoi merge
+    from apps.emergencies.models import MapDispatchPolicy
+
+    # The resident SOS picker uses this payload for its local coverage check.
+    # Include the policy revision in the cache key; otherwise changing the
+    # acceptance radius/shape leaves the picker using the previous policy for
+    # up to the whole map-cache TTL.
+    policy = MapDispatchPolicy.current(community)
     map_version = cache.get(f"community-map-cache-version:{community.pk}", 1)
-    cache_key = f"{MAP_CONTEXT_CACHE_KEY}:{community.pk}:{community.boundary_revision}:{map_version}"
+    policy_version = policy.updated_at.isoformat() if policy.updated_at else "0"
+    cache_key = (
+        f"{MAP_CONTEXT_CACHE_KEY}:{community.pk}:{community.boundary_revision}:"
+        f"{map_version}:{policy.pk}:{policy_version}"
+    )
     cached = cache.get(cache_key)
     if cached:
         return cached
@@ -1706,7 +1717,7 @@ def map_context_payload(community) -> dict[str, Any]:
         "city_bounds": bounds,
         "soft_buffer_meters": SOFT_BUFFER_METERS,
         "hard_reject_meters": HARD_REJECT_METERS,
-        "dispatch_policy": dispatch_policy_payload(community),
+        "dispatch_policy": policy.as_payload(),
         "boundary": {
             "name": boundary.get("name") or community.name,
             "osm_relation_id": getattr(community.boundary, "osm_id", None),

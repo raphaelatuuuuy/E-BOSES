@@ -24,13 +24,48 @@ export function concernBodyText(post: {
   return description
 }
 
+export function normaliseConcernCopy(value: string) {
+  return value
+    .replace(/[“”‘’"']/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
+/** Match the map hover-tip rule for showing a generated concern summary. */
+export function concernSummaryText(post: {
+  title?: string | null
+  description?: string | null
+  summary?: string | null
+}) {
+  const title = (post.title || "").trim()
+  const description = (post.description || "").trim()
+  const summary = (post.summary || "").trim()
+  if (!summary) return ""
+  if (
+    description &&
+    normaliseConcernCopy(description) === normaliseConcernCopy(summary)
+  ) {
+    return ""
+  }
+  if (
+    !description &&
+    title &&
+    normaliseConcernCopy(title) === normaliseConcernCopy(summary)
+  ) {
+    return ""
+  }
+  return summary
+}
+
 /** Short label for lists when title is only a hard-sliced description. */
 export function concernTitleText(post: {
+  official_title?: string | null
   title?: string | null
   description?: string | null
 }): string {
   const body = concernBodyText(post)
-  const title = (post.title || "").trim()
+  const title = (post.official_title || post.title || "").trim()
   if (!title) return body.slice(0, 80) || "Report"
   // Mid-word slice looks broken in list headers — clean at word boundary
   if (body.startsWith(title) && title.length < body.length) {

@@ -12,7 +12,7 @@ import type { Selection } from "./lib"
 export const ALERT_FEED_CHIPS: MapFilterChip[] = [
   { key: "all", label: "All" },
   { key: "concerns", label: "Concerns" },
-  { key: "announcements", label: "Announcements" },
+  { key: "announcements", label: "Advisories" },
 ]
 
 export type AlertFeedRow = {
@@ -31,6 +31,9 @@ export const AlertsFeed = memo(function AlertsFeed({
   weatherMode = false,
   weatherToggle,
   weather,
+  listToolbar,
+  emptyState,
+  showFullSnippet = false,
   showRealIconWhenClosed,
 }: {
   areaName: string
@@ -40,6 +43,9 @@ export const AlertsFeed = memo(function AlertsFeed({
   weatherMode?: boolean
   weatherToggle?: ReactNode
   weather?: MapWeatherState
+  listToolbar?: ReactNode
+  emptyState?: ReactNode
+  showFullSnippet?: boolean
   showRealIconWhenClosed?: boolean
 }) {
   const asOf = new Date().toLocaleTimeString([], {
@@ -69,6 +75,8 @@ export const AlertsFeed = memo(function AlertsFeed({
         </div>
       </div>
 
+      {listToolbar}
+
       <div
         className={cn(
           "scrollbar-hide relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4",
@@ -78,15 +86,17 @@ export const AlertsFeed = memo(function AlertsFeed({
         {weatherMode && weather ? (
           <MapWeatherCard weather={weather} framed={false} />
         ) : rows.length === 0 ? (
-          <div className="px-3 py-10 text-center">
-            <p className="text-[14px] font-semibold text-neutral-800 sm:text-[15px]">
-              Nothing active right now
-            </p>
-            <p className="mt-1 text-[12px] text-neutral-500 sm:text-[13px]">
-              New concerns and emergencies appear here the moment they are
-              filed.
-            </p>
-          </div>
+          emptyState ?? (
+            <div className="px-3 py-10 text-center">
+              <p className="text-[14px] font-semibold text-neutral-800 sm:text-[15px]">
+                Nothing active right now
+              </p>
+              <p className="mt-1 text-[12px] text-neutral-500 sm:text-[13px]">
+                New concerns and emergencies appear here the moment they are
+                filed.
+              </p>
+            </div>
+          )
         ) : (
           <ul className="flex flex-col gap-2">
             {rows.map((row) => (
@@ -99,6 +109,7 @@ export const AlertsFeed = memo(function AlertsFeed({
                     row.selection ? onSelect(row.selection) : row.onAction?.()
                   }
                   onAction={row.onAction}
+                  fullSnippet={showFullSnippet}
                   showRealIconWhenClosed={showRealIconWhenClosed}
                 />
               </li>

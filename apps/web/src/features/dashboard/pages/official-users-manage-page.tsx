@@ -5,10 +5,10 @@ import { toast } from "sonner"
 import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { cn } from "@workspace/ui/lib/utils"
-import { ListSearch, Pager, PAGE_SIZE } from "@/components/ui/list-controls"
-import { SheetDialog, SheetPrimaryButton } from "@/features/dashboard/components/sheet-dialog"
+import { SheetActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
-import { useWheelScroll } from "@/hooks/use-wheel-scroll"
+import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
+import { ConfigurationTable, ConfigurationTableEmpty, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
 
 type ManagedRole = "resident" | "barangay_official" | "first_responder"
 
@@ -178,7 +178,7 @@ function InlineDropdown({ value, onChange, options }: {
 
 
 
-export default function OfficialUsersManagePage() {
+export default function OfficialUsersManagePage({ embedded = false }: { embedded?: boolean }) {
   const [users, setUsers] = useState<StaffUser[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
   const [positions, setPositions] = useState<Position[]>([])
@@ -190,7 +190,6 @@ export default function OfficialUsersManagePage() {
   const [selected, setSelected] = useState<StaffUser | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
-  const rangeScrollRef = useWheelScroll<HTMLDivElement>()
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(query.trim()), 250)
@@ -228,7 +227,7 @@ export default function OfficialUsersManagePage() {
     return result
   }, [users, roleFilter, debounced])
 
-  const page = filtered.slice(offset, offset + PAGE_SIZE)
+  const page = filtered.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
 
   const filterCounts = useMemo(() => ({
     all: users.length,
@@ -237,8 +236,17 @@ export default function OfficialUsersManagePage() {
     resident: users.filter((u) => u.role === "resident").length,
   }), [users])
 
+  useEffect(() => {
+    if (!embedded) return
+    const handle = () => setCreateOpen(true)
+    window.addEventListener("configuration-primary-action", handle)
+    return () => window.removeEventListener("configuration-primary-action", handle)
+  }, [embedded])
+
   return (
     <ConfigShell
+      embedded={embedded}
+      hideEmbeddedAction={embedded}
       icon={UserCogIcon}
       action={<ConfigHeroAction icon={PlusIcon} onClick={() => setCreateOpen(true)}>Create user</ConfigHeroAction>}
       eyebrow="User management"
@@ -251,33 +259,25 @@ export default function OfficialUsersManagePage() {
         { label: "Residents", value: filterCounts.resident },
       ]}
     >
-      {/* Search + filters on same line */}
-      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
-        <ListSearch value={query} onChange={setQuery} placeholder="Search by name, email or phone" className="flex-1 sm:max-w-xs" />
-        <div ref={rangeScrollRef} className="flex items-center gap-6 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              type="button"
-              onClick={() => setRoleFilter(f.key)}
-              className={roleFilter === f.key ? "shrink-0 text-read font-medium text-brand-navy" : "shrink-0 text-read text-neutral-400 hover:text-brand-navy"}
-            >
-              {f.label}
-              <span className="ml-1.5 tabular-nums text-neutral-400">{filterCounts[f.key as keyof typeof filterCounts]}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      <ConfigurationListToolbar
+        search={query}
+        onSearch={(value) => { setQuery(value); setOffset(0) }}
+        placeholder="Search by name, email or phone"
+        filters={FILTERS.map((filter) => ({ key: filter.key, label: filter.label, count: filterCounts[filter.key as keyof typeof filterCounts] }))}
+        activeFilter={roleFilter}
+        onFilter={(value) => { setRoleFilter(value); setOffset(0) }}
+      />
 
-      {/* Editorial list */}
-      <ol className="mt-4">
+      <ConfigurationTable label="Users">
         {page.map((user) => (
-          <li
+          <ConfigurationTableRow
             key={user.id}
-            className="grid grid-cols-1 gap-x-8 gap-y-3 border-b border-neutral-200 py-6 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto]"
+            actions={<SheetIconButton label={`Manage ${user.full_name || user.email}`} onClick={() => { setSelected(user); setEditOpen(true) }}>
+              <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
+            </SheetIconButton>}
           >
             <div className="min-w-0">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-3">
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[15px] font-bold text-navy-muted">
                   {(user.full_name || user.email).charAt(0).toUpperCase()}
                 </span>
@@ -295,29 +295,18 @@ export default function OfficialUsersManagePage() {
                 ) : (
                   <span className="inline-flex items-center gap-1 text-meta text-red-600">
                     <CircleX className="size-3.5" strokeWidth={2} />
-                    {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
-                  </span>
+                  {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
+                </span>
                 )}
               </div>
+              <p className="mt-1 truncate text-meta text-neutral-500">{user.email}</p>
             </div>
-
-            <div className="flex shrink-0 items-center gap-5 border-t border-neutral-200 pt-3 sm:border-0 sm:pt-0">
-              <button
-                type="button"
-                onClick={() => { setSelected(user); setEditOpen(true) }}
-                className="text-meta text-neutral-500 transition-colors hover:text-accent"
-              >
-                Manage
-              </button>
-            </div>
-          </li>
+          </ConfigurationTableRow>
         ))}
-        {page.length === 0 && !loading ? (
-          <li className="py-14 text-center text-read text-neutral-500">No users found.</li>
-        ) : null}
-      </ol>
+        {page.length === 0 && !loading ? <ConfigurationTableEmpty>No users found.</ConfigurationTableEmpty> : null}
+      </ConfigurationTable>
 
-      <Pager offset={offset} total={filtered.length} onChange={setOffset} noun="users" />
+      <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="users" />
 
       {/* Manage dialog */}
       {selected && (
@@ -377,16 +366,13 @@ function CreateUserDialog({
   }
 
   const communities = useMemo(() => communitiesOf(departments), [departments])
-  // One deployment community: no need to make the admin pick what is already
-  // the only option. Two or more: the choice is required, because every unit
-  // name exists in each of them.
-  useEffect(() => {
-    if (!communityId && communities.length === 1) setCommunityId(communities[0].value)
-  }, [communities, communityId])
+  // One deployment community is selected implicitly, so the sheet does not
+  // need an extra round-trip just to populate its picker.
+  const resolvedCommunityId = communityId || (communities.length === 1 ? communities[0].value : "")
 
   const communityUnits = useMemo(
-    () => departments.filter((d) => d.is_active && String(d.community) === communityId),
-    [departments, communityId]
+    () => departments.filter((d) => d.is_active && String(d.community) === resolvedCommunityId),
+    [departments, resolvedCommunityId]
   )
   const unitPositions = positions.filter((p) => p.is_active && String(p.department) === departmentId)
 
@@ -438,22 +424,17 @@ function CreateUserDialog({
       title="Create user"
       size="wide"
       footer={
-        <div className="flex gap-2">
-          <SheetPrimaryButton onClick={() => { onClose(); reset() }} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">Cancel</SheetPrimaryButton>
-          <button
+        <SheetActionRow>
+          <SheetSecondaryButton onClick={() => { onClose(); reset() }}>Cancel</SheetSecondaryButton>
+          <SheetPrimaryButton
             type="button"
+            tone="accent"
             disabled={busy || !canSubmit}
             onClick={() => void create()}
-            className={cn(
-              "flex h-[52px] flex-1 items-center justify-center rounded-full text-[15px] font-semibold transition-colors",
-              busy || !canSubmit
-                ? "cursor-not-allowed bg-neutral-200 text-neutral-400"
-                : "bg-accent text-white hover:opacity-90 active:scale-[0.99]",
-            )}
           >
             {busy ? "Creating…" : "Create account"}
-          </button>
-        </div>
+          </SheetPrimaryButton>
+        </SheetActionRow>
       }
     >
       <div className="pb-4">
@@ -572,7 +553,7 @@ function CreateUserDialog({
                   <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Community</dt>
                   <dd className="flex-1 flex items-center gap-2">
                     <span className="text-neutral-900 text-[18px]">
-                      {communities.find((c) => c.value === communityId)?.label ?? "Choose community"}
+                      {communities.find((c) => c.value === resolvedCommunityId)?.label ?? "Choose community"}
                     </span>
                     <button type="button" onClick={() => setEditingField(editingField === "community" ? null : "community")} className="text-neutral-400 hover:text-accent">
                       <PencilIcon className="size-4" />
@@ -581,7 +562,7 @@ function CreateUserDialog({
                 </div>
                 {editingField === "community" && (
                   <InlineDropdown
-                    value={communityId}
+                    value={resolvedCommunityId}
                     onChange={(v) => { setCommunityId(v); setDepartmentId(""); setPositionId(""); setEditingField(null) }}
                     options={communities}
                   />
@@ -595,12 +576,12 @@ function CreateUserDialog({
                     <span className="text-neutral-900 text-[18px]">
                       {departmentId ? departments.find((d) => String(d.id) === departmentId)?.name ?? "—" : "Not assigned yet"}
                     </span>
-                    <button type="button" disabled={!communityId} onClick={() => { if (communityId) setEditingField(editingField === "unit" ? null : "unit") }} className={cn("text-neutral-400 transition-colors", communityId ? "hover:text-accent" : "cursor-not-allowed opacity-40")}>
+                    <button type="button" disabled={!resolvedCommunityId} onClick={() => { if (resolvedCommunityId) setEditingField(editingField === "unit" ? null : "unit") }} className={cn("text-neutral-400 transition-colors", resolvedCommunityId ? "hover:text-accent" : "cursor-not-allowed opacity-40")}>
                       <PencilIcon className="size-4" />
                     </button>
                   </dd>
                 </div>
-                {editingField === "unit" && communityId && (
+                {editingField === "unit" && resolvedCommunityId && (
                   <InlineDropdown
                     value={departmentId}
                     onChange={(v) => { setDepartmentId(v); setPositionId(""); setEditingField(null) }}
@@ -693,23 +674,19 @@ function UserManageDialog({
     }
     return ""
   }, [communities, user.community, user.barangay, designations, departments])
-
-  useEffect(() => {
-    if (communityId || communities.length === 0) return
-    setCommunityId(ownCommunityId || (communities.length === 1 ? communities[0].value : ""))
-  }, [communityId, ownCommunityId, communities])
+  const resolvedCommunityId = communityId || ownCommunityId || (communities.length === 1 ? communities[0].value : "")
 
   // A resident's community is their barangay on the profile — editable and
   // saved. For staff the picker only browses unit catalogs per community; it
   // never moves the profile.
   const communityChanged =
     user.role === "resident" &&
-    communityId !== "" &&
-    communityId !== ownCommunityId
+    resolvedCommunityId !== "" &&
+    resolvedCommunityId !== ownCommunityId
 
   const communityUnits = useMemo(
-    () => departments.filter((d) => d.is_active && String(d.community) === communityId),
-    [departments, communityId]
+    () => departments.filter((d) => d.is_active && String(d.community) === resolvedCommunityId),
+    [departments, resolvedCommunityId]
   )
 
   const loadDesignations = useCallback(() => {
@@ -738,7 +715,7 @@ function UserManageDialog({
     setBusy(true)
     try {
       const body: Record<string, unknown> = {}
-      if (communityChanged) body.community = Number(communityId)
+      if (communityChanged) body.community = Number(resolvedCommunityId)
       if (role !== user.role) body.role = role
       if (accountStatus !== user.status) body.status = accountStatus
       if (firstName !== (user.firstName ?? "")) body.first_name = firstName
@@ -799,22 +776,17 @@ function UserManageDialog({
       title="User Details"
       size="wide"
       footer={
-        <div className="flex gap-2">
-          <SheetPrimaryButton onClick={onClose} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">Cancel</SheetPrimaryButton>
-          <button
+        <SheetActionRow>
+          <SheetSecondaryButton onClick={onClose}>Cancel</SheetSecondaryButton>
+          <SheetPrimaryButton
             type="button"
+            tone="accent"
             disabled={busy || !hasChanges}
             onClick={() => void saveAccount().then(onClose)}
-            className={cn(
-              "flex h-[52px] flex-1 items-center justify-center rounded-full text-[15px] font-semibold transition-colors",
-              busy || !hasChanges
-                ? "cursor-not-allowed bg-neutral-200 text-neutral-400"
-                : "bg-accent text-white hover:opacity-90 active:scale-[0.99]",
-            )}
           >
             {busy ? "Saving\u2026" : "Save changes"}
-          </button>
-        </div>
+          </SheetPrimaryButton>
+        </SheetActionRow>
       }
     >
       <div className="pb-4">
@@ -949,7 +921,7 @@ function UserManageDialog({
               <dt className="w-28 shrink-0 text-neutral-500 text-[18px]">Community</dt>
               <dd className="flex-1 flex items-center gap-2">
                 <span className="text-neutral-900 text-[18px]">
-                  {communities.find((c) => c.value === communityId)?.label
+                  {communities.find((c) => c.value === resolvedCommunityId)?.label
                     ?? user.barangay
                     ?? "Choose community"}
                 </span>
@@ -960,7 +932,7 @@ function UserManageDialog({
             </div>
             {editingField === "community" && (
               <InlineDropdown
-                value={communityId}
+                value={resolvedCommunityId}
                 onChange={(v) => { setCommunityId(v); setDepartmentId(""); setPositionId(""); setEditingField(null) }}
                 options={communities}
               />
@@ -981,12 +953,12 @@ function UserManageDialog({
                           ? designations.map((d) => d.department_detail?.name ?? "Unit").join(", ")
                           : "Not assigned yet"}
                     </span>
-                    <button type="button" disabled={!communityId} onClick={() => { if (communityId) setEditingField(editingField === "unit" ? null : "unit") }} className={cn("text-neutral-400 transition-colors", communityId ? "hover:text-accent" : "cursor-not-allowed opacity-40")}>
+                    <button type="button" disabled={!resolvedCommunityId} onClick={() => { if (resolvedCommunityId) setEditingField(editingField === "unit" ? null : "unit") }} className={cn("text-neutral-400 transition-colors", resolvedCommunityId ? "hover:text-accent" : "cursor-not-allowed opacity-40")}>
                       <PencilIcon className="size-4" />
                     </button>
                   </dd>
                 </div>
-                {editingField === "unit" && communityId && (
+                {editingField === "unit" && resolvedCommunityId && (
                   <div className="mt-2">
                     <InlineDropdown value={departmentId} onChange={(v) => { setDepartmentId(v); setPositionId(""); setEditingField(null) }}
                       options={communityUnits.map((d) => ({ value: String(d.id), label: d.name }))} />

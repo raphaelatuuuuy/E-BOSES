@@ -13,7 +13,6 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { distanceKm } from "@/features/dashboard/lib/responder-format"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
-import { MAP_COLORS } from "@/features/dashboard/components/map/markers"
 import {
   getEmergencyRoute,
   listAssignedEmergencies,
@@ -60,7 +59,10 @@ import {
   type StepProgress,
 } from "@/features/dashboard/lib/route-progress"
 import { ResizableSplit } from "@/features/dashboard/components/workspace/resizable-split"
-import { MOBILE_NAV_CLEARANCE, useIsDesktop } from "@/features/dashboard/lib/shell"
+import {
+  MOBILE_NAV_CLEARANCE,
+  useIsDesktop,
+} from "@/features/dashboard/lib/shell"
 import { useIncidentActions } from "@/features/dashboard/components/responder/use-incident-actions"
 import { EmergencyResolutionSheet } from "@/features/dashboard/components/responder/emergency-resolution-sheet"
 
@@ -89,44 +91,17 @@ const REROUTE_COOLDOWN_MS = 20_000
 
 function locationFailureMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message
-  const code = typeof error === "object" && error && "code" in error ? Number(error.code) : 0
-  if (code === 1) return "Location permission was denied. Allow location for E-Boses in your browser settings, then try again."
-  if (code === 2) return "Your location is unavailable. Move to an open area or turn on device location, then try again."
-  if (code === 3) return "Location request timed out. Check your GPS signal and try again."
+  const code =
+    typeof error === "object" && error && "code" in error
+      ? Number(error.code)
+      : 0
+  if (code === 1)
+    return "Location permission was denied. Allow location for E-Boses in your browser settings, then try again."
+  if (code === 2)
+    return "Your location is unavailable. Move to an open area or turn on device location, then try again."
+  if (code === 3)
+    return "Location request timed out. Check your GPS signal and try again."
   return "Your location could not be read. Check device location access and try again."
-}
-
-const LEGEND_ROWS = [
-  { label: "Incidents", color: MAP_COLORS.emergency },
-  { label: "Concerns", color: MAP_COLORS.concern },
-  { label: "Resolved", color: MAP_COLORS.resolved },
-  { label: "You are here", color: "#0f172a" },
-]
-
-function DispatchMiniLegend({ className }: { className?: string }) {
-  return (
-    <div
-      role="group"
-      aria-label="Map legend"
-      className={cn(
-        "flex flex-col gap-1 rounded-xl border border-neutral-200 bg-white/95 px-2.5 py-2 shadow-lg backdrop-blur-md",
-        className,
-      )}
-    >
-      {LEGEND_ROWS.map((row) => (
-        <span key={row.label} className="flex items-center gap-2">
-          <span
-            aria-hidden
-            className="size-2 shrink-0 rounded-full ring-1 ring-neutral-300"
-            style={{ backgroundColor: row.color }}
-          />
-          <span className="whitespace-nowrap text-[11px] font-semibold leading-tight text-neutral-700">
-            {row.label}
-          </span>
-        </span>
-      ))}
-    </div>
-  )
 }
 
 export default function ResponderDispatchPage() {
@@ -140,7 +115,9 @@ export default function ResponderDispatchPage() {
   const [concerns, setConcerns] = useState<Concern[]>([])
   const [assignedConcerns, setAssignedConcerns] = useState<Concern[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [selectedConcernId, setSelectedConcernId] = useState<number | null>(null)
+  const [selectedConcernId, setSelectedConcernId] = useState<number | null>(
+    null
+  )
   const [userPos, setUserPos] = useState<KnownPosition | null>(null)
   const [loading, setLoading] = useState(true)
   const [locating, setLocating] = useState(false)
@@ -174,35 +151,43 @@ export default function ResponderDispatchPage() {
 
   const selected = useMemo(
     () => alerts.find((alert) => alert.id === selectedId) ?? alerts[0] ?? null,
-    [alerts, selectedId],
+    [alerts, selectedId]
   )
 
   const selectedActiveTeam = useMemo(
     () =>
       selected?.assignments?.filter(
-        (assignment) => !["cancelled", "declined", "resolved"].includes(assignment.status),
+        (assignment) =>
+          !["cancelled", "declined", "resolved"].includes(assignment.status)
       ) ?? [],
-    [selected],
+    [selected]
   )
 
   const ownAssignment = useMemo(
-    () => selectedActiveTeam.find((assignment) => assignment.responder.id === viewerId) ?? null,
-    [selectedActiveTeam, viewerId],
+    () =>
+      selectedActiveTeam.find(
+        (assignment) => assignment.responder.id === viewerId
+      ) ?? null,
+    [selectedActiveTeam, viewerId]
   )
 
   const listRoute = useMemo(
     () => ownAssignment?.route ?? selectedActiveTeam[0]?.route ?? null,
-    [ownAssignment, selectedActiveTeam],
+    [ownAssignment, selectedActiveTeam]
   )
 
   const [routeDetail, setRouteDetail] = useState<EmergencyRoute | null>(null)
   const [travelProfileBusy, setTravelProfileBusy] = useState(false)
   // Held only while a switch is in flight; the assignment is the source of truth.
-  const [profileOverride, setProfileOverride] = useState<TravelProfile | null>(null)
+  const [profileOverride, setProfileOverride] = useState<TravelProfile | null>(
+    null
+  )
 
   const selectedId_ = selected?.id ?? null
-  const travelProfile = profileOverride ?? ownAssignment?.travel_profile ?? "car"
-  const route = (routeDetail?.alert_id === selectedId_ ? routeDetail : null) ?? listRoute
+  const travelProfile =
+    profileOverride ?? ownAssignment?.travel_profile ?? "car"
+  const route =
+    (routeDetail?.alert_id === selectedId_ ? routeDetail : null) ?? listRoute
 
   const positionStale = isPositionStale(userPos, now)
 
@@ -212,7 +197,7 @@ export default function ResponderDispatchPage() {
       userPos.latitude,
       userPos.longitude,
       selected.latitude,
-      selected.longitude,
+      selected.longitude
     )
   }, [selected, userPos])
 
@@ -224,7 +209,7 @@ export default function ResponderDispatchPage() {
         userPos.latitude,
         userPos.longitude,
         concern.latitude,
-        concern.longitude,
+        concern.longitude
       )
       return distance == null || distance <= 10
     })
@@ -232,25 +217,34 @@ export default function ResponderDispatchPage() {
 
   const mapConcerns = useMemo(() => {
     const byId = new Map<number, Concern>()
-    for (const concern of [...nearbyConcerns, ...assignedConcerns]) byId.set(concern.id, concern)
+    for (const concern of [...nearbyConcerns, ...assignedConcerns])
+      byId.set(concern.id, concern)
     return [...byId.values()]
   }, [nearbyConcerns, assignedConcerns])
 
   const refresh = useCallback(async () => {
     const [next, feedConcerns, nextAssignedConcerns] = await Promise.all([
       listAssignedEmergencies(),
-      listFeedConcerns(undefined, undefined, undefined, undefined).catch(() => []),
+      listFeedConcerns(undefined, undefined, undefined, undefined).catch(
+        () => []
+      ),
       listAssignedConcerns().catch(() => []),
     ])
     setAlerts(next)
-    setConcerns(feedConcerns.filter((concern) => concern.visibility === "community").slice(0, 12))
+    setConcerns(
+      feedConcerns
+        .filter((concern) => concern.visibility === "community")
+        .slice(0, 12)
+    )
     setAssignedConcerns(nextAssignedConcerns)
     setSelectedId((current) => {
       const nextId =
         [preferredDispatchId, current, next[0]?.id].find(
-          (candidate) => candidate != null && next.some((alert) => alert.id === candidate),
+          (candidate) =>
+            candidate != null && next.some((alert) => alert.id === candidate)
         ) ?? null
-      if (nextId) window.localStorage.setItem(SELECTED_DISPATCH_KEY, String(nextId))
+      if (nextId)
+        window.localStorage.setItem(SELECTED_DISPATCH_KEY, String(nextId))
       return nextId
     })
   }, [preferredDispatchId])
@@ -266,7 +260,11 @@ export default function ResponderDispatchPage() {
   // and the focused dispatch is the tab's whole content.
   const backToPreviousPage = useCallback(() => {
     const historyState = window.history.state as { idx?: number } | null
-    if (historyState && typeof historyState.idx === "number" && historyState.idx > 0) {
+    if (
+      historyState &&
+      typeof historyState.idx === "number" &&
+      historyState.idx > 0
+    ) {
       navigate(-1)
     } else {
       navigate("/dashboard/responders/shift", { replace: true })
@@ -278,7 +276,9 @@ export default function ResponderDispatchPage() {
   }, [])
 
   const applyAlertChange = useCallback((next: EmergencyAlert) => {
-    setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
+    setAlerts((current) =>
+      current.map((alert) => (alert.id === next.id ? next : alert))
+    )
   }, [])
 
   useEffect(() => {
@@ -292,12 +292,15 @@ export default function ResponderDispatchPage() {
       () =>
         void refresh()
           .catch(() => {
-            if (!cancelled) toast.error("Could not load assigned emergencies.", { id: "assigned-load" })
+            if (!cancelled)
+              toast.error("Could not load assigned emergencies.", {
+                id: "assigned-load",
+              })
           })
           .finally(() => {
             if (!cancelled) setLoading(false)
           }),
-      0,
+      0
     )
     return () => {
       cancelled = true
@@ -307,16 +310,28 @@ export default function ResponderDispatchPage() {
 
   useEffect(() => {
     function handleNotification(event: Event) {
-      const notification = (event as CustomEvent<{ concern_id?: number | null; emergency_id?: number | null }>).detail
+      const notification = (
+        event as CustomEvent<{
+          concern_id?: number | null
+          emergency_id?: number | null
+        }>
+      ).detail
       if (!notification?.concern_id && !notification?.emergency_id) return
       void refresh().catch(() =>
-        toast.error("A new assignment arrived, but the dispatch could not refresh.", {
-          id: "assignment-arrive",
-        }),
+        toast.error(
+          "A new assignment arrived, but the dispatch could not refresh.",
+          {
+            id: "assignment-arrive",
+          }
+        )
       )
     }
     window.addEventListener("eboses:notification-created", handleNotification)
-    return () => window.removeEventListener("eboses:notification-created", handleNotification)
+    return () =>
+      window.removeEventListener(
+        "eboses:notification-created",
+        handleNotification
+      )
   }, [refresh])
 
   useEffect(() => {
@@ -344,7 +359,9 @@ export default function ResponderDispatchPage() {
       if (cancelled) return
       if (!isFreshGeolocationPosition(position)) {
         setUserPos(null)
-        reportGeoError("Waiting for a fresh, accurate GPS fix. Check device location and try again.")
+        reportGeoError(
+          "Waiting for a fresh, accurate GPS fix. Check device location and try again."
+        )
         return
       }
       setUserPos(writeLastKnownPosition(position, viewerId))
@@ -354,14 +371,14 @@ export default function ResponderDispatchPage() {
       (positionError) => {
         if (!cancelled) reportGeoError(locationFailureMessage(positionError))
       },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
     )
     const watchId = navigator.geolocation.watchPosition(
       applyPosition,
       (positionError) => {
         if (!cancelled) reportGeoError(locationFailureMessage(positionError))
       },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
     )
     return () => {
       cancelled = true
@@ -392,7 +409,10 @@ export default function ResponderDispatchPage() {
 
   const routeGeometry = route?.geometry
   const routeSteps = route?.steps
-  const roadPoints = useMemo(() => latLngsFromGeoJson(routeGeometry), [routeGeometry])
+  const roadPoints = useMemo(
+    () => latLngsFromGeoJson(routeGeometry),
+    [routeGeometry]
+  )
 
   const offRoute = useMemo(() => {
     if (!userPos || positionStale) return null
@@ -401,7 +421,10 @@ export default function ResponderDispatchPage() {
 
   const progress = useMemo(() => {
     if (!userPos || positionStale || !routeSteps?.length) return null
-    return stepProgress(roadPoints, routeSteps, [userPos.latitude, userPos.longitude])
+    return stepProgress(roadPoints, routeSteps, [
+      userPos.latitude,
+      userPos.longitude,
+    ])
   }, [roadPoints, routeSteps, userPos, positionStale])
 
   /**
@@ -435,7 +458,10 @@ export default function ResponderDispatchPage() {
           accuracy: userPos.accuracy ?? undefined,
           timestamp: userPos.at,
         }).catch(() => {})
-        const next = await getEmergencyRoute(alertId, { steps: true, refresh: true })
+        const next = await getEmergencyRoute(alertId, {
+          steps: true,
+          refresh: true,
+        })
         setRouteDetail(next ?? null)
       } catch {
         // Throttled or offline: the next deviation attempt will retry.
@@ -445,7 +471,8 @@ export default function ResponderDispatchPage() {
 
   const changeTravelProfile = useCallback(
     async (next: TravelProfile) => {
-      if (selectedId_ == null || next === travelProfile || travelProfileBusy) return
+      if (selectedId_ == null || next === travelProfile || travelProfileBusy)
+        return
       setProfileOverride(next)
       setTravelProfileBusy(true)
       try {
@@ -454,15 +481,17 @@ export default function ResponderDispatchPage() {
         await refresh().catch(() => {})
       } catch (error) {
         toast.error(
-          error instanceof Error ? error.message : "Could not switch the travel profile.",
-          { id: "travel-profile" },
+          error instanceof Error
+            ? error.message
+            : "Could not switch the travel profile.",
+          { id: "travel-profile" }
         )
       } finally {
         setProfileOverride(null)
         setTravelProfileBusy(false)
       }
     },
-    [selectedId_, travelProfile, travelProfileBusy, refresh],
+    [selectedId_, travelProfile, travelProfileBusy, refresh]
   )
 
   // En-route is display-only in the timeline — this loop is the sole source of
@@ -478,7 +507,9 @@ export default function ResponderDispatchPage() {
       // A remembered fix is kept on the map but never published: telling the
       // server you are somewhere you left minutes ago is worse than silence.
       isPositionStale(userPos) ||
-      !["routed", "acknowledged", "en_route", "nearby"].includes(selected.status)
+      !["routed", "acknowledged", "en_route", "nearby"].includes(
+        selected.status
+      )
     ) {
       return
     }
@@ -490,7 +521,11 @@ export default function ResponderDispatchPage() {
     let cancelled = false
     const publish = async () => {
       const at = Date.now()
-      if (autoPingInFlightRef.current || at - (lastAutoPingRef.current[alertId] ?? 0) < 15_000) return
+      if (
+        autoPingInFlightRef.current ||
+        at - (lastAutoPingRef.current[alertId] ?? 0) < 15_000
+      )
+        return
       autoPingInFlightRef.current = true
       try {
         for (const ping of drainGpsPings(alertId)) {
@@ -511,7 +546,9 @@ export default function ResponderDispatchPage() {
         if (cancelled) return
         gpsToastShownRef.current = false
         lastAutoPingRef.current[alertId] = Date.now()
-        setAlerts((current) => current.map((alert) => (alert.id === next.id ? next : alert)))
+        setAlerts((current) =>
+          current.map((alert) => (alert.id === next.id ? next : alert))
+        )
       } catch {
         if (!cancelled) {
           // Keep the latest fix so a patch of dead signal does not cost the
@@ -525,9 +562,12 @@ export default function ResponderDispatchPage() {
           })
           if (!gpsToastShownRef.current) {
             gpsToastShownRef.current = true
-            toast.error("Live GPS could not sync. It will resend when the connection returns.", {
-              id: "gps-sync",
-            })
+            toast.error(
+              "Live GPS could not sync. It will resend when the connection returns.",
+              {
+                id: "gps-sync",
+              }
+            )
           }
         }
       } finally {
@@ -546,9 +586,12 @@ export default function ResponderDispatchPage() {
     setLocating(true)
     try {
       if (!window.isSecureContext) {
-        throw new Error("Location requires a secure HTTPS connection. Open the secure E-Boses address and try again.")
+        throw new Error(
+          "Location requires a secure HTTPS connection. Open the secure E-Boses address and try again."
+        )
       }
-      if (!navigator.geolocation) throw new Error("GPS is not available on this device.")
+      if (!navigator.geolocation)
+        throw new Error("GPS is not available on this device.")
       const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
@@ -557,7 +600,9 @@ export default function ResponderDispatchPage() {
         })
       })
       if (!isFreshGeolocationPosition(pos)) {
-        throw new Error("The GPS fix is stale or too inaccurate. Try My location again.")
+        throw new Error(
+          "The GPS fix is stale or too inaccurate. Try My location again."
+        )
       }
       const result = await sendLocationPing({
         latitude: pos.coords.latitude,
@@ -566,7 +611,8 @@ export default function ResponderDispatchPage() {
         source: "manual",
         timestamp: pos.timestamp,
       })
-      if (!result.accepted) throw new Error("This location is outside the active service area.")
+      if (!result.accepted)
+        throw new Error("This location is outside the active service area.")
       setUserPos(writeLastKnownPosition(pos, viewerId))
       await refresh()
       toast.success("Location updated", { id: "locate" })
@@ -578,8 +624,10 @@ export default function ResponderDispatchPage() {
   }
 
   const activeCount = useMemo(
-    () => alerts.filter((alert) => ACTIVE_EMERGENCY_STATUSES.has(alert.status)).length,
-    [alerts],
+    () =>
+      alerts.filter((alert) => ACTIVE_EMERGENCY_STATUSES.has(alert.status))
+        .length,
+    [alerts]
   )
 
   const mapSurface = (
@@ -608,23 +656,25 @@ export default function ResponderDispatchPage() {
    * takes every pixel that is left.
    */
   const emptyState = (
-    <div className="mx-auto flex min-h-0 w-full min-w-0 max-w-2xl flex-1 flex-col gap-3 lg:max-w-none">
+    <div className="mx-auto flex min-h-0 w-full max-w-2xl min-w-0 flex-1 flex-col gap-3 lg:max-w-none">
       <DispatchCard className="shrink-0">
         <div className="flex items-start gap-3">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-slate-soft text-navy-muted">
             <ShieldCheckIcon className="size-5" />
           </span>
           <div className="min-w-0">
-            <h2 className="text-[22px] font-bold leading-tight tracking-tight text-foreground">
+            <h2 className="text-[22px] leading-tight font-bold tracking-tight text-foreground">
               Waiting for dispatch
             </h2>
             <p className="mt-1 text-body leading-6 text-muted-foreground">
-              No emergency is assigned to you. Keep this page open for new assignments.
+              No emergency is assigned to you. Keep this page open for new
+              assignments.
             </p>
             {assignedConcerns.length > 0 ? (
               <p className="mt-2 text-body text-subtle-foreground">
                 {assignedConcerns.length} community{" "}
-                {assignedConcerns.length === 1 ? "report is" : "reports are"} assigned to you.
+                {assignedConcerns.length === 1 ? "report is" : "reports are"}{" "}
+                assigned to you.
               </p>
             ) : null}
           </div>
@@ -636,7 +686,6 @@ export default function ResponderDispatchPage() {
         className="relative isolate z-0 min-h-[260px] flex-1 overflow-hidden"
       >
         {mapSurface}
-        <DispatchMiniLegend className="absolute bottom-4 left-4 z-[600]" />
       </DispatchCard>
     </div>
   )
@@ -743,9 +792,11 @@ function DispatchBody({
   const isDesktop = useIsDesktop()
 
   const [incidentCollapsed, setIncidentCollapsed] = usePaneCollapse(
-    "eboses:dispatch-pane-incident",
+    "eboses:dispatch-pane-incident"
   )
-  const [mapCollapsed, setMapCollapsed] = usePaneCollapse("eboses:dispatch-pane-map")
+  const [mapCollapsed, setMapCollapsed] = usePaneCollapse(
+    "eboses:dispatch-pane-map"
+  )
 
   const incidentColumn = (
     <div className="ops-pane flex w-full min-w-0 flex-col gap-3 lg:pr-1">
@@ -767,7 +818,7 @@ function DispatchBody({
           stops the column scrolling visibly under the pill. */}
       <DispatchActionBar
         actions={actions}
-        className="sticky bottom-0 z-30 hidden bg-canvas pb-3 pt-3 lg:block"
+        className="sticky bottom-0 z-30 hidden bg-canvas pt-3 pb-3 lg:block"
       />
     </div>
   )
@@ -783,10 +834,10 @@ function DispatchBody({
       className="w-full"
     >
       {mapSurface}
-      <div className="pointer-events-none absolute bottom-4 left-4 z-[601] flex flex-col items-start gap-2">
-        <BackupFab actions={actions} className="pointer-events-auto" />
-        <DispatchMiniLegend />
-      </div>
+      <BackupFab
+        actions={actions}
+        className="absolute bottom-4 left-4 z-[601]"
+      />
     </Pane>
   )
 
@@ -794,87 +845,95 @@ function DispatchBody({
   // card's Chat tab, so there is nothing left to split against.
   const rightColumn = (
     <div className="flex min-h-0 w-full flex-col gap-3">
-      <div className={cn("flex min-h-0", mapCollapsed ? "shrink-0" : "flex-1")}>{mapPane}</div>
+      <div className={cn("flex min-h-0", mapCollapsed ? "shrink-0" : "flex-1")}>
+        {mapPane}
+      </div>
     </div>
   )
 
   return (
     <>
       {isDesktop ? (
-      <div className="flex h-full min-h-0 gap-3">
-      {incidentCollapsed ? (
-        <>
-          <CollapsedStrip label="Incident" onExpand={() => setIncidentCollapsed(false)} />
-          <div className="flex min-h-0 min-w-0 flex-1">{rightColumn}</div>
-        </>
-      ) : (
-        <ResizableSplit
-          orientation="vertical"
-          label="Resize incident column"
-          storageKey="eboses:dispatch-split-main"
-          defaultSize={32}
-          minSize={22}
-          maxSize={55}
-          className="h-full flex-1"
-          first={incidentColumn}
-          second={rightColumn}
-        />
-      )}
-    </div>
-      ) : (
-    <div
-      className="fixed inset-x-0 top-14 z-10 flex flex-col bg-canvas"
-      style={{ bottom: MOBILE_NAV_CLEARANCE }}
-    >
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-card-line bg-canvas px-3">
-        <button
-          type="button"
-          onClick={onMobileBack}
-          aria-label="Back to previous page"
-          className="flex size-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-card-raised"
-        >
-          <ArrowLeftIcon className="size-5" />
-        </button>
-        <span className="min-w-0 flex-1 truncate text-heading font-semibold capitalize text-foreground">
-          {alert.type} dispatch
-        </span>
-        <DutyToggle />
-        <OpsContrastToggle />
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 pt-3">
-        <div className="mx-auto flex min-w-0 max-w-2xl flex-col gap-3">
-          <DispatchOverviewCard
-            alert={alert}
-            viewerId={viewerId}
-            distance={selectedDistance}
-            now={now}
-            route={route}
-            progress={progress}
-            travelProfile={travelProfile}
-            onTravelProfileChange={onTravelProfileChange}
-            travelProfileBusy={travelProfileBusy}
-            showDutyToggle={false}
-          />
-          <DispatchCard padded={false} className="relative isolate z-0 h-[360px] overflow-hidden sm:h-[420px]">
-            {mapSurface}
-            <div className="pointer-events-none absolute bottom-4 left-4 z-[601] flex flex-col items-start gap-2">
-              <BackupFab actions={actions} className="pointer-events-auto" />
-              <DispatchMiniLegend />
-            </div>
-          </DispatchCard>
+        <div className="flex h-full min-h-0 gap-3">
+          {incidentCollapsed ? (
+            <>
+              <CollapsedStrip
+                label="Incident"
+                onExpand={() => setIncidentCollapsed(false)}
+              />
+              <div className="flex min-h-0 min-w-0 flex-1">{rightColumn}</div>
+            </>
+          ) : (
+            <ResizableSplit
+              orientation="vertical"
+              label="Resize incident column"
+              storageKey="eboses:dispatch-split-main"
+              defaultSize={32}
+              minSize={22}
+              maxSize={55}
+              className="h-full flex-1"
+              first={incidentColumn}
+              second={rightColumn}
+            />
+          )}
         </div>
-      </div>
+      ) : (
+        <div
+          className="fixed inset-x-0 top-14 z-10 flex flex-col bg-canvas"
+          style={{ bottom: MOBILE_NAV_CLEARANCE }}
+        >
+          <div className="flex h-14 shrink-0 items-center gap-2 border-b border-card-line bg-canvas px-3">
+            <button
+              type="button"
+              onClick={onMobileBack}
+              aria-label="Back to previous page"
+              className="flex size-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-card-raised"
+            >
+              <ArrowLeftIcon className="size-5" />
+            </button>
+            <span className="min-w-0 flex-1 truncate text-heading font-semibold text-foreground capitalize">
+              {alert.type} dispatch
+            </span>
+            <DutyToggle />
+            <OpsContrastToggle />
+          </div>
 
-      <div className="shrink-0 border-t border-card-line bg-canvas/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">
-        <DispatchActionBar actions={actions} />
-        {activeCount > 1 ? (
-          <p className="mt-2 text-center text-micro text-subtle-foreground">
-            {activeCount} active dispatches assigned to you
-          </p>
-        ) : null}
-      </div>
-    </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-3 pb-4">
+            <div className="mx-auto flex max-w-2xl min-w-0 flex-col gap-3">
+              <DispatchOverviewCard
+                alert={alert}
+                viewerId={viewerId}
+                distance={selectedDistance}
+                now={now}
+                route={route}
+                progress={progress}
+                travelProfile={travelProfile}
+                onTravelProfileChange={onTravelProfileChange}
+                travelProfileBusy={travelProfileBusy}
+                showDutyToggle={false}
+              />
+              <DispatchCard
+                padded={false}
+                className="relative isolate z-0 h-[360px] overflow-hidden sm:h-[420px]"
+              >
+                {mapSurface}
+                <BackupFab
+                  actions={actions}
+                  className="absolute bottom-4 left-4 z-[601]"
+                />
+              </DispatchCard>
+            </div>
+          </div>
+
+          <div className="shrink-0 border-t border-card-line bg-canvas/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
+            <DispatchActionBar actions={actions} />
+            {activeCount > 1 ? (
+              <p className="mt-2 text-center text-micro text-subtle-foreground">
+                {activeCount} active dispatches assigned to you
+              </p>
+            ) : null}
+          </div>
+        </div>
       )}
       <EmergencyResolutionSheet
         alert={alert}

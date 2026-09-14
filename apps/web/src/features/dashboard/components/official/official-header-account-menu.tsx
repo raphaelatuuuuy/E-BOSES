@@ -12,7 +12,7 @@ import {
   OfficialProfileDialog,
 } from "@/features/dashboard/components/official/official-account-dialogs"
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
-import { displayPosition } from "@/features/dashboard/lib/position"
+import { displayUnit } from "@/features/dashboard/lib/position"
 
 /**
  * Account menu for the official desktop header — the same personal surfaces
@@ -34,7 +34,7 @@ export function OfficialHeaderAccountMenu() {
   const rootRef = useRef<HTMLDivElement>(null)
 
   const avatarInitials = initials(user?.full_name || "Account").charAt(0)
-  const rolePosition = displayPosition(user)
+  const unitLabel = displayUnit(user)
 
   // Close the dropdown when clicking anywhere outside it.
   useEffect(() => {
@@ -86,7 +86,7 @@ export function OfficialHeaderAccountMenu() {
             {user?.full_name || "Account"}
           </span>
           <span className="max-w-44 truncate text-[10.5px] font-semibold leading-tight text-white/70">
-            {rolePosition}
+            {unitLabel}
           </span>
         </span>
         <ChevronDownIcon
@@ -152,9 +152,12 @@ export function OfficialHeaderAccountMenu() {
               role="menuitem"
               onClick={() => void handleSignOut()}
               disabled={signingOut}
-              className={cn(itemClass, "disabled:opacity-60")}
+              className={cn(
+                itemClass,
+                "bg-brand-orange text-white hover:bg-brand-orange-strong hover:text-white disabled:opacity-60",
+              )}
             >
-              <LogOutIcon className={iconClass} strokeWidth={1.8} />
+              <LogOutIcon className="size-4 shrink-0 text-white" strokeWidth={1.8} />
               <span className="min-w-0 flex-1 whitespace-nowrap text-left font-medium">
                 {signingOut ? "Signing out…" : "Sign out"}
               </span>

@@ -9,6 +9,10 @@ import { defineConfig, loadEnv } from "vite"
 export default defineConfig(({ mode }) => {
   // Load monorepo root `.env` (shared with Django).
   const rootEnv = loadEnv(mode, path.resolve(__dirname, "../.."), "")
+  // Capacitor-specific values live beside the Android project. Vite's shared
+  // root envDir does not discover this file automatically, so explicitly make
+  // its API URL available to the compiled native bundle.
+  const appModeEnv = loadEnv(mode, __dirname, "")
   const httpsEnabled = !["0", "false", "off", "no"].includes(
     (process.env.VITE_DEV_HTTPS ?? rootEnv.VITE_DEV_HTTPS ?? "true").toLowerCase(),
   )
@@ -55,6 +59,11 @@ export default defineConfig(({ mode }) => {
   const hasMkcert = httpsEnabled && fs.existsSync(mkcertCert) && fs.existsSync(mkcertKey)
 
   return {
+    define: {
+      "import.meta.env.VITE_API_BASE_URL": JSON.stringify(
+        appModeEnv.VITE_API_BASE_URL || rootEnv.VITE_API_BASE_URL || "/api",
+      ),
+    },
     plugins: [
       react(),
       tailwindcss(),
@@ -81,6 +90,13 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       strictPort: true,
       allowedHosts,
+      // The bundled Capacitor shell is served from https://localhost while
+      // ADB reverse exposes this HTTPS proxy at :5173. Auth refresh/login use
+      // cookies, so the proxy must explicitly allow that credentialed origin.
+      cors: {
+        origin: "https://localhost",
+        credentials: true,
+      },
       // Force TLS when enabled — use mkcert trusted certs or fall back to basicSsl.
       // Without this, a plain-HTTP Vite process causes ERR_SSL_PROTOCOL_ERROR
       // if the browser opens https://IP:5173.
@@ -117,6 +133,10 @@ export default defineConfig(({ mode }) => {
       host: true,
       port: 4173,
       allowedHosts,
+      cors: {
+        origin: "https://localhost",
+        credentials: true,
+      },
       https: httpsEnabled
         ? hasMkcert
           ? { cert: fs.readFileSync(mkcertCert), key: fs.readFileSync(mkcertKey) }

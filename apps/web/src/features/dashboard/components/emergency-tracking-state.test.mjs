@@ -43,19 +43,19 @@ test("tracking uses the shared real-event timeline", () => {
 
 test("responder location success waits for the server and refreshes assignments", () => {
   assert.match(responder, /await sendLocationPing/)
-  assert.match(responder, /if \(!result\.accepted\) throw/)
+  assert.match(responder, /if \(!result\.accepted\)[\s\S]*throw/)
   assert.match(responder, /await refresh\(\)/)
   assert.match(responder, /emergency_id/)
   assert.match(responder, /Waiting for dispatch/)
   assert.doesNotMatch(responder, />\s*All clear\s*</)
 })
 
-test("responder emergency notifications open the dispatch tracker", () => {
+test("responder emergency notifications open the shared emergency sheet", () => {
   assert.match(
     responderNotifications,
-    /dashboard\/responders\/dispatch\?alert=\$\{item\.emergency_id\}/
+    /dashboard\/reports\?alert=\$\{item\.emergency_id\}/
   )
-  assert.doesNotMatch(responderNotifications, /dashboard\/reports\?alert=/)
+  assert.doesNotMatch(responderNotifications, /dashboard\/responders\/dispatch\?alert=/)
 })
 
 test("a zero-length route explains that the responder is already at the incident", () => {

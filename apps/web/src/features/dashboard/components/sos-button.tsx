@@ -16,6 +16,7 @@ import {
 import { apiRequest } from "@/lib/api"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { useApiReachability } from "@/lib/api-reachability"
 
 function isActiveAlert(alert: EmergencyAlert | null) {
   return Boolean(alert && isEmergencyActive(alert.status))
@@ -23,6 +24,7 @@ function isActiveAlert(alert: EmergencyAlert | null) {
 
 export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   const { user } = useAuthSession()
+  const apiOnline = useApiReachability()
   const [shellOpen, setShellOpen] = useState(false)
   const [shellMode, setShellMode] = useState<"wizard" | "tracking">("wizard")
   const [checkingActive, setCheckingActive] = useState(false)
@@ -34,7 +36,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   const veilTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
-    if (!user || !navigator.onLine) return
+    if (!user || !apiOnline) return
     let cancelled = false
     void apiRequest<{ duty_hours?: DutyHours; hotlines?: Hotline[] }>(
       "/locations/map-context/"
@@ -48,11 +50,13 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
     return () => {
       cancelled = true
     }
-  }, [user])
+  }, [apiOnline, user])
 
   const offDuty = dutyHours ? !dutyHours.within_duty_hours : false
 
   useEffect(() => {
+    // Resetting cross-account emergency state is intentional here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setTrackingAlert(null)
     setShellOpen(false)
     setShellMode("wizard")
@@ -60,7 +64,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
     let cancelled = false
     let loading = false
     async function loadActive() {
-      if (!navigator.onLine || loading || document.visibilityState === "hidden") return
+      if (!apiOnline || loading || document.visibilityState === "hidden") return
       loading = true
       try {
         const active = await getActiveEmergency()
@@ -88,7 +92,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
       window.removeEventListener("focus", loadActive)
       document.removeEventListener("visibilitychange", loadActive)
     }
-  }, [suppressed, user?.id])
+  }, [apiOnline, suppressed, user])
 
   useEffect(() => {
     const active = isActiveAlert(trackingAlert)
@@ -118,7 +122,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
       setShellOpen(true)
       return
     }
-    if (!user || !navigator.onLine) {
+    if (!user || !apiOnline) {
       openWizard()
       return
     }
@@ -258,7 +262,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
           className="fixed inset-0 z-[300] flex cursor-pointer flex-col items-center justify-center overflow-hidden bg-black/45 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
         >
           <div className="absolute inset-0 bg-sos/15 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150" />
-          <p className="relative px-6 pb-4 text-center text-6xl font-extrabold tracking-tight text-white lg:text-8xl">
+          <p className="relative px-6 pb-4 text-center text-6xl font-extrabold tracking-tight text-white transition-colors duration-150 hover:text-sos lg:text-8xl">
             {hasActiveEmergency ? "Track my emergency" : "Need help?"}
           </p>
           <p className="relative px-6 text-center text-base font-medium text-white/70">
@@ -284,6 +288,8 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
 
       <SosWizard
         open={!suppressed && shellOpen && shellMode === "wizard"}
+        online={apiOnline}
+        hotlines={hotlines}
         onClose={() => setShellOpen(false)}
         onSubmitted={(alert) => {
           setTrackingAlert(alert)

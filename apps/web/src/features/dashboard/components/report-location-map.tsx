@@ -1,7 +1,12 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { MapPinIcon } from "lucide-react"
+import {
+  ArrowLeftIcon,
+  FootprintsIcon,
+  LocateFixedIcon,
+  MapPinIcon,
+} from "lucide-react"
 import type leaflet from "leaflet"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -12,6 +17,14 @@ import {
   concernMarkerHtml,
   concernMarkerSize,
 } from "@/features/dashboard/components/map/concern-marker"
+import {
+  MapControlButton,
+  MapControlStack,
+} from "@/features/dashboard/components/map/map-chrome"
+import {
+  StreetViewModal,
+  type StreetViewCoord,
+} from "@/features/dashboard/components/map/street-view"
 
 type ReportLocationMapProps = {
   latitude: number | string | null | undefined
@@ -20,8 +33,14 @@ type ReportLocationMapProps = {
   category?: string
   iconKey?: string
   status?: string
+  severity?: string | null
   className?: string
   heightClassName?: string
+  focusAboveSheet?: boolean
+  /** Keep the detail map's utility controls visible when it sits behind a sheet. */
+  showMapUtilities?: boolean
+  /** Back out of the report detail while the map is in view. */
+  onBack?: () => void
 }
 
 /** Values that are not a real street line for residents. */
@@ -226,13 +245,20 @@ export function ReportLocationMap({
   category,
   iconKey,
   status,
+  severity,
   className,
   heightClassName = "h-52 sm:h-56",
+  focusAboveSheet = false,
+  showMapUtilities = true,
+  onBack,
 }: ReportLocationMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const coverageRef = useRef<leaflet.LayerGroup | null>(null)
+  const recenterRef = useRef<(() => void) | null>(null)
+  const [streetView, setStreetView] = useState<StreetViewCoord | null>(null)
+  const [streetViewBottom, setStreetViewBottom] = useState<number | null>(null)
 
   const rawLat = Number(latitude)
   const rawLng = Number(longitude)
@@ -268,7 +294,6 @@ export function ReportLocationMap({
   const lat = hasPinnedCoords ? rawLat : (resolvedGeocoded?.lat ?? NaN)
   const lng = hasPinnedCoords ? rawLng : (resolvedGeocoded?.lng ?? NaN)
   const valid = Number.isFinite(lat) && Number.isFinite(lng)
-
   useEffect(() => {
     if (!valid || !containerRef.current) return
 
@@ -321,6 +346,7 @@ export function ReportLocationMap({
               category: category ?? "other",
               iconKey,
               status: status ?? "",
+              severity,
               selected: pinSelected,
             }
           )}</div>`,
@@ -333,7 +359,13 @@ export function ReportLocationMap({
 
       const centerView = () => {
         map?.setView([lat, lng], 18, { animate: false })
+        if (focusAboveSheet && map) {
+          map.panBy([0, Math.min(280, Math.round(map.getSize().y * 0.36))], {
+            animate: false,
+          })
+        }
       }
+      recenterRef.current = centerView
 
       // Boundary overlay hidden for cleaner report detail view
 
@@ -373,8 +405,43 @@ export function ReportLocationMap({
         /* ignore */
       }
       mapRef.current = null
+      recenterRef.current = null
     }
-  }, [lat, lng, valid, iconKey, category, status])
+  }, [lat, lng, valid, iconKey, category, status, severity, focusAboveSheet])
+
+  useEffect(() => {
+    if (!streetView) return
+
+    const visibleSheet = () =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>('[data-sheet-dialog="true"]')
+      ).find((element) => {
+        const rect = element.getBoundingClientRect()
+        return rect.width > 0 && rect.height > 0
+      }) ?? null
+
+    const updateOverlayBounds = () => {
+      const sheet = visibleSheet()
+      const sheetTop = sheet?.getBoundingClientRect().top ?? window.innerHeight
+      const sheetCornerOverlap = 28
+      setStreetViewBottom(
+        Math.max(
+          0,
+          Math.round(window.innerHeight - sheetTop - sheetCornerOverlap)
+        )
+      )
+    }
+
+    updateOverlayBounds()
+    const sheet = visibleSheet()
+    const observer = sheet ? new ResizeObserver(updateOverlayBounds) : null
+    if (sheet && observer) observer.observe(sheet)
+    window.addEventListener("resize", updateOverlayBounds)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener("resize", updateOverlayBounds)
+    }
+  }, [streetView])
 
   if (!valid) {
     return (
@@ -402,6 +469,51 @@ export function ReportLocationMap({
         ref={containerRef}
         className="eboses-report-map pointer-events-auto absolute inset-0 z-0 h-full w-full"
       />
+      {onBack ? (
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back"
+          title="Back"
+          className="absolute top-3 left-3 z-[500] flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 shadow-md transition-colors hover:bg-neutral-50 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:outline-none"
+        >
+          <ArrowLeftIcon className="size-5" strokeWidth={2} />
+        </button>
+      ) : null}
+      {showMapUtilities ? (
+        <div className="pointer-events-none absolute top-3 right-3 z-[500] flex items-start gap-2">
+          <div className="pointer-events-auto">
+            <MapControlStack tone="light">
+              <MapControlButton
+                tone="light"
+                label="Recenter report pin"
+                onClick={() => recenterRef.current?.()}
+              >
+                <LocateFixedIcon className="size-5" strokeWidth={1.9} />
+              </MapControlButton>
+              <MapControlButton
+                tone="light"
+                divider
+                label="Open Street View at report pin"
+                onClick={() => setStreetView({ lat, lng })}
+              >
+                <FootprintsIcon className="size-5" strokeWidth={1.9} />
+              </MapControlButton>
+            </MapControlStack>
+          </div>
+        </div>
+      ) : null}
+      {streetView ? (
+        <div
+          className="pointer-events-auto absolute inset-x-0 top-0 z-[1000]"
+          style={{ bottom: `${streetViewBottom ?? 0}px` }}
+        >
+          <StreetViewModal
+            coord={streetView}
+            onClose={() => setStreetView(null)}
+          />
+        </div>
+      ) : null}
       <style>{`
         .eboses-report-map.leaflet-container {
           width: 100%;
@@ -443,7 +555,7 @@ export function ReportLocationMap({
         .eboses-report-map .eboses-pin__disc {
           background: color-mix(in srgb, var(--pin) 16%, white) !important;
           color: var(--pin) !important;
-          border: 2px solid #fff !important;
+          border: none !important;
           box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15) !important;
         }
         .eboses-report-map .eboses-pin__disc svg {

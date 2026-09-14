@@ -2216,8 +2216,13 @@ class EmergencyCategoryListCreateView(APIView):
         qs = EmergencyCategory.objects.filter(community=community)
         if not can_configure_emergencies(request.user, CONFIGURE_DISPATCH):
             qs = qs.filter(is_active=True)
-            qs = [category for category in qs.order_by("sort_order", "label") if emergency_category_is_covered(category.code, community)]
-            return Response(EmergencyCategorySerializer(qs, many=True, context={"request": request}).data)
+            return Response(
+                EmergencyCategorySerializer(
+                    qs.order_by("sort_order", "label"),
+                    many=True,
+                    context={"request": request},
+                ).data
+            )
         return Response(EmergencyCategorySerializer(qs.order_by("sort_order", "label"), many=True, context={"request": request}).data)
 
     def post(self, request):
@@ -2569,12 +2574,50 @@ class EmergencyRouteView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-        from apps.live_map import route_for_responder_assignment
+        from apps.live_map import _osrm_route, route_for_responder_assignment
 
         touch_last_seen(request.user)
         alert = scoped_alert_or_404(request.user, pk)
         if not can_view_alert(request.user, alert):
             return Response({"detail": "You do not have permission to view this emergency route."}, status=status.HTTP_403_FORBIDDEN)
+        origin_lat = request.query_params.get("origin_lat")
+        origin_lng = request.query_params.get("origin_lng")
+        if origin_lat is not None or origin_lng is not None:
+            try:
+                origin = (float(origin_lat), float(origin_lng))
+            except (TypeError, ValueError):
+                return Response({"detail": "origin_lat and origin_lng must be numbers."}, status=status.HTTP_400_BAD_REQUEST)
+            if alert.latitude is None or alert.longitude is None:
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            profile = str(request.query_params.get("profile") or "car").strip().lower()
+            if profile not in {"car", "bike", "foot"}:
+                profile = "car"
+            route = _osrm_route(
+                origin_lat=origin[0],
+                origin_lng=origin[1],
+                dest_lat=float(alert.latitude),
+                dest_lng=float(alert.longitude),
+                profile=profile,
+                cache_key="live-map-route:preview:%s:%s:%s:%s:%s" % (
+                    profile,
+                    round(origin[0], 5),
+                    round(origin[1], 5),
+                    round(float(alert.latitude), 5),
+                    round(float(alert.longitude), 5),
+                ),
+            )
+            if route.get("status") != "ok" or not route.get("geometry"):
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            payload = {
+                **route,
+                "alert_id": alert.pk,
+                "assignment_id": None,
+                "responder_id": request.user.pk,
+                "preview": True,
+            }
+            if request.query_params.get("steps") not in {"1", "true"}:
+                payload["steps"] = []
+            return Response(payload)
         active = alert.assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES).select_related("responder")
         assignment_id = request.query_params.get("assignment_id")
         if assignment_id:

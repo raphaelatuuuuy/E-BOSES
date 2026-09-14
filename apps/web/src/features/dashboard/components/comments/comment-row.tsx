@@ -5,7 +5,6 @@ import { ShieldUserIcon } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import { timeAgo } from "@/features/dashboard/lib/format"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
-import { commentPlaceLabel } from "@/features/dashboard/components/home/home-style"
 import { renderCommentBody } from "@/features/dashboard/components/comment-mentions"
 import type { UnifiedComment } from "./comment-types"
 import {
@@ -97,18 +96,14 @@ export function CommentMeta({
   comment: UnifiedComment
   extra?: ReactNode
 }) {
-  const place = comment.author.user
-    ? commentPlaceLabel(comment.author.user)
-    : null
   return (
     <div className="flex items-center justify-between gap-x-2 text-[13px] leading-snug text-neutral-400">
       <div className="flex min-w-0 flex-wrap items-center gap-x-1.5">
         <span className="font-semibold text-neutral-900">
-          {comment.author.label}
+          {comment.isMine ? "You" : comment.author.label}
         </span>
         {comment.author.isOfficial ? <OfficialBadge /> : null}
         <span>· {timeAgo(comment.createdAt)}</span>
-        {place ? <span>· {place}</span> : null}
       </div>
       {extra ? <div className="ml-auto shrink-0">{extra}</div> : null}
     </div>

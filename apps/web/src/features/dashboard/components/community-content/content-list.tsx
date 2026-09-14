@@ -39,7 +39,7 @@ import {
 
 export type ContentListItem = { kind: "announcement"; item: Announcement }
 
-type TypeFilter = "all" | "published" | "scheduled" | "drafts" | "flag-reports"
+type TypeFilter = "all" | "published" | "scheduled" | "drafts"
 
 const AUDIENCE_LABELS: Record<Announcement["audience"], string> = {
   all: "All users",
@@ -92,19 +92,17 @@ type CombinedRow =
 
 export function ContentList({
   items,
-  flags,
   areaContext,
   onEdit,
   onDelete,
-  onFlagsChange,
 }: {
   items: ContentListItem[]
-  flags: ContentFlag[]
   areaContext: AnnouncementAreaContext | null
   onEdit: (id: number) => void
   onDelete: (id: number) => void
-  onFlagsChange: (next: ContentFlag[]) => void
 }) {
+  const flags: ContentFlag[] = []
+  const onFlagsChange = (_next: ContentFlag[]) => undefined
   const navigate = useNavigate()
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all")
   const [query, setQuery] = useState("")
@@ -190,7 +188,6 @@ export function ContentList({
       { key: "published", label: "Published" },
       { key: "scheduled", label: "Scheduled" },
       { key: "drafts", label: "Drafts" },
-      { key: "flag-reports", label: "Flagged concerns" },
     ],
     [],
   )
@@ -200,20 +197,18 @@ export function ContentList({
     const scheduled = items.filter((entry) => entry.item.status_label === "scheduled").length
     const drafts = items.filter((entry) => !entry.item.is_published).length
     return {
-      all: items.length + flags.length,
+      all: items.length,
       published,
       scheduled,
       drafts,
-      "flag-reports": flags.length,
     }
   }, [items, flags])
 
   const rows = useMemo<CombinedRow[]>(() => {
     const q = query.trim().toLowerCase()
-    const showFlags = typeFilter === "all" || typeFilter === "flag-reports"
+    const showFlags = false
     const announcements: CombinedRow[] = items
       .filter((entry) => {
-        if (typeFilter === "flag-reports") return false
         if (typeFilter === "all") return true
         if (typeFilter === "drafts") return !entry.item.is_published
         if (typeFilter === "published") {
@@ -273,9 +268,7 @@ export function ContentList({
   const takeDownNoun = isCommentFlag ? "comment" : "post"
 
   const emptyMessage =
-    typeFilter === "flag-reports"
-      ? "No flagged concerns yet."
-      : typeFilter === "published"
+    typeFilter === "published"
         ? "No published announcements yet."
         : typeFilter === "scheduled"
           ? "No scheduled announcements."
@@ -292,7 +285,7 @@ export function ContentList({
         <ListSearch
           value={query}
           onChange={setQuery}
-          placeholder="Search announcements and reports"
+          placeholder="Search announcements"
           className="flex-1 sm:max-w-xs"
         />
         <div className="flex items-center gap-6 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -680,7 +673,7 @@ function AnnouncementRow({
       <div className="grid grid-cols-1 gap-x-8 gap-y-3 py-6 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="min-w-0">
           <div className="flex items-center gap-3">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-navy text-white">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-severity-low-surface text-severity-low">
               <TagIcon className="size-4" strokeWidth={1.7} aria-hidden />
             </span>
             <button

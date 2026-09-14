@@ -32,7 +32,7 @@ export function createResidentNotificationsConfig(
   navigate: NavigateFunction,
 ): NotificationsConfig {
   return {
-    heading: "Your updates",
+    heading: "Notifications",
     filters: RESIDENT_NOTIFICATION_FILTERS,
     groupOf: typeGroup,
     filterStorageKey: "eboses:resident-notifications-filter",

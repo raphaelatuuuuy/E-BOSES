@@ -20,6 +20,12 @@ const GOLDEN_PATH = fileURLToPath(
 const TILE_LAYER_PATH = fileURLToPath(
   new URL("./map/tile-layers.ts", import.meta.url)
 )
+const SOS_LOCATION_STEP_PATH = fileURLToPath(
+  new URL("./sos/location-step.tsx", import.meta.url)
+)
+const LOCATION_PICKER_PATH = fileURLToPath(
+  new URL("./location-picker.tsx", import.meta.url)
+)
 
 test("buildEmergencySmsHref creates an explicit native SMS draft for a configured number", () => {
   assert.equal(
@@ -148,7 +154,7 @@ test("isSosLocationReady accepts any finite pin and rejects missing or non-finit
 
 test("offline street matching measures the road segment and rejects weak GPS", () => {
   const config = {
-    version: 2,
+    version: 3,
     smsNumber: "09640746068",
     community: {
       name: "Marikina Heights",
@@ -196,4 +202,18 @@ test("offline maps keep saved streets without coverage overlays or label stacks"
   assert.doesNotMatch(source, /community\.boundaryGeometry/)
   assert.doesNotMatch(source, /L\.rectangle/)
   assert.doesNotMatch(source, /permanent:\s*true/)
+})
+
+test("Emergency SOS reuses the report location picker and its pill", () => {
+  const sosSource = readFileSync(SOS_LOCATION_STEP_PATH, "utf8")
+  const pickerSource = readFileSync(LOCATION_PICKER_PATH, "utf8")
+  assert.match(sosSource, /LocationPickerModal/)
+  assert.match(sosSource, /renderInline/)
+  assert.match(sosSource, /showSearch=\{false\}/)
+  assert.match(sosSource, /recenterOnOpen/)
+  assert.match(sosSource, /showStreetView=\{false\}/)
+  assert.doesNotMatch(sosSource, /autoLocate/)
+  assert.doesNotMatch(sosSource, /import\("leaflet"\)/)
+  assert.match(pickerSource, /map = L\.map\(/)
+  assert.match(pickerSource, /Use this location/)
 })

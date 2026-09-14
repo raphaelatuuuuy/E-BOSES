@@ -12,7 +12,10 @@ import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { usePageTitle } from "@/hooks/use-page-title"
-import { ConfigShell, ConfigHeroAction } from "@/features/dashboard/components/config/config-shell"
+import {
+  ConfigShell,
+  ConfigHeroAction,
+} from "@/features/dashboard/components/config/config-shell"
 import {
   SheetDialog,
   SheetIconButton,
@@ -25,9 +28,7 @@ import {
 } from "@/features/dashboard/components/sheet-dialog"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 
-import {
-  RuleMenu,
-} from "./shared"
+import { RuleMenu } from "./shared"
 import {
   getConcernClassificationConfig,
   getValidationActivity,
@@ -38,11 +39,16 @@ import {
 import {
   EMERGENCY_MEDIA_INTEGRITY_OPTIONS,
   MEDIA_INTEGRITY_OPTIONS,
-  MISMATCH_OPTIONS,
 } from "./strictness"
 import { ConcernTestWorkspace } from "./test-workspace-concerns"
 import { EmergencyTestWorkspace } from "./test-workspace-emergencies"
-import { SmsBreakdown, SmsChatInput, SmsChatPanel, SmsCommandGuide, SenderPill } from "./test-workspace-sms"
+import {
+  SmsBreakdown,
+  SmsChatInput,
+  SmsChatPanel,
+  SmsCommandGuide,
+  SenderPill,
+} from "./test-workspace-sms"
 import { testSmsSimulation } from "./api"
 import { DecisionLogTab } from "./decision-log-tab"
 import { VerificationTestWorkspace } from "./test-workspace-verification"
@@ -53,7 +59,6 @@ const defaults: ConcernClassificationConfig = {
   text_relevance_threshold: 0.65,
   duplicate_similarity_threshold: 0.85,
   minimum_description_length: 20,
-  mismatch_action: "auto_correct",
   flag_suspicious: true,
   flag_duplicates: true,
   report_duplicate_detection_enabled: true,
@@ -89,7 +94,10 @@ function ConfigureDialog({
   open: boolean
   onClose: () => void
   config: ConcernClassificationConfig
-  onUpdate: <K extends keyof ConcernClassificationConfig>(key: K, value: ConcernClassificationConfig[K]) => void
+  onUpdate: <K extends keyof ConcernClassificationConfig>(
+    key: K,
+    value: ConcernClassificationConfig[K]
+  ) => void
   onSave: () => void
   busy: boolean
   dirty: boolean
@@ -107,7 +115,10 @@ function ConfigureDialog({
           type="button"
           aria-label="Test a sample report"
           title="Test a sample report"
-          onClick={() => { onOpenTest(); onClose() }}
+          onClick={() => {
+            onOpenTest()
+            onClose()
+          }}
           className="flex size-9 items-center justify-center rounded-full text-neutral-900 transition-colors hover:bg-neutral-100"
         >
           <TestTube2Icon className="size-[18px]" />
@@ -115,12 +126,18 @@ function ConfigureDialog({
       }
       footer={
         <div className="flex gap-2">
-          <SheetSecondaryButton onClick={onClose} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">
+          <SheetSecondaryButton
+            onClick={onClose}
+            className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]"
+          >
             Discard changes
           </SheetSecondaryButton>
           <SheetPrimaryButton
             type="button"
-            onClick={() => { onSave(); onClose() }}
+            onClick={() => {
+              onSave()
+              onClose()
+            }}
             disabled={busy || !dirty}
             className="flex-1 bg-brand-navy text-[15px] text-white hover:bg-brand-navy/85 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:hover:bg-neutral-200"
           >
@@ -130,35 +147,52 @@ function ConfigureDialog({
       }
     >
       <div className="mb-5 rounded-[16px] border border-blue-100 bg-blue-50 px-4 py-3">
-        <p className="text-[13px] font-semibold text-blue-950">Careful review is always on</p>
-        <p className="mt-1 text-[12px] leading-relaxed text-blue-900/75">Unclear reports are asked for more detail or held for a staff decision. There is no preset to switch between.</p>
+        <p className="text-[13px] font-semibold text-blue-950">
+          Careful review is always on
+        </p>
+        <p className="mt-1 text-[12px] leading-relaxed text-blue-900/75">
+          Unclear reports are asked for more detail or held for a staff
+          decision. There is no preset to switch between.
+        </p>
       </div>
 
       <SheetSectionLabel>Concerns · report quality</SheetSectionLabel>
-      <p className="mb-2 text-xs text-neutral-500">These checks apply to resident reports, posts, and comments before they reach the queue.</p>
+      <p className="mb-2 text-xs text-neutral-500">
+        These checks apply to resident reports, posts, and comments before they
+        reach the queue.
+      </p>
       <SheetList className="mb-6">
         <SheetOptionRow
           title="Missing required information"
           description="Important details are missing."
           trailing={
             <div className="flex gap-0.5 rounded-full bg-neutral-100 p-0.5">
-              {([
-                ["allow", "Allow", 10],
-                ["ask", "Ask", 20],
-                ["reject", "Reject", 40],
-              ] as const).map(([key, label, length]) => {
-                const value = config.minimum_description_length > 40 ? "reject" : config.minimum_description_length > 20 ? "ask" : "allow"
+              {(
+                [
+                  ["allow", "Allow", 10],
+                  ["ask", "Ask", 20],
+                  ["reject", "Reject", 40],
+                ] as const
+              ).map(([key, label, length]) => {
+                const value =
+                  config.minimum_description_length > 40
+                    ? "reject"
+                    : config.minimum_description_length > 20
+                      ? "ask"
+                      : "allow"
                 const active = value === key
                 return (
                   <button
                     key={key}
                     type="button"
-                    onClick={() => onUpdate("minimum_description_length", length)}
+                    onClick={() =>
+                      onUpdate("minimum_description_length", length)
+                    }
                     className={cn(
                       "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
                       active
                         ? "bg-white/70 text-neutral-900 shadow-sm"
-                        : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
+                        : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900"
                     )}
                   >
                     {label}
@@ -166,17 +200,6 @@ function ConfigureDialog({
                 )
               })}
             </div>
-          }
-        />
-        <SheetOptionRow
-          title="Incorrect category"
-          description="Selected category appears incorrect."
-          trailing={
-            <RuleMenu
-              value={config.mismatch_action}
-              options={MISMATCH_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
-              onChange={(value) => onUpdate("mismatch_action", value as ConcernClassificationConfig["mismatch_action"])}
-            />
           }
         />
         <SheetOptionRow
@@ -209,7 +232,9 @@ function ConfigureDialog({
       </SheetList>
 
       <SheetSectionLabel>Concerns · content safety</SheetSectionLabel>
-      <p className="mb-2 text-xs text-neutral-500">How the system handles unsafe or inappropriate content.</p>
+      <p className="mb-2 text-xs text-neutral-500">
+        How the system handles unsafe or inappropriate content.
+      </p>
       <SheetList>
         <SheetOptionRow
           title="Spam or unrelated submission"
@@ -220,7 +245,12 @@ function ConfigureDialog({
                 { value: "auto_reject", label: "Reject automatically" },
                 { value: "hold", label: "Hold for review" },
               ]}
-              onChange={(value) => onUpdate("content_safety_spam_action", value as ConcernClassificationConfig["content_safety_spam_action"])}
+              onChange={(value) =>
+                onUpdate(
+                  "content_safety_spam_action",
+                  value as ConcernClassificationConfig["content_safety_spam_action"]
+                )
+              }
             />
           }
         />
@@ -233,7 +263,12 @@ function ConfigureDialog({
                 { value: "hold", label: "Hold for review" },
                 { value: "auto_reject", label: "Reject automatically" },
               ]}
-              onChange={(value) => onUpdate("content_safety_abusive_action", value as ConcernClassificationConfig["content_safety_abusive_action"])}
+              onChange={(value) =>
+                onUpdate(
+                  "content_safety_abusive_action",
+                  value as ConcernClassificationConfig["content_safety_abusive_action"]
+                )
+              }
             />
           }
         />
@@ -241,12 +276,19 @@ function ConfigureDialog({
           title="Possible threat or danger"
           trailing={
             <RuleMenu
-              value={config.content_safety_threat_action ?? "accept_flag_notify"}
+              value={
+                config.content_safety_threat_action ?? "accept_flag_notify"
+              }
               options={[
                 { value: "accept_flag_notify", label: "Accept, flag & notify" },
                 { value: "hold", label: "Hold for review" },
               ]}
-              onChange={(value) => onUpdate("content_safety_threat_action", value as ConcernClassificationConfig["content_safety_threat_action"])}
+              onChange={(value) =>
+                onUpdate(
+                  "content_safety_threat_action",
+                  value as ConcernClassificationConfig["content_safety_threat_action"]
+                )
+              }
             />
           }
         />
@@ -259,7 +301,12 @@ function ConfigureDialog({
                 { value: "restrict_hold", label: "Restrict & hold for review" },
                 { value: "auto_blur_accept", label: "Auto-blur & accept" },
               ]}
-              onChange={(value) => onUpdate("content_safety_sensitive_action", value as ConcernClassificationConfig["content_safety_sensitive_action"])}
+              onChange={(value) =>
+                onUpdate(
+                  "content_safety_sensitive_action",
+                  value as ConcernClassificationConfig["content_safety_sensitive_action"]
+                )
+              }
             />
           }
         />
@@ -269,8 +316,16 @@ function ConfigureDialog({
           trailing={
             <RuleMenu
               value={config.media_integrity_action ?? "hold"}
-              options={MEDIA_INTEGRITY_OPTIONS.map(({ value, label }) => ({ value, label }))}
-              onChange={(value) => onUpdate("media_integrity_action", value as ConcernClassificationConfig["media_integrity_action"])}
+              options={MEDIA_INTEGRITY_OPTIONS.map(({ value, label }) => ({
+                value,
+                label,
+              }))}
+              onChange={(value) =>
+                onUpdate(
+                  "media_integrity_action",
+                  value as ConcernClassificationConfig["media_integrity_action"]
+                )
+              }
             />
           }
         />
@@ -290,9 +345,18 @@ function ConfigureDialog({
               description="An emergency is always sent to responders first. This check runs after, and can never hold or reject an alert."
               trailing={
                 <RuleMenu
-                  value={config.media_integrity_emergency_action ?? "flag_notify"}
-                  options={EMERGENCY_MEDIA_INTEGRITY_OPTIONS.map(({ value, label }) => ({ value, label }))}
-                  onChange={(value) => onUpdate("media_integrity_emergency_action", value as ConcernClassificationConfig["media_integrity_emergency_action"])}
+                  value={
+                    config.media_integrity_emergency_action ?? "flag_notify"
+                  }
+                  options={EMERGENCY_MEDIA_INTEGRITY_OPTIONS.map(
+                    ({ value, label }) => ({ value, label })
+                  )}
+                  onChange={(value) =>
+                    onUpdate(
+                      "media_integrity_emergency_action",
+                      value as ConcernClassificationConfig["media_integrity_emergency_action"]
+                    )
+                  }
                 />
               }
             />
@@ -301,13 +365,17 @@ function ConfigureDialog({
       )}
 
       <SheetSectionLabel>Concerns · similar reports</SheetSectionLabel>
-      <p className="mb-2 text-xs text-neutral-500">Prevent duplicates while keeping residents informed.</p>
+      <p className="mb-2 text-xs text-neutral-500">
+        Prevent duplicates while keeping residents informed.
+      </p>
       <SheetToggleRow
         id="duplicate-detection"
         label="Duplicate detection"
         description="Check for similar reports near the pinned location"
         checked={config.report_duplicate_detection_enabled !== false}
-        onChange={(checked) => onUpdate("report_duplicate_detection_enabled", checked)}
+        onChange={(checked) =>
+          onUpdate("report_duplicate_detection_enabled", checked)
+        }
       />
       <SheetList className="mt-3">
         <SheetOptionRow
@@ -319,7 +387,12 @@ function ConfigureDialog({
                 { value: "warn", label: "Warn and show existing report" },
                 { value: "block", label: "Block repeated reports" },
               ]}
-              onChange={(value) => onUpdate("report_duplicate_action", value as ConcernClassificationConfig["report_duplicate_action"])}
+              onChange={(value) =>
+                onUpdate(
+                  "report_duplicate_action",
+                  value as ConcernClassificationConfig["report_duplicate_action"]
+                )
+              }
             />
           }
         />
@@ -330,7 +403,12 @@ function ConfigureDialog({
               <input
                 type="number"
                 value={config.report_duplicate_distance_meters ?? 100}
-                onChange={(e) => onUpdate("report_duplicate_distance_meters", Number(e.target.value))}
+                onChange={(e) =>
+                  onUpdate(
+                    "report_duplicate_distance_meters",
+                    Number(e.target.value)
+                  )
+                }
                 className="h-8 w-16 rounded-full border border-neutral-200 px-3 text-xs font-semibold text-neutral-700 outline-none focus:border-neutral-400"
               />
               <span className="text-xs text-neutral-500">meters</span>
@@ -344,7 +422,12 @@ function ConfigureDialog({
               <input
                 type="number"
                 value={config.report_duplicate_lookback_days ?? 180}
-                onChange={(e) => onUpdate("report_duplicate_lookback_days", Number(e.target.value))}
+                onChange={(e) =>
+                  onUpdate(
+                    "report_duplicate_lookback_days",
+                    Number(e.target.value)
+                  )
+                }
                 className="h-8 w-16 rounded-full border border-neutral-200 px-3 text-xs font-semibold text-neutral-700 outline-none focus:border-neutral-400"
               />
               <span className="text-xs text-neutral-500">days</span>
@@ -356,7 +439,9 @@ function ConfigureDialog({
           label="Compare photos with AI"
           description="When a likely match is found, the AI also compares the photos to confirm it is the same issue."
           checked={config.photo_duplicate_llm_enabled !== false}
-          onChange={(checked) => onUpdate("photo_duplicate_llm_enabled", checked)}
+          onChange={(checked) =>
+            onUpdate("photo_duplicate_llm_enabled", checked)
+          }
         />
         {config.photo_duplicate_llm_enabled !== false ? (
           <SheetOptionRow
@@ -368,7 +453,12 @@ function ConfigureDialog({
                   min={1}
                   max={5}
                   value={config.photo_duplicate_candidate_limit ?? 3}
-                  onChange={(e) => onUpdate("photo_duplicate_candidate_limit", Number(e.target.value))}
+                  onChange={(e) =>
+                    onUpdate(
+                      "photo_duplicate_candidate_limit",
+                      Number(e.target.value)
+                    )
+                  }
                   className="h-8 w-16 rounded-full border border-neutral-200 px-3 text-xs font-semibold text-neutral-700 outline-none focus:border-neutral-400"
                 />
                 <span className="text-xs text-neutral-500">max</span>
@@ -378,9 +468,12 @@ function ConfigureDialog({
         ) : null}
       </SheetList>
 
-      <SheetSectionLabel>Concerns · photo and location checks</SheetSectionLabel>
+      <SheetSectionLabel>
+        Concerns · photo and location checks
+      </SheetSectionLabel>
       <p className="mb-2 text-xs text-neutral-500">
-        For selected categories, the system fetches the newest street-level photo of the pinned location and compares it with the submitted photo.
+        For selected categories, the system fetches the newest street-level
+        photo of the pinned location and compares it with the submitted photo.
       </p>
       <SheetToggleRow
         id="street-imagery-enabled"
@@ -392,32 +485,40 @@ function ConfigureDialog({
       {config.street_imagery_enabled === true ? (
         <SheetList className="mt-3">
           <div className="px-4 py-3">
-            <p className="mb-2 text-xs font-medium text-neutral-600">Categories to verify</p>
+            <p className="mb-2 text-xs font-medium text-neutral-600">
+              Categories to verify
+            </p>
             <div className="flex flex-wrap gap-1.5">
-              {config.categories.filter((c) => c.enabled).map((category) => {
-                const active = (config.street_imagery_categories ?? []).includes(category.key)
-                return (
-                  <button
-                    key={category.key}
-                    type="button"
-                    onClick={() => {
-                      const current = config.street_imagery_categories ?? []
-                      onUpdate(
-                        "street_imagery_categories",
-                        active ? current.filter((key) => key !== category.key) : [...current, category.key],
-                      )
-                    }}
-                    className={cn(
-                      "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
-                      active
-                        ? "border-brand-navy bg-brand-navy text-white"
-                        : "border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-800",
-                    )}
-                  >
-                    {category.label}
-                  </button>
-                )
-              })}
+              {config.categories
+                .filter((c) => c.enabled)
+                .map((category) => {
+                  const active = (
+                    config.street_imagery_categories ?? []
+                  ).includes(category.key)
+                  return (
+                    <button
+                      key={category.key}
+                      type="button"
+                      onClick={() => {
+                        const current = config.street_imagery_categories ?? []
+                        onUpdate(
+                          "street_imagery_categories",
+                          active
+                            ? current.filter((key) => key !== category.key)
+                            : [...current, category.key]
+                        )
+                      }}
+                      className={cn(
+                        "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                        active
+                          ? "border-brand-navy bg-brand-navy text-white"
+                          : "border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-800"
+                      )}
+                    >
+                      {category.label}
+                    </button>
+                  )
+                })}
             </div>
           </div>
           <SheetOptionRow
@@ -428,7 +529,12 @@ function ConfigureDialog({
                   type="number"
                   min={10}
                   value={config.street_imagery_radius_meters ?? 50}
-                  onChange={(e) => onUpdate("street_imagery_radius_meters", Number(e.target.value))}
+                  onChange={(e) =>
+                    onUpdate(
+                      "street_imagery_radius_meters",
+                      Number(e.target.value)
+                    )
+                  }
                   className="h-8 w-16 rounded-full border border-neutral-200 px-3 text-xs font-semibold text-neutral-700 outline-none focus:border-neutral-400"
                 />
                 <span className="text-xs text-neutral-500">meters</span>
@@ -442,10 +548,18 @@ function ConfigureDialog({
                 value={config.street_imagery_action ?? "request_resubmission"}
                 options={[
                   { value: "warn", label: "Warn reviewer only" },
-                  { value: "request_resubmission", label: "Request resubmission" },
+                  {
+                    value: "request_resubmission",
+                    label: "Request resubmission",
+                  },
                   { value: "reject", label: "Reject automatically" },
                 ]}
-                onChange={(value) => onUpdate("street_imagery_action", value as ConcernClassificationConfig["street_imagery_action"])}
+                onChange={(value) =>
+                  onUpdate(
+                    "street_imagery_action",
+                    value as ConcernClassificationConfig["street_imagery_action"]
+                  )
+                }
               />
             }
           />
@@ -453,17 +567,24 @@ function ConfigureDialog({
       ) : null}
 
       <SheetSectionLabel>Emergencies</SheetSectionLabel>
-      <p className="mb-2 text-xs text-neutral-500">How the system confirms a matched emergency before routing it.</p>
+      <p className="mb-2 text-xs text-neutral-500">
+        How the system confirms a matched emergency before routing it.
+      </p>
       <SheetToggleRow
         id="ongoing-emergency-confirmation"
         label="Ask if this is an ongoing emergency"
         description="Before routing a matched emergency type to a responder, confirm with the resident that it is still happening."
         checked={config.require_ongoing_emergency_confirmation !== false}
-        onChange={(checked) => onUpdate("require_ongoing_emergency_confirmation", checked)}
+        onChange={(checked) =>
+          onUpdate("require_ongoing_emergency_confirmation", checked)
+        }
       />
 
       <SheetSectionLabel>System safeguards</SheetSectionLabel>
-      <p className="mb-2 text-xs text-neutral-500">Choose how the system should behave if the AI validation service is offline.</p>
+      <p className="mb-2 text-xs text-neutral-500">
+        Choose how the system should behave if the AI validation service is
+        offline.
+      </p>
       <SheetList>
         <SheetOptionRow
           title="Accept reports that pass basic system checks"
@@ -478,7 +599,6 @@ function ConfigureDialog({
           onClick={() => onUpdate("flag_suspicious", false)}
         />
       </SheetList>
-
     </SheetDialog>
   )
 }
@@ -505,9 +625,14 @@ function TestDialog({
   const [smsPanelOpen, setSmsPanelOpen] = useState(false)
   const [smsHelpOpen, setSmsHelpOpen] = useState(false)
   const [smsMessage, setSmsMessage] = useState("")
-  const [smsSender, setSmsSender] = useState<"registered" | "unknown" | "needs_review">("registered")
-  const [smsScenario, setSmsScenario] = useState<import("./api").SmsSimulationScenario>("default")
-  const [smsResult, setSmsResult] = useState<import("./api").SmsSimulationResult | null>(null)
+  const [smsSender, setSmsSender] = useState<
+    "registered" | "unknown" | "needs_review"
+  >("registered")
+  const [smsScenario, setSmsScenario] =
+    useState<import("./api").SmsSimulationScenario>("default")
+  const [smsResult, setSmsResult] = useState<
+    import("./api").SmsSimulationResult | null
+  >(null)
   const [smsBusy, setSmsBusy] = useState(false)
 
   async function runSms() {
@@ -515,9 +640,17 @@ function TestDialog({
     if (!text) return
     setSmsBusy(true)
     try {
-      setSmsResult(await testSmsSimulation({ message: text, sender: smsSender, scenario: smsScenario }))
+      setSmsResult(
+        await testSmsSimulation({
+          message: text,
+          sender: smsSender,
+          scenario: smsScenario,
+        })
+      )
     } catch (error) {
-      toast.error(describeApiError(error, "The sample text could not be processed."))
+      toast.error(
+        describeApiError(error, "The sample text could not be processed.")
+      )
     } finally {
       setSmsBusy(false)
     }
@@ -533,107 +666,127 @@ function TestDialog({
 
   return (
     <>
-    <SheetDialog
-      open={open}
-      onClose={() => {
-        setTab("concerns")
-        resetSms()
-        setSmsPanelOpen(false)
-        setSmsHelpOpen(false)
-        onClose()
-      }}
-      title="LLM decisions"
-      description="Preview how the system reads concerns, emergencies, and identity documents. Nothing here is filed or changed."
-      size="wide"
-    >
-      <div className="mb-5 flex gap-0.5 rounded-full bg-neutral-100 p-1">
-        {TEST_TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            className={cn(
-              "flex-1 rounded-full py-2 text-[13px] font-medium transition-colors",
-              tab === t.key ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {tab === "emergencies" ? <EmergencyTestWorkspace onUseSms={() => setSmsPanelOpen(true)} /> : null}
-      {tab === "verification" ? <VerificationTestWorkspace /> : null}
-      {tab === "concerns" ? (
-        <div className="space-y-8">
-          <ConcernTestWorkspace config={config} />
+      <SheetDialog
+        open={open}
+        onClose={() => {
+          setTab("concerns")
+          resetSms()
+          setSmsPanelOpen(false)
+          setSmsHelpOpen(false)
+          onClose()
+        }}
+        title="LLM decisions"
+        description="Preview how the system reads concerns, emergencies, and identity documents. Nothing here is filed or changed."
+        size="wide"
+      >
+        <div className="mb-5 flex gap-0.5 rounded-full bg-neutral-100 p-1">
+          {TEST_TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={cn(
+                "flex-1 rounded-full py-2 text-[13px] font-medium transition-colors",
+                tab === t.key
+                  ? "bg-white text-neutral-900 shadow-sm"
+                  : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900"
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
-      ) : null}
-    </SheetDialog>
-
-    <SheetDialog
-      open={smsPanelOpen}
-      onClose={() => setSmsPanelOpen(false)}
-      onBack={() => setSmsPanelOpen(false)}
-      title="SMS Preview"
-      size="wide"
-      actions={
-        <>
-          <SenderPill sender={smsSender} setSender={setSmsSender} />
-          <SheetIconButton label="Sample commands" onClick={() => setSmsHelpOpen(true)} className="bg-transparent text-neutral-400 hover:bg-transparent hover:text-neutral-700">
-            <CircleQuestionMarkIcon className="size-6" strokeWidth={2} />
-          </SheetIconButton>
-          <SheetIconButton label="Reset simulation" onClick={resetSms} className="bg-transparent text-neutral-400 hover:bg-transparent hover:text-neutral-700">
-            <RotateCcwIcon className="size-6" strokeWidth={2} />
-          </SheetIconButton>
-        </>
-      }
-      footer={
-        <SmsChatInput
-          message={smsMessage}
-          setMessage={setSmsMessage}
-          setSender={setSmsSender}
-          setScenario={setSmsScenario}
-          busy={smsBusy}
-          onSend={() => void runSms()}
-        />
-      }
-    >
-      <div className="space-y-6">
-        {smsMessage.trim() || smsResult ? (
-          <div className="border-t border-neutral-200 pt-5">
-            <SmsChatPanel message={smsMessage} result={smsResult} busy={smsBusy} />
+        {tab === "emergencies" ? (
+          <EmergencyTestWorkspace onUseSms={() => setSmsPanelOpen(true)} />
+        ) : null}
+        {tab === "verification" ? <VerificationTestWorkspace /> : null}
+        {tab === "concerns" ? (
+          <div className="space-y-8">
+            <ConcernTestWorkspace config={config} />
           </div>
         ) : null}
-      </div>
-    </SheetDialog>
+      </SheetDialog>
 
-    <SheetDialog
-      open={smsHelpOpen}
-      onClose={() => setSmsHelpOpen(false)}
-      onBack={() => setSmsHelpOpen(false)}
-      title="Sample commands"
-      description="What a resident can text the hotline."
-    >
-      <SmsCommandGuide />
-    </SheetDialog>
-    <SheetDialog
-      open={Boolean(smsResult)}
-      onClose={() => setSmsResult(null)}
-      onBack={() => setSmsResult(null)}
-      title="SMS check result"
-      description="This is a test result. No text or emergency was filed."
-      size="wide"
-      bodyClassName="pb-5"
-    >
-      {smsResult ? <SmsBreakdown result={smsResult} /> : null}
-    </SheetDialog>
+      <SheetDialog
+        open={smsPanelOpen}
+        onClose={() => setSmsPanelOpen(false)}
+        onBack={() => setSmsPanelOpen(false)}
+        title="SMS Preview"
+        size="wide"
+        actions={
+          <>
+            <SenderPill sender={smsSender} setSender={setSmsSender} />
+            <SheetIconButton
+              label="Sample commands"
+              onClick={() => setSmsHelpOpen(true)}
+              className="bg-transparent text-neutral-400 hover:bg-transparent hover:text-neutral-700"
+            >
+              <CircleQuestionMarkIcon className="size-6" strokeWidth={2} />
+            </SheetIconButton>
+            <SheetIconButton
+              label="Reset simulation"
+              onClick={resetSms}
+              className="bg-transparent text-neutral-400 hover:bg-transparent hover:text-neutral-700"
+            >
+              <RotateCcwIcon className="size-6" strokeWidth={2} />
+            </SheetIconButton>
+          </>
+        }
+        footer={
+          <SmsChatInput
+            message={smsMessage}
+            setMessage={setSmsMessage}
+            setSender={setSmsSender}
+            setScenario={setSmsScenario}
+            busy={smsBusy}
+            onSend={() => void runSms()}
+          />
+        }
+      >
+        <div className="space-y-6">
+          {smsMessage.trim() || smsResult ? (
+            <div className="border-t border-neutral-200 pt-5">
+              <SmsChatPanel
+                message={smsMessage}
+                result={smsResult}
+                busy={smsBusy}
+              />
+            </div>
+          ) : null}
+        </div>
+      </SheetDialog>
+
+      <SheetDialog
+        open={smsHelpOpen}
+        onClose={() => setSmsHelpOpen(false)}
+        onBack={() => setSmsHelpOpen(false)}
+        title="Sample commands"
+        description="What a resident can text the hotline."
+      >
+        <SmsCommandGuide />
+      </SheetDialog>
+      <SheetDialog
+        open={Boolean(smsResult)}
+        onClose={() => setSmsResult(null)}
+        onBack={() => setSmsResult(null)}
+        title="SMS check result"
+        description="This is a test result. No text or emergency was filed."
+        size="wide"
+        bodyClassName="pb-5"
+      >
+        {smsResult ? <SmsBreakdown result={smsResult} /> : null}
+      </SheetDialog>
     </>
   )
 }
 
 /* ─── Activity tab ─── */
 
-export function LegacyActivityTab({ config }: { config: ConcernClassificationConfig }) {
+export function LegacyActivityTab({
+  config,
+}: {
+  config: ConcernClassificationConfig
+}) {
   const [data, setData] = useState<ValidationActivityResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [days, setDays] = useState(30)
@@ -647,16 +800,30 @@ export function LegacyActivityTab({ config }: { config: ConcernClassificationCon
 
   useEffect(() => {
     let cancelled = false
-    void getValidationActivity({ days: query.days, category: query.category || undefined })
-      .then((result) => { if (!cancelled) setData(result) })
-      .catch(() => { if (!cancelled) setData(null) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+    void getValidationActivity({
+      days: query.days,
+      category: query.category || undefined,
+    })
+      .then((result) => {
+        if (!cancelled) setData(result)
+      })
+      .catch(() => {
+        if (!cancelled) setData(null)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [query])
 
   const stats = data?.stats
 
-  const categories = [{ key: "", label: "All" }, ...config.categories.filter((c) => c.enabled)]
+  const categories = [
+    { key: "", label: "All" },
+    ...config.categories.filter((c) => c.enabled),
+  ]
   const timeRanges = [
     { key: 7, label: "7 days" },
     { key: 30, label: "30 days" },
@@ -685,14 +852,16 @@ export function LegacyActivityTab({ config }: { config: ConcernClassificationCon
           { label: "Rejected", value: stats?.rejected ?? 0 },
         ].map((stat) => (
           <div key={stat.label} className="min-w-0">
-            <dd className="text-[1.75rem] leading-none tabular-nums font-light tracking-tight text-brand-navy">{stat.value}</dd>
+            <dd className="text-[1.75rem] leading-none font-light tracking-tight text-brand-navy tabular-nums">
+              {stat.value}
+            </dd>
             <dt className="mt-2 text-meta text-neutral-500">{stat.label}</dt>
           </div>
         ))}
       </dl>
 
       {/* Category chips */}
-      <div className="flex items-center gap-7 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="flex [scrollbar-width:none] items-center gap-7 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         {categories.map((cat) => (
           <button
             key={cat.key}
@@ -702,7 +871,7 @@ export function LegacyActivityTab({ config }: { config: ConcernClassificationCon
               "shrink-0 text-read transition-colors",
               category === cat.key
                 ? "font-medium text-brand-navy"
-                : "text-neutral-400 hover:text-brand-navy",
+                : "text-neutral-400 hover:text-brand-navy"
             )}
           >
             {cat.label}
@@ -713,7 +882,11 @@ export function LegacyActivityTab({ config }: { config: ConcernClassificationCon
       {/* Search + time range */}
       <div className="flex flex-wrap items-center justify-between gap-6">
         <div className="flex min-w-[220px] items-center gap-3">
-          <SearchIcon className="size-5 shrink-0 text-neutral-400" strokeWidth={1.8} aria-hidden />
+          <SearchIcon
+            className="size-5 shrink-0 text-neutral-400"
+            strokeWidth={1.8}
+            aria-hidden
+          />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -739,10 +912,10 @@ export function LegacyActivityTab({ config }: { config: ConcernClassificationCon
               type="button"
               onClick={() => setDays(range.key)}
               className={cn(
-                "shrink-0 whitespace-nowrap text-read transition-colors",
+                "shrink-0 text-read whitespace-nowrap transition-colors",
                 days === range.key
                   ? "font-medium text-brand-navy"
-                  : "text-neutral-400 hover:text-brand-navy",
+                  : "text-neutral-400 hover:text-brand-navy"
               )}
             >
               {range.label}
@@ -758,34 +931,56 @@ export function LegacyActivityTab({ config }: { config: ConcernClassificationCon
         </div>
       ) : !filteredResults?.length ? (
         <div className="rounded-xl border border-neutral-200 bg-white p-8 text-center">
-          <p className="text-sm font-medium text-neutral-500">No validation activity in this period.</p>
+          <p className="text-sm font-medium text-neutral-500">
+            No validation activity in this period.
+          </p>
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-neutral-200 bg-neutral-50">
-                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">Submitted</th>
-                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">Report</th>
-                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">Category</th>
-                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">Location</th>
-                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">Outcome</th>
+                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">
+                  Submitted
+                </th>
+                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">
+                  Report
+                </th>
+                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">
+                  Category
+                </th>
+                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">
+                  Location
+                </th>
+                <th className="px-4 py-3 text-xs font-semibold text-neutral-500">
+                  Outcome
+                </th>
               </tr>
             </thead>
             <tbody>
               {filteredResults!.map((item) => (
-                <tr key={item.id} className="border-b border-neutral-100 last:border-b-0 hover:bg-neutral-50">
-                  <td className="whitespace-nowrap px-4 py-3 text-xs text-neutral-500">
-                    {new Date(item.submitted_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+                <tr
+                  key={item.id}
+                  className="border-b border-neutral-100 last:border-b-0 hover:bg-neutral-50"
+                >
+                  <td className="px-4 py-3 text-xs whitespace-nowrap text-neutral-500">
+                    {new Date(item.submitted_at).toLocaleDateString("en-PH", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
                     <br />
                     <span className="text-neutral-400">
-                      {new Date(item.submitted_at).toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit" })}
+                      {new Date(item.submitted_at).toLocaleTimeString("en-PH", {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
                     </span>
                   </td>
                   <td className="max-w-[200px] truncate px-4 py-3 text-xs font-medium text-neutral-900">
                     {item.description}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap">
                     <span className="inline-flex rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-semibold text-neutral-600">
                       {item.category_label}
                     </span>
@@ -793,14 +988,16 @@ export function LegacyActivityTab({ config }: { config: ConcernClassificationCon
                   <td className="max-w-[160px] truncate px-4 py-3 text-xs text-neutral-500">
                     {item.location}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap">
                     <span
                       className={cn(
                         "inline-flex rounded-full px-2 py-0.5 text-[11px] font-bold",
-                        item.outcome === "accepted" && "bg-green-50 text-green-700",
-                        item.outcome === "flagged" && "bg-amber-50 text-amber-700",
+                        item.outcome === "accepted" &&
+                          "bg-green-50 text-green-700",
+                        item.outcome === "flagged" &&
+                          "bg-amber-50 text-amber-700",
                         item.outcome === "rejected" && "bg-red-50 text-red-700",
-                        item.outcome === "held" && "bg-blue-50 text-blue-700",
+                        item.outcome === "held" && "bg-blue-50 text-blue-700"
                       )}
                     >
                       {item.outcome_label}
@@ -835,21 +1032,25 @@ export default function ConcernClassificationPage() {
         setConfig(next)
         setSavedSnapshot(JSON.stringify(next))
       })
-      .catch((error) => toast.error(describeApiError(error, "Could not load these settings.")))
+      .catch((error) =>
+        toast.error(describeApiError(error, "Could not load these settings."))
+      )
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const dirty = useMemo(
     () => savedSnapshot !== null && JSON.stringify(config) !== savedSnapshot,
-    [config, savedSnapshot],
+    [config, savedSnapshot]
   )
 
   function update<K extends keyof ConcernClassificationConfig>(
     key: K,
-    value: ConcernClassificationConfig[K],
+    value: ConcernClassificationConfig[K]
   ) {
     setConfig((current) => ({ ...current, [key]: value }))
   }
@@ -868,7 +1069,7 @@ export default function ConcernClassificationPage() {
     }
   }
 
-   if (loading) {
+  if (loading) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
         <LoaderCircleIcon className="size-8 animate-spin text-brand-navy" />
@@ -880,8 +1081,8 @@ export default function ConcernClassificationPage() {
     <ConfigShell
       icon={BotIcon}
       eyebrow="Operations"
-       title="System behavior"
-       description="Set how E-Boses reads and routes concerns, emergencies, and identity documents. The pages below show what happened, what the system decided, and how staff can correct it."
+      title="System behavior"
+      description="Set how E-Boses reads and routes concerns, emergencies, and identity documents. The pages below show what happened, what the system decided, and how staff can correct it."
       action={
         <ConfigHeroAction onClick={() => setConfigureOpen(true)}>
           Configure
@@ -901,7 +1102,11 @@ export default function ConcernClassificationPage() {
         onOpenTest={() => setTestOpen(true)}
       />
 
-      <TestDialog open={testOpen} onClose={() => setTestOpen(false)} config={config} />
+      <TestDialog
+        open={testOpen}
+        onClose={() => setTestOpen(false)}
+        config={config}
+      />
     </ConfigShell>
   )
 }

@@ -1,8 +1,12 @@
 import { useState } from "react"
 import { EyeOffIcon, GlobeIcon, LockIcon } from "lucide-react"
 
-
-import type { CommunityIncident, CommunityIncidentPhoto, Concern } from "@/features/dashboard/api"
+import type {
+  CommunityIncident,
+  CommunityIncidentPhoto,
+  Concern,
+} from "@/features/dashboard/api"
+import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
 import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
 import { toStatusView } from "@/features/dashboard/components/record/status"
@@ -15,7 +19,11 @@ import {
 import { concernSeverityOf } from "@/features/dashboard/components/record/concern-adapter"
 import { derivePriority } from "@/features/dashboard/components/record/severity"
 import { streetOnly } from "@/features/dashboard/lib/location-text"
-import { Band, Fact, Surface } from "@/features/dashboard/components/workspace/band"
+import {
+  Band,
+  Fact,
+  Surface,
+} from "@/features/dashboard/components/workspace/band"
 
 const INITIAL_REPORTS = 3
 const INITIAL_PHOTOS = 6
@@ -44,12 +52,22 @@ function VisibilityFact({ incident }: { incident: CommunityIncident }) {
           {pending ? "Pending publication" : isPublic ? "Public" : "Private"}
         </span>
       }
-      hint={pending ? incident.publication_block_reason.replace(/_/g, " ") : undefined}
+      hint={
+        pending
+          ? incident.publication_block_reason.replace(/_/g, " ")
+          : undefined
+      }
     />
   )
 }
 
-function PhotoTile({ photo, onOpen }: { photo: CommunityIncidentPhoto; onOpen: () => void }) {
+function PhotoTile({
+  photo,
+  onOpen,
+}: {
+  photo: CommunityIncidentPhoto
+  onOpen: () => void
+}) {
   return (
     <button
       type="button"
@@ -64,7 +82,9 @@ function PhotoTile({ photo, onOpen }: { photo: CommunityIncidentPhoto; onOpen: (
           className="h-36 w-full object-cover"
         />
       ) : (
-        <span className="flex h-36 items-center justify-center text-label text-muted-foreground">File</span>
+        <span className="flex h-36 items-center justify-center text-label text-muted-foreground">
+          File
+        </span>
       )}
       {photo.relevance_state === "unrelated" ? (
         <span className="absolute bottom-1.5 left-1.5 rounded-pill bg-severity-critical-surface px-1.5 py-0.5 text-[10px] font-semibold text-severity-critical-ink">
@@ -87,7 +107,7 @@ export function CommunityIncidentDetails({
   locationSlot: React.ReactNode
   updatesSlot: React.ReactNode
   onOpenPhoto: (photos: CommunityIncidentPhoto[], index: number) => void
-  onOpenProof: (items: { src: string; filename: string; kind: "image" }[], index: number) => void
+  onOpenProof: (items: MediaPreviewItem[], index: number) => void
   onViewAllPhotos: () => void
 }) {
   const incident = report.community_incident
@@ -96,9 +116,13 @@ export function CommunityIncidentDetails({
   if (!incident) return null
 
   const status = toStatusView(incident.status)
-  const reports = showAllReports ? incident.reports : incident.reports.slice(0, INITIAL_REPORTS)
+  const reports = showAllReports
+    ? incident.reports
+    : incident.reports.slice(0, INITIAL_REPORTS)
   const photos = incident.photos.slice(0, INITIAL_PHOTOS)
-  const protectedCount = incident.photos.filter((photo) => photo.privacy_state === "protected").length
+  const protectedCount = incident.photos.filter(
+    (photo) => photo.privacy_state === "protected"
+  ).length
   const resolutionEvidence = report.resolution_evidence ?? []
   const { severity } = concernSeverityOf(report)
   const hoursWaiting = (now - new Date(report.updated_at).getTime()) / 3_600_000
@@ -110,7 +134,11 @@ export function CommunityIncidentDetails({
     voteCount: report.vote_count,
   }
   const band = priorityBand(
-    derivePriority({ severity, hoursSinceStatusChange: hoursWaiting, voteCount: report.vote_count }),
+    derivePriority({
+      severity,
+      hoursSinceStatusChange: hoursWaiting,
+      voteCount: report.vote_count,
+    })
   )
 
   return (
@@ -119,13 +147,18 @@ export function CommunityIncidentDetails({
         <div className="flex items-start gap-3">
           {}
           <span className="flex size-9 shrink-0 flex-col items-center justify-center rounded-control bg-brand-orange-soft leading-none">
-            <span className="text-sm font-bold text-brand-orange">{incident.report_count}</span>
+            <span className="text-sm font-bold text-brand-orange">
+              {incident.report_count}
+            </span>
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-micro text-subtle-foreground">
-              Community concern · {incident.report_count} {incident.report_count === 1 ? "report" : "reports"}
+              Community concern · {incident.report_count}{" "}
+              {incident.report_count === 1 ? "report" : "reports"}
             </p>
-            <h2 className="mt-0.5 text-heading text-foreground">{incident.title}</h2>
+            <h2 className="mt-0.5 text-heading text-foreground">
+              {incident.title}
+            </h2>
           </div>
         </div>
 
@@ -140,7 +173,8 @@ export function CommunityIncidentDetails({
             label="Assigned unit"
             value={
               incident.assigned_unit
-                ? incident.assigned_unit.short_name || incident.assigned_unit.name
+                ? incident.assigned_unit.short_name ||
+                  incident.assigned_unit.name
                 : "Routing review required"
             }
           />
@@ -150,8 +184,14 @@ export function CommunityIncidentDetails({
           />
           <Fact label="Priority" value={PRIORITY_BAND_LABEL[band]} />
           <VisibilityFact incident={incident} />
-          <Fact label="First reported" value={formatMoment(incident.first_reported_at)} />
-          <Fact label="Latest report" value={formatMoment(incident.latest_reported_at)} />
+          <Fact
+            label="First reported"
+            value={formatMoment(incident.first_reported_at)}
+          />
+          <Fact
+            label="Latest report"
+            value={formatMoment(incident.latest_reported_at)}
+          />
         </div>
       </Band>
 
@@ -169,14 +209,22 @@ export function CommunityIncidentDetails({
 
       <Band
         label="Resident reports"
-        action={<span className="text-micro text-subtle-foreground">{incident.report_count} total</span>}
+        action={
+          <span className="text-micro text-subtle-foreground">
+            {incident.report_count} total
+          </span>
+        }
       >
         <ul className="divide-y divide-card-line">
           {reports.map((entry) => (
             <li key={entry.id} className="py-3.5 first:pt-0 last:pb-0">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                <p className="text-sm font-semibold text-foreground">{entry.reporter_name}</p>
-                <p className="text-micro text-subtle-foreground">{formatMoment(entry.submitted_at)}</p>
+                <p className="text-sm font-semibold text-foreground">
+                  {entry.reporter_name}
+                </p>
+                <p className="text-micro text-subtle-foreground">
+                  {formatMoment(entry.submitted_at)}
+                </p>
               </div>
               <p className="mt-1.5 text-body leading-6 text-muted-foreground">
                 &ldquo;{entry.description}&rdquo;
@@ -185,16 +233,21 @@ export function CommunityIncidentDetails({
                 <button
                   type="button"
                   onClick={() => {
-                    const own = incident.photos.filter((photo) => photo.report_id === entry.id)
+                    const own = incident.photos.filter(
+                      (photo) => photo.report_id === entry.id
+                    )
                     if (own.length) onOpenPhoto(own, 0)
                   }}
                   className="mt-2 text-label text-brand-orange transition-colors duration-[--duration-micro] hover:text-brand-orange-strong"
                 >
-                  Show {entry.photo_count} {entry.photo_count === 1 ? "photo" : "photos"}
+                  Show {entry.photo_count}{" "}
+                  {entry.photo_count === 1 ? "photo" : "photos"}
                 </button>
               ) : entry.withheld_photo_count ? (
                 <p className="mt-2 text-label text-subtle-foreground">
-                  {entry.withheld_photo_count === 1 ? "1 photo is" : `${entry.withheld_photo_count} photos are`}{" "}
+                  {entry.withheld_photo_count === 1
+                    ? "1 photo is"
+                    : `${entry.withheld_photo_count} photos are`}{" "}
                   being checked for privacy
                 </p>
               ) : null}
@@ -207,7 +260,9 @@ export function CommunityIncidentDetails({
             onClick={() => setShowAllReports((value) => !value)}
             className="mt-3 text-label text-brand-orange transition-colors duration-[--duration-micro] hover:text-brand-orange-strong"
           >
-            {showAllReports ? "Show fewer reports" : `View all ${incident.reports.length} reports`}
+            {showAllReports
+              ? "Show fewer reports"
+              : `View all ${incident.reports.length} reports`}
           </button>
         ) : null}
       </Band>
@@ -216,7 +271,8 @@ export function CommunityIncidentDetails({
         label="Photos"
         action={
           <span className="text-micro text-subtle-foreground">
-            {incident.photo_count} community {incident.photo_count === 1 ? "photo" : "photos"}
+            {incident.photo_count} community{" "}
+            {incident.photo_count === 1 ? "photo" : "photos"}
           </span>
         }
       >
@@ -240,7 +296,9 @@ export function CommunityIncidentDetails({
             </button>
           </>
         ) : (
-          <p className="text-body text-muted-foreground">No photos linked to this incident.</p>
+          <p className="text-body text-muted-foreground">
+            No photos linked to this incident.
+          </p>
         )}
       </Band>
 
@@ -249,7 +307,8 @@ export function CommunityIncidentDetails({
           label="Proof of resolution"
           action={
             <span className="text-micro text-subtle-foreground">
-              {resolutionEvidence.length} {resolutionEvidence.length === 1 ? "photo" : "photos"}
+              {resolutionEvidence.length}{" "}
+              {resolutionEvidence.length === 1 ? "photo" : "photos"}
             </span>
           }
         >
@@ -264,8 +323,20 @@ export function CommunityIncidentDetails({
                       src: entry.preview_url || entry.raw_url,
                       filename: entry.original_filename,
                       kind: "image" as const,
+                      eyebrow:
+                        streetOnly(incident.address || report.address) ||
+                        undefined,
+                      postedLabel: formatMoment(report.created_at),
+                      heading:
+                        (
+                          report.notification_subject ||
+                          report.title ||
+                          ""
+                        ).trim() || undefined,
+                      badge: "Resolved case",
+                      blurb: (report.description || "").trim() || undefined,
                     })),
-                    resolutionEvidence.indexOf(item),
+                    resolutionEvidence.indexOf(item)
                   )
                 }
                 className="overflow-hidden rounded-control border border-card-line bg-canvas text-left"
@@ -293,7 +364,7 @@ export function CommunityIncidentDetails({
             {incident.observed.map((item) => (
               <span
                 key={item}
-                className="rounded-pill bg-card-raised px-2.5 py-0.5 text-[12px] font-medium capitalize text-muted-foreground"
+                className="rounded-pill bg-card-raised px-2.5 py-0.5 text-[12px] font-medium text-muted-foreground capitalize"
               >
                 {item}
               </span>
@@ -308,14 +379,17 @@ export function CommunityIncidentDetails({
           <div className="flex items-start gap-2">
             <EyeOffIcon className="mt-0.5 size-4 shrink-0 text-subtle-foreground" />
             <p className="text-body leading-6 text-foreground">
-              {protectedCount} of {incident.photo_count} photos have a protected copy. Residents see
-              the blurred version; you see the original.
+              {protectedCount} of {incident.photo_count} photos have a protected
+              copy. Residents see the blurred version; you see the original.
             </p>
           </div>
         </Band>
       ) : null}
 
-      <Band label="Location" meta={streetOnly(incident.address || report.address) || undefined}>
+      <Band
+        label="Location"
+        meta={streetOnly(incident.address || report.address) || undefined}
+      >
         {locationSlot}
       </Band>
 

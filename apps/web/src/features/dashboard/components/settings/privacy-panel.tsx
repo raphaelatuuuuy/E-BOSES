@@ -15,15 +15,6 @@ export function PrivacyPanel({
   return (
     <SheetList>
       <SheetToggleRow
-        id="community_sharing"
-        label="Share reports to the feed"
-        description="Contact details and exact location stay private."
-        checked={settings?.community_sharing ?? false}
-        disabled={!settings}
-        busy={savingSetting === "community_sharing"}
-        onChange={(value) => onSettingChange("community_sharing", value)}
-      />
-      <SheetToggleRow
         id="location_sharing_enabled"
         label="Share recent location for SMS help"
         description="Uses a location saved in the last 15 minutes. Turning this off deletes it."

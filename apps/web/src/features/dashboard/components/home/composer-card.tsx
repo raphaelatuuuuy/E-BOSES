@@ -25,9 +25,9 @@ export function ComposerCard({
           <button
             type="button"
             onClick={onOpenComposer}
-            className="min-h-9 min-w-0 flex-1 rounded-full bg-transparent px-2 py-2 text-left text-[11px] font-normal leading-snug text-neutral-600 transition-colors hover:text-neutral-800 sm:px-3 sm:text-[13px] lg:min-h-10 lg:bg-neutral-100 lg:px-4 lg:hover:bg-neutral-200/70"
+            className="min-h-9 min-w-0 flex-1 rounded-full bg-transparent px-2 py-2 text-left text-[13px] font-normal leading-snug text-neutral-600 transition-colors hover:text-neutral-800 sm:px-3 sm:text-[14px] lg:min-h-10 lg:bg-neutral-100 lg:px-4 lg:hover:bg-neutral-200/70"
           >
-            Share the issue you&apos;re experiencing...
+            Send a report...
           </button>
           <button
             type="button"

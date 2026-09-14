@@ -84,6 +84,8 @@ export function concernSeverityOf(concern: Concern): {
     urgentAttention: completed
       ? (assessment?.urgent_attention ?? false)
       : false,
+    currentDanger: completed ? (assessment?.current_danger ?? false) : false,
+    incidentTiming: completed ? (assessment?.incident_timing ?? null) : null,
     relevance: completed ? (assessment?.nlp_confidence ?? null) : null,
   })
 }

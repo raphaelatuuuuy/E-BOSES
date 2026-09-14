@@ -3,15 +3,12 @@ import { type FormEvent, useState } from "react"
 import { ApiError } from "@/lib/api"
 import { login, type AuthUser } from "@/features/auth/api"
 import {
-  normalizePhoneNumber,
   type SignInErrors,
-  type SignInMode,
   type SignInValues,
   signInSchema,
 } from "@/features/auth/schemas/sign-in-schema"
 
 const initialValues: SignInValues = {
-  mode: "email",
   identifier: "",
   password: "",
 }
@@ -34,10 +31,16 @@ function apiMessage(error: unknown, fallback: string) {
 
 interface UseSignInFormOptions {
   onSuccess?: (user: AuthUser, access: string) => void
+  beforeSuccess?: (result: {
+    user: AuthUser
+    access: string
+    identifier: string
+    values: SignInValues
+  }) => Promise<void> | void
 }
 
 export function useSignInForm(options: UseSignInFormOptions = {}) {
-  const { onSuccess } = options
+  const { beforeSuccess, onSuccess } = options
   const [values, setValues] = useState<SignInValues>(initialValues)
   const [errors, setErrors] = useState<SignInErrors>({})
   const [submitError, setSubmitError] = useState("")
@@ -45,19 +48,13 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
 
   function handleChange<K extends keyof SignInValues>(
     field: K,
-    value: SignInValues[K],
+    value: SignInValues[K]
   ) {
     setValues((currentValues) => ({
       ...currentValues,
       [field]: value,
     }))
     setSubmitError("")
-
-    if (field === "mode") {
-      // The old error described the old field, so it cannot survive the switch.
-      setErrors((currentErrors) => ({ ...currentErrors, identifier: undefined }))
-      return
-    }
 
     setErrors((currentErrors) => {
       if (!currentErrors[field as "identifier" | "password"]) {
@@ -69,14 +66,6 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
         [field]: undefined,
       }
     })
-  }
-
-  function setMode(mode: SignInMode) {
-    // An email is never a valid phone number, so carrying the text across the
-    // switch only ever leaves a field that cannot pass validation.
-    setValues((currentValues) => ({ ...currentValues, mode, identifier: "" }))
-    setSubmitError("")
-    setErrors((currentErrors) => ({ ...currentErrors, identifier: undefined }))
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -95,31 +84,35 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
       return
     }
 
-    // The account stores a phone number as +63XXXXXXXXXX, so send that rather
-    // than whatever local shape was typed.
     const typed = values.identifier.trim()
-    const identifier =
-      values.mode === "phone" ? normalizePhoneNumber(typed) ?? typed : typed
 
     setIsSubmitting(true)
     setSubmitError("")
     try {
-      const response = await login({ identifier, password: values.password })
+      const response = await login({
+        identifier: typed,
+        password: values.password,
+      })
+      await beforeSuccess?.({
+        user: response.user,
+        access: response.access,
+        identifier: typed,
+        values,
+      })
       onSuccess?.(response.user, response.access)
     } catch (error) {
-      const fallback =
-        values.mode === "phone"
-          ? "Invalid phone number or password."
-          : "Invalid email or password."
+      const fallback = "Invalid email or password."
       const message = apiMessage(error, fallback)
       if (error instanceof ApiError && error.data) {
-        const code = typeof error.data === "object" && error.data !== null
-          ? (error.data as Record<string, unknown>).code
-          : null
+        const code =
+          typeof error.data === "object" && error.data !== null
+            ? (error.data as Record<string, unknown>).code
+            : null
         if (code === "account_rejected") {
           setErrors({
             identifier: SILENT_SIGN_IN_ERROR,
-            password: "Account not approved. Contact your barangay administrator for details.",
+            password:
+              "Account not approved. Contact your barangay administrator for details.",
           })
           setSubmitError("")
           return
@@ -140,7 +133,6 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
     handleChange,
     handleSubmit,
     isSubmitting,
-    setMode,
     submitError,
     values,
   }

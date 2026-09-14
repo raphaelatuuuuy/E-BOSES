@@ -19,7 +19,11 @@ import {
   Zap,
 } from "lucide-react"
 
-import type { EmergencyCategory, EmergencyType } from "@/features/dashboard/emergency-api"
+import type {
+  EmergencyCategory,
+  EmergencyQuickQuestion,
+  EmergencyType,
+} from "@/features/dashboard/emergency-api"
 
 export const ICON_BY_KEY = {
   activity: Activity,
@@ -47,6 +51,7 @@ export interface SosEmergencyOption {
   customIconLabel?: string
   iconImageUrl?: string
   desc: string
+  quickQuestions: EmergencyQuickQuestion[]
 }
 
 /**
@@ -68,46 +73,69 @@ export const emergencies: SosEmergencyOption[] = [
     value: "medical" as const,
     icon: Activity,
     desc: "Injury, illness, rescue",
+    quickQuestions: [],
   },
   {
     label: "Fire",
     value: "fire" as const,
     icon: Flame,
     desc: "Building, house, residence",
+    quickQuestions: [],
   },
   {
     label: "Crime",
     value: "crime" as const,
     icon: ShieldAlert,
     desc: "Assault, theft, threat",
+    quickQuestions: [],
   },
   {
     label: "Disaster",
     value: "disaster" as const,
     icon: CloudRainWind,
     desc: "Flood, quake, storm",
+    quickQuestions: [],
   },
   {
     label: "Child Protection",
     value: "child_protection" as const,
     icon: ShieldAlert,
     desc: "Child abuse, neglect, exploitation",
+    quickQuestions: [],
   },
   {
     label: "Domestic Violence",
     value: "domestic_violence" as const,
     icon: ShieldAlert,
     desc: "Violence at home, VAWC cases",
+    quickQuestions: [],
   },
 ]
 
-export function emergencyOptionsFromCategories(categories: EmergencyCategory[]) {
-  return categories.filter((category) => category.is_active).map((category) => ({
-    label: category.label,
-    value: category.code as EmergencyType,
-    icon: ICON_BY_KEY[category.icon_key as keyof typeof ICON_BY_KEY] ?? Siren,
-    customIconLabel: category.custom_icon_label,
-    iconImageUrl: category.icon_image_url,
-    desc: category.subtext,
-  }))
+export function emergencyOptionsFromCategories(
+  categories: Array<
+    Pick<
+      EmergencyCategory,
+      | "code"
+      | "label"
+      | "subtext"
+      | "icon_key"
+      | "custom_icon_label"
+      | "icon_image_url"
+      | "is_active"
+      | "quick_questions"
+    >
+  >
+) {
+  return categories
+    .filter((category) => category.is_active)
+    .map((category) => ({
+      label: category.label,
+      value: category.code as EmergencyType,
+      icon: ICON_BY_KEY[category.icon_key as keyof typeof ICON_BY_KEY] ?? Siren,
+      customIconLabel: category.custom_icon_label,
+      iconImageUrl: category.icon_image_url,
+      desc: category.subtext,
+      quickQuestions: category.quick_questions ?? [],
+    }))
 }

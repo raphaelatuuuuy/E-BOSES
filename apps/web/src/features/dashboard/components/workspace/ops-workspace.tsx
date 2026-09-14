@@ -1,5 +1,11 @@
 import * as React from "react"
-import { ChevronDownIcon, InfoIcon, MessageSquareIcon, XIcon, type LucideIcon } from "lucide-react"
+import {
+  ChevronDownIcon,
+  InfoIcon,
+  MessageSquareIcon,
+  XIcon,
+  type LucideIcon,
+} from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { CollapsedStrip } from "@/features/dashboard/components/responder/dispatch-surface"
@@ -27,7 +33,6 @@ export interface OpsPaneSpec {
 }
 
 export interface OpsWorkspaceProps {
-
   id: string
   bar?: React.ReactNode
   panes: OpsPaneSpec[]
@@ -83,7 +88,8 @@ function useWorkspaceTier(): "wide" | "mid" | "mobile" {
   React.useEffect(() => {
     const wide = window.matchMedia("(min-width: 1440px)")
     const desktop = window.matchMedia("(min-width: 1024px)")
-    const apply = () => setTier(wide.matches ? "wide" : desktop.matches ? "mid" : "mobile")
+    const apply = () =>
+      setTier(wide.matches ? "wide" : desktop.matches ? "mid" : "mobile")
     apply()
     wide.addEventListener("change", apply)
     desktop.addEventListener("change", apply)
@@ -126,7 +132,10 @@ function PaneShell({
 }) {
   return (
     <section
-      className={cn("relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden", className)}
+      className={cn(
+        "relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden",
+        className
+      )}
       style={style}
     >
       {children}
@@ -142,8 +151,15 @@ function CollapsedPane({
   onExpand: () => void
 }) {
   return (
-    <div className="flex h-full shrink-0 items-stretch" style={{ width: COLLAPSED_PANE_WIDTH }}>
-      <CollapsedStrip label={label} onExpand={onExpand} className="h-full w-full" />
+    <div
+      className="flex h-full shrink-0 items-stretch"
+      style={{ width: COLLAPSED_PANE_WIDTH }}
+    >
+      <CollapsedStrip
+        label={label}
+        onExpand={onExpand}
+        className="h-full w-full"
+      />
     </div>
   )
 }
@@ -201,7 +217,6 @@ function Divider({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-
     if (event.key === "ArrowLeft") {
       event.preventDefault()
       onResize(value - KEYBOARD_STEP_PX * direction)
@@ -261,13 +276,11 @@ function AsideOverlay({
   if (!open) return null
 
   return (
-
     <div className="absolute inset-0 z-[1100] flex justify-end">
       <button
         type="button"
         aria-label={`Close ${label}`}
         onClick={onClose}
-
         className="absolute inset-0 bg-black/65"
       />
       <aside
@@ -338,17 +351,19 @@ function MobileSheetLayout({
   const contentVisible = height > snaps().hidden + 14
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    <div className="scrollbar-hide relative flex min-h-0 flex-1 flex-col">
       {/* The queue pane owns scrolling on mobile. Keeping an overflow-y-auto
           host here creates a nested scroll container and traps touch/wheel
           gestures before the queue can reach its bottom. */}
-      <div className="min-h-0 flex-1 overflow-visible max-lg:overflow-visible lg:overflow-hidden">{list?.node}</div>
+      <div className="min-h-0 flex-1 overflow-visible max-lg:overflow-visible lg:overflow-hidden">
+        {list?.node}
+      </div>
 
       {detail && detailOpen ? (
         <div
           className={cn(
-            "absolute bottom-[calc(-1*env(safe-area-inset-bottom))] left-0 right-0 z-20 flex flex-col overflow-hidden rounded-t-3xl border border-b-0 border-neutral-200 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
-            !dragging && "transition-[height] duration-200 ease-out",
+            "absolute right-0 bottom-[calc(-1*env(safe-area-inset-bottom))] left-0 z-20 flex flex-col overflow-hidden rounded-t-3xl border border-b-0 border-neutral-200 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)]",
+            !dragging && "transition-[height] duration-200 ease-out"
           )}
           style={{
             height: `calc(${Math.min(height, snaps().max)}px + env(safe-area-inset-bottom))`,
@@ -358,7 +373,7 @@ function MobileSheetLayout({
           aria-label={detail.label ?? "Details"}
         >
           <div
-            className="flex shrink-0 touch-none cursor-grab justify-center pt-2 active:cursor-grabbing"
+            className="flex shrink-0 cursor-grab touch-none justify-center pt-2 active:cursor-grabbing"
             onPointerDown={onHandlePointerDown}
             onPointerMove={onHandlePointerMove}
             onPointerUp={onHandlePointerUp}
@@ -368,10 +383,10 @@ function MobileSheetLayout({
             <span className="h-1.5 w-11 rounded-full bg-neutral-300" />
           </div>
 
-           {contentVisible ? (
-             <div className="flex shrink-0 items-center gap-2 px-5 pb-3 pt-2">
-               <h2 className="min-w-0 flex-1 truncate text-[22px] font-bold leading-[1.2] tracking-tight text-neutral-900">
-                 {detail.label ?? "Report detail"}
+          {contentVisible ? (
+            <div className="flex shrink-0 items-center gap-2 px-5 pt-2 pb-3">
+              <h2 className="min-w-0 flex-1 truncate text-[22px] leading-[1.2] font-bold tracking-tight text-neutral-900">
+                {detail.label ?? "Report detail"}
               </h2>
               {aside ? (
                 <div className="flex shrink-0 items-center gap-1 rounded-full bg-neutral-100 p-1">
@@ -384,7 +399,7 @@ function MobileSheetLayout({
                       "flex size-9 items-center justify-center rounded-full transition-colors",
                       visibleSheetTab === "detail"
                         ? "bg-white text-neutral-900 shadow-sm"
-                        : "text-neutral-500 hover:text-neutral-800",
+                        : "text-neutral-500 hover:text-neutral-800"
                     )}
                   >
                     <MessageSquareIcon className="size-5" strokeWidth={2} />
@@ -398,7 +413,7 @@ function MobileSheetLayout({
                       "flex size-9 items-center justify-center rounded-full transition-colors",
                       visibleSheetTab === "aside"
                         ? "bg-white text-neutral-900 shadow-sm"
-                        : "text-neutral-500 hover:text-neutral-800",
+                        : "text-neutral-500 hover:text-neutral-800"
                     )}
                   >
                     <InfoIcon className="size-5" strokeWidth={2} />
@@ -419,10 +434,14 @@ function MobileSheetLayout({
           <div
             className={cn(
               "ops-sheet-flat flex min-h-0 flex-1 flex-col px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))]",
-              contentVisible ? "opacity-100" : "pointer-events-none opacity-0",
+              contentVisible ? "opacity-100" : "pointer-events-none opacity-0"
             )}
           >
-            {contentVisible ? (visibleSheetTab === "aside" && aside ? aside.node : detail.node) : null}
+            {contentVisible
+              ? visibleSheetTab === "aside" && aside
+                ? aside.node
+                : detail.node
+              : null}
           </div>
         </div>
       ) : null}
@@ -455,10 +474,10 @@ export function OpsWorkspace({
   const detailMin = detail?.min ?? 420
 
   const [listWidth, setListWidth] = React.useState(
-    () => (list ? readStoredWidth(id, list.id) : null) ?? listInitial,
+    () => (list ? readStoredWidth(id, list.id) : null) ?? listInitial
   )
   const [asideWidth, setAsideWidth] = React.useState(
-    () => (aside ? readStoredWidth(id, aside.id) : null) ?? asideInitial,
+    () => (aside ? readStoredWidth(id, aside.id) : null) ?? asideInitial
   )
 
   const asideInline = tier !== "mobile" && aside != null
@@ -469,6 +488,7 @@ export function OpsWorkspace({
   const listShown = list != null && !listCollapsed
   const detailShown = detail != null && !detailCollapsed
   const asideShown = aside != null && asideInline && !asideCollapsed
+  const asideFillsAvailable = asideShown && !detailShown
 
   const dividersListDetail = listShown && detailShown ? 1 : 0
   const dividersDetailAside = detailShown && asideShown ? 1 : 0
@@ -478,13 +498,18 @@ export function OpsWorkspace({
     pane: OpsPaneSpec | null,
     next: number,
     otherPaneWidth: number,
-    dividers: number,
+    dividers: number
   ) {
     if (!pane) return next
     const lower = pane.min ?? 200
     const upper = pane.max ?? 640
-    const available = rowWidth - otherPaneWidth - dividers * DIVIDER_PX - (detailShown ? detailMin : 0)
-    const ceiling = rowWidth > 0 ? Math.min(upper, Math.max(lower, available)) : upper
+    const available =
+      rowWidth -
+      otherPaneWidth -
+      dividers * DIVIDER_PX -
+      (detailShown ? detailMin : 0)
+    const ceiling =
+      rowWidth > 0 ? Math.min(upper, Math.max(lower, available)) : upper
     return Math.round(Math.min(ceiling, Math.max(lower, next)))
   }
 
@@ -493,7 +518,7 @@ export function OpsWorkspace({
         aside,
         asideWidth,
         list ? (listShown ? listWidth : COLLAPSED_PANE_WIDTH) : 0,
-        totalDividers,
+        totalDividers
       )
     : 0
 
@@ -502,39 +527,59 @@ export function OpsWorkspace({
         list,
         listWidth,
         aside ? (asideShown ? effectiveAsideWidth : COLLAPSED_PANE_WIDTH) : 0,
-        totalDividers,
+        totalDividers
       )
     : 0
+
+  const directAsideWidth = Math.max(
+    0,
+    rowWidth - effectiveListWidth - totalDividers * DIVIDER_PX
+  )
+  const barAsideWidth = asideFillsAvailable
+    ? directAsideWidth
+    : effectiveAsideWidth
 
   const commitList = React.useCallback(
     (next: number) => {
       if (!list) return
-      const bounded = Math.round(Math.min(list.max ?? 640, Math.max(list.min ?? 200, next)))
+      const bounded = Math.round(
+        Math.min(list.max ?? 640, Math.max(list.min ?? 200, next))
+      )
       setListWidth(bounded)
       writeStoredWidth(id, list.id, bounded)
     },
-    [id, list],
+    [id, list]
   )
 
   const commitAside = React.useCallback(
     (next: number) => {
       if (!aside) return
-      const bounded = Math.round(Math.min(aside.max ?? 520, Math.max(aside.min ?? 260, next)))
+      const bounded = Math.round(
+        Math.min(aside.max ?? 520, Math.max(aside.min ?? 260, next))
+      )
       setAsideWidth(bounded)
       writeStoredWidth(id, aside.id, bounded)
     },
-    [aside, id],
+    [aside, id]
   )
 
   React.useEffect(() => {
     if (listShown && effectiveListWidth > 0) onListResize?.(effectiveListWidth)
   }, [listShown, effectiveListWidth, onListResize])
 
-  const closeAside = React.useCallback(() => onAsideOpenChange?.(false), [onAsideOpenChange])
+  const closeAside = React.useCallback(
+    () => onAsideOpenChange?.(false),
+    [onAsideOpenChange]
+  )
 
   if (tier === "mobile") {
     return (
-      <div className={cn("flex min-h-[calc(100dvh-4.5rem)] w-full flex-1 flex-col bg-white", className)}>
+      <div
+        className={cn(
+          "scrollbar-hide flex h-[calc(100dvh-4.5rem)] max-h-[calc(100dvh-4.5rem)] min-h-0 w-full flex-1 flex-col bg-white",
+          className
+        )}
+      >
         {bar}
         <MobileSheetLayout
           list={list}
@@ -555,12 +600,12 @@ export function OpsWorkspace({
         (fullHeightAside && asideInline) || (fullHeightDetail && detailShown)
           ? "grid-rows-[minmax(0,1fr)]"
           : "grid-rows-[auto_minmax(0,1fr)]",
-        className,
+        className
       )}
     >
       {fullHeightDetail && detailShown ? (
         <div
-          className="absolute left-0 top-0 z-20"
+          className="absolute top-0 left-0 z-20"
           style={{
             width: effectiveListWidth + dividersListDetail * DIVIDER_PX,
           }}
@@ -569,10 +614,10 @@ export function OpsWorkspace({
         </div>
       ) : fullHeightAside && asideInline ? (
         <div
-          className="absolute left-0 top-0 z-20"
+          className="absolute top-0 left-0 z-20"
           style={{
             right: asideShown
-              ? effectiveAsideWidth + dividersDetailAside * DIVIDER_PX
+              ? barAsideWidth + dividersDetailAside * DIVIDER_PX
               : aside
                 ? COLLAPSED_PANE_WIDTH
                 : 0,
@@ -584,16 +629,25 @@ export function OpsWorkspace({
         bar
       )}
 
-      <div ref={rowRef} className="relative flex h-full min-h-0 flex-1 overflow-hidden">
+      <div
+        ref={rowRef}
+        className="relative flex h-full min-h-0 flex-1 overflow-hidden"
+      >
         {list ? (
           listShown ? (
-
             <PaneShell
-              className={cn(((fullHeightAside && asideInline) || (fullHeightDetail && detailShown)) && "pt-16", list.className)}
+              className={cn(
+                ((fullHeightAside && asideInline) ||
+                  (fullHeightDetail && detailShown)) &&
+                  "pt-16",
+                list.className
+              )}
               style={
                 detailShown
                   ? { flex: "none", width: effectiveListWidth }
-                  : { flex: "1 1 0%", minWidth: 0 }
+                  : asideFillsAvailable
+                    ? { flex: "none", width: effectiveListWidth }
+                    : { flex: "1 1 0%", minWidth: 0 }
               }
             >
               {list.node}
@@ -621,7 +675,13 @@ export function OpsWorkspace({
         {detail ? (
           detailShown ? (
             <PaneShell
-              className={cn((fullHeightAside && asideInline) && !(fullHeightDetail && detailShown) && "pt-16", detail.className)}
+              className={cn(
+                fullHeightAside &&
+                  asideInline &&
+                  !(fullHeightDetail && detailShown) &&
+                  "pt-16",
+                detail.className
+              )}
               style={{ flex: "1 1 0%", minWidth: 0 }}
             >
               {detail.node}
@@ -648,7 +708,17 @@ export function OpsWorkspace({
 
         {aside && asideInline ? (
           asideShown ? (
-            <PaneShell className={aside.className} style={{ flex: "none", width: effectiveAsideWidth }}>
+            <PaneShell
+              className={cn(
+                aside.className,
+                asideFillsAvailable && "border-l border-neutral-200"
+              )}
+              style={
+                asideFillsAvailable
+                  ? { flex: "1 1 0%", minWidth: 0 }
+                  : { flex: "none", width: effectiveAsideWidth }
+              }
+            >
               {aside.node}
             </PaneShell>
           ) : (
@@ -660,7 +730,11 @@ export function OpsWorkspace({
         ) : null}
 
         {aside && !asideInline ? (
-          <AsideOverlay open={asideOpen} onClose={closeAside} label={aside.label ?? "Actions"}>
+          <AsideOverlay
+            open={asideOpen}
+            onClose={closeAside}
+            label={aside.label ?? "Actions"}
+          >
             {aside.node}
           </AsideOverlay>
         ) : null}
@@ -688,7 +762,7 @@ export function OpsPaneHeader({
     <header
       className={cn(
         "sticky top-0 z-10 flex shrink-0 items-center justify-between gap-3 border-b border-card-line bg-canvas/85 px-4 py-2.5 backdrop-blur-md",
-        className,
+        className
       )}
     >
       {}
@@ -704,16 +778,28 @@ export function OpsPaneHeader({
           <ChevronDownIcon
             className={cn(
               "size-3.5 shrink-0 text-subtle-foreground transition-transform duration-200",
-              collapsed && "-rotate-90",
+              collapsed && "-rotate-90"
             )}
           />
-          <h2 className="truncate text-micro text-subtle-foreground">{title}</h2>
-          {meta ? <span className="truncate text-micro text-faint-foreground">{meta}</span> : null}
+          <h2 className="truncate text-micro text-subtle-foreground">
+            {title}
+          </h2>
+          {meta ? (
+            <span className="truncate text-micro text-faint-foreground">
+              {meta}
+            </span>
+          ) : null}
         </button>
       ) : (
         <div className="flex min-w-0 items-center gap-1.5">
-          <h2 className="truncate text-micro text-subtle-foreground">{title}</h2>
-          {meta ? <span className="truncate text-micro text-faint-foreground">{meta}</span> : null}
+          <h2 className="truncate text-micro text-subtle-foreground">
+            {title}
+          </h2>
+          {meta ? (
+            <span className="truncate text-micro text-faint-foreground">
+              {meta}
+            </span>
+          ) : null}
         </div>
       )}
       {action}

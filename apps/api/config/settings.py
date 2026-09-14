@@ -555,8 +555,8 @@ REST_FRAMEWORK = {
         "location_ping": "60/minute",
         "assistant": "20/minute",
         "weather_health": "12/minute",
-        "public_guest_concern": "5/hour",
-        "public_guest_concern_media": "20/hour",
+        "public_guest_concern": "15/hour",
+        "public_guest_concern_media": "6/minute",
     },
 }
 
@@ -596,6 +596,7 @@ _default_cors_origins = [
     "http://127.0.0.1:5173",
     "https://localhost:5173",
     "https://127.0.0.1:5173",
+    "https://localhost",
     "http://localhost:5174",
     "http://127.0.0.1:5174",
     "https://localhost:5174",
@@ -657,6 +658,7 @@ _default_csrf_trusted = [
     "http://127.0.0.1:5173",
     "https://localhost:5173",
     "https://127.0.0.1:5173",
+    "https://localhost",
     "http://localhost:5174",
     "http://127.0.0.1:5174",
     "https://localhost:5174",
@@ -847,6 +849,7 @@ else:
 WEB_PUSH_PUBLIC_KEY = env("WEB_PUSH_PUBLIC_KEY", default="")
 WEB_PUSH_PRIVATE_KEY = env("WEB_PUSH_PRIVATE_KEY", default="")
 WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{DEFAULT_FROM_EMAIL}")
+FIREBASE_CREDENTIALS_PATH = env("FIREBASE_CREDENTIALS_PATH", default="")
 
 SUPPORT_EMAIL = env("SUPPORT_EMAIL", default=DEFAULT_FROM_EMAIL)
 
@@ -906,6 +909,8 @@ ASSISTANT_BASE_URL = env("ASSISTANT_BASE_URL", default="")
 ASSISTANT_MODEL = env("ASSISTANT_MODEL", default="")
 ASSISTANT_TIMEOUT_SECONDS = env.float("ASSISTANT_TIMEOUT_SECONDS", default=30.0)
 ASSISTANT_MAX_TOKENS = env.int("ASSISTANT_MAX_TOKENS", default=220)
+ANNOUNCEMENT_SUMMARY_LLM_ENABLED = env.bool("ANNOUNCEMENT_SUMMARY_LLM_ENABLED", default=True)
+NOTIFICATION_COPY_LLM_ENABLED = env.bool("NOTIFICATION_COPY_LLM_ENABLED", default=True)
 ASSISTANT_SESSION_BUDGET = env.int("ASSISTANT_SESSION_BUDGET", default=8)
 ASSISTANT_SESSION_BUDGET_WINDOW_SECONDS = env.int(
     "ASSISTANT_SESSION_BUDGET_WINDOW_SECONDS", default=600

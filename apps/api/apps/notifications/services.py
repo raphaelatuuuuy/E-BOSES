@@ -65,6 +65,48 @@ def _deliver_notification_after_commit(notification) -> None:
     transaction.on_commit(_deliver)
 
 
+def _generate_notification_copy_after_commit(notification) -> None:
+    """Generate compact copy without making notification creation wait on LLM."""
+    from .tasks import generate_notification_copy_task
+
+    def _generate():
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) and not getattr(
+            settings, "IS_TEST_RUN", False
+        ):
+            generate_notification_copy_task.run(notification.pk)
+            return
+        try:
+            generate_notification_copy_task.delay(notification.pk)
+        except Exception:
+            if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                generate_notification_copy_task.run(notification.pk)
+
+    transaction.on_commit(_generate)
+
+
+def generate_notification_copies_after_commit(notification_ids) -> None:
+    """Queue compact-copy generation for a notification fan-out."""
+    from .tasks import generate_notification_copies_batch_task
+
+    ids = list(notification_ids)
+    if not ids:
+        return
+
+    def _generate():
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) and not getattr(
+            settings, "IS_TEST_RUN", False
+        ):
+            generate_notification_copies_batch_task.run(ids)
+            return
+        try:
+            generate_notification_copies_batch_task.delay(ids)
+        except Exception:
+            if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                generate_notification_copies_batch_task.run(ids)
+
+    transaction.on_commit(_generate)
+
+
 def _report_updates_enabled(concern: Concern) -> bool:
     settings_obj = getattr(concern.reporter, "resident_settings", None)
     return settings_obj is None or settings_obj.report_updates
@@ -732,21 +774,22 @@ def _display_announcement_notification(notification) -> tuple[str, str]:
 
 
 def notification_display(notification) -> tuple[str, str]:
+    from .notification_copy import generate_notification_copy, stored_notification_copy
+
     metadata = _safe_metadata(notification)
+    generated = stored_notification_copy(notification)
+    if generated:
+        return generated
+
     custom_title = _clean_text(metadata.get("display_title"))
     custom_body = _clean_text(metadata.get("display_body"))
     if custom_title and custom_body:
-        return _truncate(custom_title, 90), _with_greeting(notification, custom_body)
-    if notification.type == "announcement":
-        title, body = _display_announcement_notification(notification)
-    elif notification.emergency_id and notification.type != "chat_message":
-        title, body = _display_emergency_notification(notification)
-    elif notification.concern_id:
-        title, body = _display_concern_notification(notification)
-    else:
-        title = _truncate(custom_title or notification.title or f"E-Boses update · {notification.type or 'notification'}", 90)
-        body = custom_body or notification.body or "Open E-Boses for more details."
-    return title, _with_greeting(notification, body)
+        return custom_title, custom_body
+
+    # The fallback follows the same compact shape as the model output. It is
+    # deliberately local and deterministic so an inbox request never waits
+    # for an assistant call.
+    return generate_notification_copy(notification, use_model=False)[0]
 
 
 def notification_actions(notification) -> list[dict]:
@@ -879,6 +922,7 @@ def broadcast_notification(notification) -> None:
     payload = NotificationSerializer(notification).data
     _broadcast(f"user_{notification.recipient_id}", "notification.created", payload)
     push_result = send_browser_push(notification, payload)
+    send_native_push(notification, payload)
     if notification.type == "witness_alert" and notification.emergency_id:
         from apps.emergencies.models import WitnessNotification
 
@@ -893,6 +937,36 @@ def broadcast_notification(notification) -> None:
             push_failure_count=push_result["failure_count"],
         )
     return push_result
+
+def send_native_push(notification, payload: dict) -> dict:
+    devices = list(notification.recipient.native_push_devices.filter(is_active=True))
+    credential_path = getattr(settings, "FIREBASE_CREDENTIALS_PATH", "")
+    if not devices or not credential_path or not _push_alerts_enabled(notification.recipient):
+        return {"status": "not_subscribed" if not devices else "not_configured"}
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, messaging
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(credentials.Certificate(credential_path))
+        display = notification_display_payload(notification, payload)
+        data = {
+            "notification_id": str(notification.pk),
+            "action_url": str(payload.get("action_url") or notification_url(notification)),
+            "type": str(notification.type),
+        }
+        response = messaging.send_each_for_multicast(messaging.MulticastMessage(
+            tokens=[device.token for device in devices],
+            notification=messaging.Notification(title=display.get("title") or notification.title, body=display.get("body") or notification.body),
+            data=data,
+            android=messaging.AndroidConfig(priority="high"),
+        ))
+        for device, item in zip(devices, response.responses):
+            if not item.success and "not found" in str(item.exception).lower():
+                device.is_active = False
+                device.save(update_fields=["is_active", "updated_at"])
+        return {"status": "delivered" if response.success_count else "failed"}
+    except Exception:
+        return {"status": "failed"}
 
 
 def broadcast_concern_chat(concern_id, payload: dict) -> None:
@@ -912,11 +986,11 @@ def notification_url(notification) -> str:
                 return f"/dashboard/reports/{source_concern.public_id}"
             return "/dashboard/home"
         if notification.recipient.role == notification.recipient.Role.FIRST_RESPONDER:
-            return f"/dashboard/responders/dispatch?alert={notification.emergency_id}"
+            return f"/dashboard/reports?alert={notification.emergency_id}"
         return f"/dashboard/alerts-map?alert={notification.emergency_id}"
     if notification.concern_id:
         if notification.recipient.role == notification.recipient.Role.FIRST_RESPONDER:
-            return "/dashboard/responders/map"
+            return f"/dashboard/reports/{notification.concern.public_id}"
         return f"/dashboard/reports/{notification.concern.public_id}"
     return "/dashboard"
 
@@ -1183,6 +1257,7 @@ def create_user_notification(
         department=department or getattr(concern, "assigned_department", None),
         event_key=event_key,
     )
+    _generate_notification_copy_after_commit(notification)
     _deliver_notification_after_commit(notification)
     return notification
 
@@ -1230,6 +1305,7 @@ def create_emergency_notification(
         department=department,
         event_key=event_key,
     )
+    _generate_notification_copy_after_commit(notification)
     _deliver_notification_after_commit(notification)
     return notification
 

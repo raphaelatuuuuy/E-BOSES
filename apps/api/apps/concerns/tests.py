@@ -26,6 +26,7 @@ from apps.geo_services import classify_location
 
 from .models import Announcement, BarangayEvent, Concern, ConcernAiAssessment, ConcernAppeal, ConcernAssignment, ConcernCategory, ConcernChatAttachment, ConcernClassificationConfiguration, ConcernClarification, ConcernComment, ConcernMedia, ConcernOfficialRemark, ConcernResolutionEvidence, ConcernStatusEvent, ConcernVote, ContentFlag, Department, Designation, Position, PublicCommentAttachment
 from .serializers import PublicUserSerializer
+from .severity import priority_score, severity_label
 from .test_helpers import ensure_test_profile, grant_position
 
 def png_bytes():
@@ -260,6 +261,25 @@ class ResidentDashboardAPITests(APITestCase):
         ensure_test_profile(self.other, community=self.community)
         self.client.force_authenticate(self.resident)
 
+    def test_media_check_identifies_duplicate_file_without_previewing_it(self):
+        response = self.client.post(
+            "/api/concerns/media/check/",
+            {
+                "forensics_only": "true",
+                "media": [
+                    png_upload("first.png"),
+                    png_upload("duplicate.png"),
+                ],
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([row["index"] for row in response.data["files"]], [0, 1])
+        self.assertEqual(response.data["files"][0]["status"], "accepted")
+        self.assertEqual(response.data["files"][1]["status"], "rejected")
+        self.assertIn("already uploaded", response.data["files"][1]["message"])
+
     def test_resident_can_create_report_with_initial_status_event(self):
         with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
             with self.captureOnCommitCallbacks(execute=True):
@@ -284,6 +304,7 @@ class ResidentDashboardAPITests(APITestCase):
         concern = Concern.objects.get(pk=response.data["id"])
         self.assertEqual(concern.reporter, self.resident)
         self.assertEqual(concern.status, Concern.Status.SUBMITTED)
+        self.assertEqual(concern.visibility, Concern.Visibility.COMMUNITY)
         self.assertEqual(str(concern.latitude), "14.6515000")
         self.assertEqual(str(concern.longitude), "121.1207000")
         self.assertEqual(concern.location_source, "manual_pin")
@@ -294,6 +315,76 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(response.data["ai_assessment"]["status"], ConcernAiAssessment.Status.PENDING)
         self.assertRegex(response.data["tracking_id"], r"^RPT-\d{4}-\d{6}$")
         self.assertEqual(response.data["validation_status"], "pending")
+
+    def test_critical_normal_report_stays_a_concern_without_emergency_companion(self):
+        with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    "/api/concerns/",
+                    {
+                        "title": "Car crash near the corner",
+                        "description": "A car crash is blocking the road near the corner and needs official attention.",
+                        "category": "public_safety",
+                        "visibility": "community",
+                        "address": "Bayan-Bayanan St.",
+                        "latitude": "14.6515000",
+                        "longitude": "121.1207000",
+                        "location_source": "manual_pin",
+                        # Legacy clients may still send these fields. They must
+                        # never turn a normal report into an emergency alert.
+                        "auto_escalate": "true",
+                        "emergency_type": "fire",
+                        "media": png_upload("car-crash.png"),
+                    },
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        concern = Concern.objects.get(pk=response.data["id"])
+        self.assertEqual(EmergencyAlert.objects.filter(source_concern=concern).count(), 0)
+        self.assertNotIn("escalated_alert", response.data)
+
+        assessment = concern.ai_assessment
+        assessment.status = ConcernAiAssessment.Status.COMPLETED
+        assessment.severity_estimate = "high"
+        assessment.urgent_attention = True
+        assessment.save(update_fields=["status", "severity_estimate", "urgent_attention"])
+        concern.refresh_from_db()
+        self.assertEqual(severity_label(concern), "critical")
+        self.assertGreaterEqual(priority_score(concern), 3000)
+
+    def test_category_policy_keeps_report_private_and_cannot_be_overridden(self):
+        category = ConcernCategory.objects.create(
+            community=self.community,
+            name="Private resident concern",
+            code="private-resident-concern",
+            location_required=False,
+            public_feed_allowed=False,
+        )
+
+        with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
+            response = self.client.post(
+                "/api/concerns/",
+                {
+                    "title": "A private concern",
+                    "description": "This report must remain visible only to its participants.",
+                    "category_id": category.id,
+                    "visibility": Concern.Visibility.COMMUNITY,
+                    "address": "Bayan-Bayanan St.",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        concern = Concern.objects.get(pk=response.data["id"])
+        self.assertEqual(concern.visibility, Concern.Visibility.PRIVATE)
+
+        concern.validation_status = Concern.ValidationStatus.ACCEPTED
+        concern.save(update_fields=["validation_status"])
+        publish_response = self.client.post(f"/api/concerns/{concern.id}/publish/", {}, format="json")
+        self.assertEqual(publish_response.status_code, status.HTTP_409_CONFLICT)
+        concern.refresh_from_db()
+        self.assertEqual(concern.visibility, Concern.Visibility.PRIVATE)
 
     def test_resident_report_is_routed_to_the_community_containing_the_pin(self):
         boundary = MapGeometry.objects.create(
@@ -473,6 +564,24 @@ class ResidentDashboardAPITests(APITestCase):
         detail = self.client.get(f"/api/concerns/{first.data['public_id']}/")
         self.assertEqual(detail.status_code, status.HTTP_200_OK)
         self.assertEqual(detail.data["tracking_id"], first.data["tracking_id"])
+
+    def test_concern_detail_includes_llm_summary_for_feed_post(self):
+        concern = Concern.objects.create(
+            reporter=self.other,
+            title="Sagging wires",
+            description="Wires are hanging low over the sidewalk.",
+            summary="The report is about dangerous sagging wires obstructing the sidewalk.",
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+
+        detail = self.client.get(f"/api/concerns/{concern.public_id}/")
+
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            detail.data["summary"],
+            "The report is about dangerous sagging wires obstructing the sidewalk.",
+        )
 
     def test_feed_reporter_does_not_expose_private_identity_or_location_fields(self):
         ensure_test_profile(
@@ -1479,7 +1588,7 @@ class PhaseOneFoundationAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     @override_settings(OLLAMA_API_KEY="test-key")
-    def test_ai_pipeline_category_mismatch_is_applied_automatically(self):
+    def test_ai_pipeline_uses_the_llm_category_for_routing(self):
         concern = Concern.objects.create(
             reporter=self.resident,
             assigned_department=self.department,
@@ -1493,23 +1602,62 @@ class PhaseOneFoundationAPITests(APITestCase):
         with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
             classifier.return_value.analyze.return_value = gemma_result(
                 category=Concern.Category.ENVIRONMENT,
-                selected_category_match=False,
                 recommended_action="accept",
             )
             assessment = process_concern_ai(concern.pk)
 
-        self.assertFalse(assessment.category_match)
-        self.assertTrue(assessment.flagged)
+        self.assertTrue(assessment.category_match)
+        self.assertFalse(assessment.flagged)
         reason_codes = {entry["reason"] for entry in assessment.flag_reasons}
-        self.assertIn("category_mismatch", reason_codes)
-        mismatch_entry = next(entry for entry in assessment.flag_reasons if entry["reason"] == "category_mismatch")
-        self.assertEqual(mismatch_entry["configured_action"], ConcernClassificationConfiguration.current().mismatch_action)
+        self.assertNotIn("category_mismatch", reason_codes)
 
         concern.refresh_from_db()
         self.assertEqual(concern.validation_status, Concern.ValidationStatus.ACCEPTED)
         self.assertEqual(concern.status, Concern.Status.SUBMITTED)
         self.assertEqual(concern.category, Concern.Category.ENVIRONMENT)
         self.assertEqual(concern.validation_summary, "Automated validation passed.")
+
+    @override_settings(OLLAMA_API_KEY="test-key")
+    def test_critical_concern_routes_to_category_unit_without_sos_alert(self):
+        category = ConcernCategory.objects.filter(
+            community=self.community,
+            code=Concern.Category.PUBLIC_SAFETY,
+            is_active=True,
+        ).select_related("department").first()
+        self.assertIsNotNone(category)
+        routing_rule = category.routing_rules.filter(
+            is_active=True,
+        ).select_related("department").first()
+        expected_department = routing_rule.department if routing_rule else category.department
+        self.assertIsNotNone(expected_department)
+
+        concern = Concern.objects.create(
+            reporter=self.resident,
+            community=self.community,
+            title="Car crash blocking the road",
+            description="A car crash is blocking the road and needs official attention.",
+            category=Concern.Category.INFRASTRUCTURE,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            status=Concern.Status.SUBMITTED,
+        )
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.PUBLIC_SAFETY,
+                severity="high",
+                urgent_attention=False,
+                recommended_action="accept_with_privacy_review",
+                matched_emergency_type="",
+                incident_timing="ongoing",
+                current_danger=True,
+            )
+            assessment = process_concern_ai(concern.pk)
+
+        self.assertEqual(assessment.status, ConcernAiAssessment.Status.COMPLETED)
+        concern.refresh_from_db()
+        self.assertEqual(severity_label(concern), "critical")
+        self.assertEqual(concern.assigned_department_id, expected_department.pk)
+        self.assertEqual(EmergencyAlert.objects.filter(source_concern=concern).count(), 0)
 
     @override_settings(OLLAMA_API_KEY="test-key")
     def test_ai_pipeline_clean_run_is_not_flagged(self):

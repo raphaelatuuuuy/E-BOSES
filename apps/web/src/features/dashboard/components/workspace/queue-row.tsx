@@ -115,10 +115,7 @@ export function QueueRow({
         </div>
 
         {summary ? (
-          <div className="mt-2">
-            <p className="text-micro font-bold text-subtle-foreground">Summary</p>
-            <p className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-foreground">{summary}</p>
-          </div>
+          <p className="mt-2 line-clamp-2 text-[13px] leading-snug text-foreground">{summary}</p>
         ) : null}
 
         {stats.length ? (

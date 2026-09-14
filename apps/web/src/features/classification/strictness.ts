@@ -48,7 +48,8 @@ export const STRICTNESS_PRESETS: StrictnessPreset[] = [
   {
     key: "balanced",
     label: "Standard review",
-    summary: "Ask for clarification when text, category, or photo does not clearly line up.",
+    summary:
+      "Ask for clarification when text, category, or photo does not clearly line up.",
     consequence:
       "Most valid reports continue, while unclear ones get checked first.",
     text_relevance_threshold: 0.65,
@@ -58,7 +59,8 @@ export const STRICTNESS_PRESETS: StrictnessPreset[] = [
   {
     key: "strict",
     label: "Careful review",
-    summary: "Ask for clearer details when the report is incomplete or evidence does not match.",
+    summary:
+      "Ask for clearer details when the report is incomplete or evidence does not match.",
     consequence:
       "Residents may correct more reports before submitting, reducing weak reports in the queue.",
     text_relevance_threshold: 0.8,
@@ -72,20 +74,26 @@ export const STRICTNESS_PRESETS: StrictnessPreset[] = [
  * hand-tuned. Returning null matters: silently snapping a custom setup to the
  * nearest preset would change behaviour the official chose deliberately.
  */
-export function detectStrictness(config: ConcernClassificationConfig): Strictness | null {
+export function detectStrictness(
+  config: ConcernClassificationConfig
+): Strictness | null {
   const match = STRICTNESS_PRESETS.find(
     (preset) =>
-      Math.abs(preset.text_relevance_threshold - config.text_relevance_threshold) < 0.001 &&
-      Math.abs(preset.duplicate_similarity_threshold - config.duplicate_similarity_threshold) <
-        0.001 &&
-      preset.minimum_description_length === config.minimum_description_length,
+      Math.abs(
+        preset.text_relevance_threshold - config.text_relevance_threshold
+      ) < 0.001 &&
+      Math.abs(
+        preset.duplicate_similarity_threshold -
+          config.duplicate_similarity_threshold
+      ) < 0.001 &&
+      preset.minimum_description_length === config.minimum_description_length
   )
   return match?.key ?? null
 }
 
 export function applyStrictness(
   config: ConcernClassificationConfig,
-  key: Strictness,
+  key: Strictness
 ): ConcernClassificationConfig {
   const preset = STRICTNESS_PRESETS.find((item) => item.key === key)
   if (!preset) return config
@@ -96,29 +104,6 @@ export function applyStrictness(
     minimum_description_length: preset.minimum_description_length,
   }
 }
-
-/** Plain-language names for the settings that stay visible. */
-export const MISMATCH_OPTIONS: {
-  value: ConcernClassificationConfig["mismatch_action"]
-  label: string
-  hint: string
-}[] = [
-  {
-    value: "auto_correct",
-    label: "Use the detected category",
-    hint: "The system corrects the category before routing. Recommended.",
-  },
-  {
-    value: "request_resubmission",
-    label: "Ask the resident to redo it",
-    hint: "They are asked for a clearer photo or description.",
-  },
-  {
-    value: "reject",
-    label: "Turn it down automatically",
-    hint: "No official sees it first. Use with care.",
-  },
-]
 
 /**
  * What happens when a photo looks edited, AI-made, or impossible.

@@ -38,8 +38,6 @@ def gemma_result(
         "recommended_action": "accept" if category else "manual_review",
         "short_explanation": "The description and the photo were reviewed.",
     }
-    if category:
-        defaults["selected_category_match"] = True
     details = gemma_details(**{**defaults, **detail_overrides})
     return TextClassificationResult(
         label=f"related_{category}" if category and relevance == "VALID" else "needs_review",

@@ -72,42 +72,6 @@
     "osm_id": 1360075652
   },
   {
-    "id": "osm-n3578952587",
-    "name": "Marikina Community Police Precint № 8",
-    "type": "police",
-    "label": "Police",
-    "sector": "public",
-    "latitude": 14.6396494,
-    "longitude": 121.1216995,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 3578952587
-  },
-  {
-    "id": "osm-n3578952590",
-    "name": "Dentistdedette",
-    "type": "dentist",
-    "label": "Dentist",
-    "sector": "private",
-    "latitude": 14.6405214,
-    "longitude": 121.1221162,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 3578952590
-  },
-  {
-    "id": "osm-n3578952904",
-    "name": "Almeguia-Castro Dental Clinic",
-    "type": "dentist",
-    "label": "Dentist",
-    "sector": "private",
-    "latitude": 14.6416848,
-    "longitude": 121.121956,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 3578952904
-  },
-  {
     "id": "osm-n3658574142",
     "name": "BCI-CCS Marikina",
     "type": "school",
@@ -120,30 +84,6 @@
     "osm_id": 3658574142
   },
   {
-    "id": "osm-n4446968192",
-    "name": "Cuddly Care Animal Clinic",
-    "type": "veterinary",
-    "label": "Veterinary",
-    "sector": "private",
-    "latitude": 14.6441747,
-    "longitude": 121.121313,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 4446968192
-  },
-  {
-    "id": "osm-n5126232937",
-    "name": "Watsons",
-    "type": "pharmacy",
-    "label": "Pharmacy",
-    "sector": "private",
-    "latitude": 14.6419136,
-    "longitude": 121.1221756,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 5126232937
-  },
-  {
     "id": "osm-n6060455585",
     "name": "APEC Schools",
     "type": "school",
@@ -154,42 +94,6 @@
     "source": "osm",
     "osm_type": "N",
     "osm_id": 6060455585
-  },
-  {
-    "id": "osm-n6240897082",
-    "name": "Mercury Drug",
-    "type": "pharmacy",
-    "label": "Pharmacy",
-    "sector": "private",
-    "latitude": 14.6415185,
-    "longitude": 121.1221601,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 6240897082
-  },
-  {
-    "id": "osm-n6240902615",
-    "name": "TGP",
-    "type": "pharmacy",
-    "label": "Pharmacy",
-    "sector": "private",
-    "latitude": 14.6411395,
-    "longitude": 121.122095,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 6240902615
-  },
-  {
-    "id": "osm-n6246470252",
-    "name": "Silk",
-    "type": "clinic",
-    "label": "Clinic",
-    "sector": "private",
-    "latitude": 14.6444911,
-    "longitude": 121.1203086,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 6246470252
   },
   {
     "id": "osm-n7328647585",
@@ -262,102 +166,6 @@
     "source": "osm",
     "osm_type": "N",
     "osm_id": 12054070711
-  },
-  {
-    "id": "osm-n12065963984",
-    "name": "Dentist",
-    "type": "dentist",
-    "label": "Dentist",
-    "sector": "private",
-    "latitude": 14.6406985,
-    "longitude": 121.1209719,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12065963984
-  },
-  {
-    "id": "osm-n12074717571",
-    "name": "Quiambao Dental Clinic",
-    "type": "dentist",
-    "label": "Dentist",
-    "sector": "private",
-    "latitude": 14.6411012,
-    "longitude": 121.1220926,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12074717571
-  },
-  {
-    "id": "osm-n12079176427",
-    "name": "Deluxe Care",
-    "type": "dentist",
-    "label": "Dentist",
-    "sector": "private",
-    "latitude": 14.6425086,
-    "longitude": 121.122097,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12079176427
-  },
-  {
-    "id": "osm-n12220705960",
-    "name": "TGP",
-    "type": "pharmacy",
-    "label": "Pharmacy",
-    "sector": "private",
-    "latitude": 14.6419357,
-    "longitude": 121.1108918,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12220705960
-  },
-  {
-    "id": "osm-n12220705961",
-    "name": "Specialist Care",
-    "type": "clinic",
-    "label": "Clinic",
-    "sector": "private",
-    "latitude": 14.6419168,
-    "longitude": 121.1109517,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12220705961
-  },
-  {
-    "id": "osm-n12220705970",
-    "name": "Toothie Dental Care Center",
-    "type": "dentist",
-    "label": "Dentist",
-    "sector": "private",
-    "latitude": 14.6418707,
-    "longitude": 121.1106645,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12220705970
-  },
-  {
-    "id": "osm-n12440343970",
-    "name": "Fairdent Dental Clinic",
-    "type": "dentist",
-    "label": "Dentist",
-    "sector": "private",
-    "latitude": 14.6419785,
-    "longitude": 121.1222293,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12440343970
-  },
-  {
-    "id": "osm-n12639864190",
-    "name": "Kenclare",
-    "type": "pharmacy",
-    "label": "Pharmacy",
-    "sector": "private",
-    "latitude": 14.6394949,
-    "longitude": 121.1279288,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 12639864190
   },
   {
     "id": "osm-n12639987639",
@@ -456,18 +264,6 @@
     "osm_id": 12679509303
   },
   {
-    "id": "osm-n13579798251",
-    "name": "Smileglow",
-    "type": "clinic",
-    "label": "Clinic",
-    "sector": "private",
-    "latitude": 14.6442022,
-    "longitude": 121.1173415,
-    "source": "osm",
-    "osm_type": "N",
-    "osm_id": 13579798251
-  },
-  {
     "id": "osm-n13668497936",
     "name": "NoveauSkin",
     "type": "clinic",
@@ -502,30 +298,6 @@
     "source": "osm",
     "osm_type": "W",
     "osm_id": 36748036
-  },
-  {
-    "id": "osm-w93197624",
-    "name": "National Cottage Industry Technical Center",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.6418611,
-    "longitude": 121.1183326,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 93197624
-  },
-  {
-    "id": "osm-w93197648",
-    "name": "Infant Jesus Academy",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.6432693,
-    "longitude": 121.1175699,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 93197648
   },
   {
     "id": "osm-w93320662",
@@ -564,78 +336,6 @@
     "osm_id": 104371863
   },
   {
-    "id": "osm-w117481997",
-    "name": "Charis School",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.6437929,
-    "longitude": 121.1139358,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 117481997
-  },
-  {
-    "id": "osm-w120779195",
-    "name": "SDS Medical Center",
-    "type": "hospital",
-    "label": "Hospital",
-    "sector": "private",
-    "latitude": 14.6394487,
-    "longitude": 121.110016,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 120779195
-  },
-  {
-    "id": "osm-w121189960",
-    "name": "San Ramon Hospital",
-    "type": "hospital",
-    "label": "Hospital",
-    "sector": "private",
-    "latitude": 14.6441046,
-    "longitude": 121.1172145,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 121189960
-  },
-  {
-    "id": "osm-w121190400",
-    "name": "Just-E",
-    "type": "clinic",
-    "label": "Clinic",
-    "sector": "private",
-    "latitude": 14.6427764,
-    "longitude": 121.1172534,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 121190400
-  },
-  {
-    "id": "osm-w881284245",
-    "name": "Rightline",
-    "type": "pharmacy",
-    "label": "Pharmacy",
-    "sector": "private",
-    "latitude": 14.6414109,
-    "longitude": 121.1221669,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 881284245
-  },
-  {
-    "id": "osm-w1120349482",
-    "name": "Dynamic Thinkers Educational Center, Inc.",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.644234,
-    "longitude": 121.1212255,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 1120349482
-  },
-  {
     "id": "osm-w1301048054",
     "name": "Infant Jesus Academy",
     "type": "school",
@@ -646,18 +346,6 @@
     "source": "osm",
     "osm_type": "W",
     "osm_id": 1301048054
-  },
-  {
-    "id": "osm-w1301199232",
-    "name": "Clinic",
-    "type": "clinic",
-    "label": "Clinic",
-    "sector": "private",
-    "latitude": 14.6434352,
-    "longitude": 121.1176876,
-    "source": "osm",
-    "osm_type": "W",
-    "osm_id": 1301199232
   },
   {
     "id": "osm-w1357193210",
@@ -696,18 +384,6 @@
     "osm_id": 15661981
   },
   {
-    "id": "osm-r15675627",
-    "name": "Ingenium School",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.6378328,
-    "longitude": 121.1110599,
-    "source": "osm",
-    "osm_type": "R",
-    "osm_id": 15675627
-  },
-  {
     "id": "osm-r17772054",
     "name": "Marist School",
     "type": "school",
@@ -742,53 +418,5 @@
     "source": "osm",
     "osm_type": "R",
     "osm_id": 17772411
-  },
-  {
-    "id": "osm-r17934577",
-    "name": "Infant Jesus Academy Marikina",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.644064,
-    "longitude": 121.1175201,
-    "source": "osm",
-    "osm_type": "R",
-    "osm_id": 17934577
-  },
-  {
-    "id": "osm-r18787088",
-    "name": "Marikina Christian Integrated School",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.6404471,
-    "longitude": 121.1201482,
-    "source": "osm",
-    "osm_type": "R",
-    "osm_id": 18787088
-  },
-  {
-    "id": "osm-r19046261",
-    "name": "SSS National High School",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.6398053,
-    "longitude": 121.1213274,
-    "source": "osm",
-    "osm_type": "R",
-    "osm_id": 19046261
-  },
-  {
-    "id": "osm-r19046262",
-    "name": "SSS Village Elementary School",
-    "type": "school",
-    "label": "School",
-    "sector": "public",
-    "latitude": 14.6401826,
-    "longitude": 121.1213676,
-    "source": "osm",
-    "osm_type": "R",
-    "osm_id": 19046262
   }
 ]

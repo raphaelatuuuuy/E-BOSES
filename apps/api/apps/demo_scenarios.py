@@ -433,6 +433,9 @@ ANNOUNCEMENTS = [
             "Bukas po ang covered court bilang evacuation area. Ang anunsyo ng paglikas ay "
             "ipapaalam dito sa app at sa text."
         ),
+        "llm_summary": (
+            "This announcement is about preparing creek-side households for a yellow rainfall warning."
+        ),
         "tag": "Weather",
         "urgency": "urgent",
         "days_ago": 0,
@@ -447,6 +450,9 @@ ANNOUNCEMENTS = [
             "Pakiusap po na alisin muna ang mga nakaparadang sasakyan sa tapat ng kanal. "
             "Salamat sa mga nag-report — dahil po sa inyong report kaya na-prioritize ito."
         ),
+        "llm_summary": (
+            "This announcement is about canal declogging work in Champaca and Dao."
+        ),
         "tag": "Public Works",
         "urgency": "important",
         "days_ago": 2,
@@ -458,6 +464,9 @@ ANNOUNCEMENTS = [
             "Sa Sabado po, alas-otso hanggang alas-dose ng tanghali sa covered court. "
             "Libre po ito. Dalhin ang aso o pusa na naka-tali o nasa carrier, at ang record "
             "book kung mayroon."
+        ),
+        "llm_summary": (
+            "This announcement is about free anti-rabies vaccination for dogs and cats."
         ),
         "tag": "Health",
         "urgency": "normal",
@@ -471,6 +480,9 @@ ANNOUNCEMENTS = [
             "Segregated lang po ang kinokolekta. Ang hindi nakabukod ay hindi po kukunin. "
             "Ang tamang segregation po ang isa sa pinakamalaking tulong laban sa baha."
         ),
+        "llm_summary": (
+            "This announcement is about the new Tuesday and Friday garbage collection schedule."
+        ),
         "tag": "Sanitation",
         "urgency": "normal",
         "days_ago": 7,
@@ -483,6 +495,9 @@ ANNOUNCEMENTS = [
             "Ang paulit-ulit na paglabag ay maaaring dalhin sa Lupon Tagapamayapa. "
             "Magrespetuhan po tayo sa kapitbahay."
         ),
+        "llm_summary": (
+            "This announcement is about the barangay noise ordinance limiting videoke to before 10:00 PM."
+        ),
         "tag": "Peace and Order",
         "urgency": "important",
         "days_ago": 10,
@@ -493,6 +508,9 @@ ANNOUNCEMENTS = [
             "Pwede na po kayong mag-request ng barangay clearance dito sa app at kunin na "
             "lang sa hall kinabukasan. Magdala po ng valid ID pagkuha."
         ),
+        "llm_summary": (
+            "This announcement is about requesting barangay clearance online for next-day collection."
+        ),
         "tag": "Services",
         "urgency": "normal",
         "days_ago": 13,
@@ -502,6 +520,9 @@ ANNOUNCEMENTS = [
         "body": (
             "Sa barangay hall po, ika-25 at 26 ng buwan. Dalhin po ang ID at booklet. "
             "Kung may kinatawan, kailangan po ng authorization letter at ID ng dalawa."
+        ),
+        "llm_summary": (
+            "This announcement is about the senior citizens' pension release on the 25th and 26th."
         ),
         "tag": "Social Services",
         "urgency": "normal",

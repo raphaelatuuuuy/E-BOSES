@@ -16,6 +16,7 @@ from apps.concerns.test_helpers import active_test_community, ensure_test_profil
 from apps.emergencies.models import EmergencyAlert, EmergencyMedia, WitnessNotification
 
 from .models import BrowserPushSubscription, Notification
+from .notification_copy import refresh_notification_copy
 from .selectors import notification_queryset
 from .services import (
     browser_push_extra_headers,
@@ -232,6 +233,32 @@ class NotificationPreferenceAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["count"], 1)
 
+    def test_user_can_archive_and_delete_own_notifications(self):
+        user = self.create_verified_user("archive-delete")
+        archived = Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Archive me",
+        )
+        deleted = Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Delete me",
+        )
+        self.client.force_authenticate(user)
+
+        archive_response = self.client.patch(
+            f"/api/notifications/{archived.pk}/archive/",
+            {"is_archived": True},
+            format="json",
+        )
+        delete_response = self.client.delete(f"/api/notifications/{deleted.pk}/")
+
+        self.assertEqual(archive_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(Notification.objects.get(pk=archived.pk).is_archived)
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Notification.objects.filter(pk=deleted.pk).exists())
+
     def test_mark_all_read_updates_unread_count_immediately(self):
         user = self.create_verified_user("read-all-count")
         Notification.objects.create(
@@ -318,28 +345,58 @@ class NotificationPreferenceAPITests(APITestCase):
         self.assertEqual(by_type[Notification.Type.SUBMITTED]["concern_public_id"], str(concern.public_id))
         self.assertEqual(by_type[Notification.Type.EMERGENCY_SUBMITTED]["emergency_public_id"], str(emergency.public_id))
 
-    def test_notification_greeting_uses_manila_send_time_and_last_name(self):
+    def test_notification_copy_omits_repeated_personal_greeting(self):
         user = self.create_verified_user("greeting")
         ensure_test_profile(user, first_name="Ana", last_name="Santos")
 
-        cases = [
-            (9, "Good morning, Santos."),
-            (14, "Good afternoon, Santos."),
-            (20, "Good evening, Santos."),
-        ]
-        for hour, expected in cases:
-            notification = Notification.objects.create(
-                recipient=user,
-                type=Notification.Type.ANNOUNCEMENT,
-                title="Community update",
-                body="Water service resumes after inspection.",
-            )
-            notification.created_at = timezone.make_aware(datetime(2026, 8, 28, hour, 0))
-            notification.save(update_fields=["created_at"])
+        notification = Notification.objects.create(
+            recipient=user,
+            type=Notification.Type.ANNOUNCEMENT,
+            title="Community update",
+            body="Water service resumes after inspection.",
+        )
 
-            payload = notification_display_payload(notification)
+        payload = notification_display_payload(notification)
 
-            self.assertTrue(payload["body"].startswith(expected))
+        self.assertEqual(payload["body"], "Water service resumes after inspection.")
+        self.assertNotIn("Good morning", payload["body"])
+        self.assertNotIn("Good afternoon", payload["body"])
+        self.assertNotIn("Good evening", payload["body"])
+
+    @override_settings(NOTIFICATION_COPY_LLM_ENABLED=True)
+    @patch(
+        "apps.notifications.notification_copy.complete",
+        return_value=(
+            '{"header":"Report received",'
+            '"description":"Your vehicle collision report was received and is queued for review."}'
+        ),
+    )
+    @patch("apps.notifications.notification_copy.is_configured", return_value=True)
+    def test_notification_copy_uses_compact_model_fields(self, is_configured, complete):
+        user = self.create_verified_user("model-copy")
+        concern = Concern.objects.create(
+            reporter=user,
+            title="Vehicle collision",
+            description="A collision was reported near the school.",
+        )
+        notification = Notification.objects.create(
+            recipient=user,
+            concern=concern,
+            type=Notification.Type.SUBMITTED,
+            title="Report received",
+            body="The report was received.",
+        )
+
+        refresh_notification_copy(notification, force=True)
+        payload = notification_display_payload(notification)
+
+        self.assertEqual(payload["title"], "Report received")
+        self.assertEqual(
+            payload["body"],
+            "Your vehicle collision report was received and is queued for review.",
+        )
+        self.assertTrue(is_configured.called)
+        self.assertTrue(complete.called)
 
     def test_report_notification_includes_assigned_unit_and_community_context(self):
         user = self.create_verified_user("assigned-context")
@@ -456,11 +513,12 @@ class NotificationPreferenceAPITests(APITestCase):
         payload = notification_display_payload(notification)
 
         self.assertIn("Dispatch assignment", payload["title"])
-        self.assertIn("Champaca Street", payload["title"])
+        self.assertNotIn("Champaca Street", payload["title"])
         self.assertNotIn("SOS #", payload["title"])
         self.assertNotIn(f"#{emergency.pk}", payload["title"])
         self.assertIsNone(payload["context"]["reference"])
-        self.assertIn("reported around Champaca Street, Marikina Heights", payload["body"])
+        self.assertIn("Fire emergency", payload["body"])
+        self.assertIn("Champaca Street, Marikina Heights", payload["body"])
         self.assertIn(department.short_name or department.name, payload["body"])
 
     def test_report_notification_uses_specific_one_to_three_word_subject(self):
@@ -497,7 +555,7 @@ class NotificationPreferenceAPITests(APITestCase):
             "Roadside Pothole",
         )
 
-    def test_notification_without_last_name_uses_time_greeting_without_none(self):
+    def test_notification_without_last_name_has_no_none_or_greeting(self):
         user = self.create_verified_user("greeting-no-name")
         notification = Notification.objects.create(
             recipient=user,
@@ -510,7 +568,7 @@ class NotificationPreferenceAPITests(APITestCase):
 
         payload = notification_display_payload(notification)
 
-        self.assertTrue(payload["body"].startswith("Good evening."))
+        self.assertEqual(payload["body"], "A new announcement is available.")
         self.assertNotIn("None", payload["body"])
 
     def test_browser_push_test_endpoint_is_removed(self):
@@ -709,7 +767,10 @@ class NotificationPreferenceAPITests(APITestCase):
         response = self.client.get("/api/notifications/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data[0]["action_url"], "/dashboard/responders/map")
+        self.assertEqual(
+            response.data[0]["action_url"],
+            f"/dashboard/reports/{concern.public_id}",
+        )
 
     def test_responder_emergency_notification_targets_dispatch_tracker(self):
         User = get_user_model()
@@ -739,7 +800,7 @@ class NotificationPreferenceAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             response.data[0]["action_url"],
-            f"/dashboard/responders/dispatch?alert={emergency.pk}",
+            f"/dashboard/reports?alert={emergency.pk}",
         )
 
     def test_realtime_ticket_is_single_use(self):

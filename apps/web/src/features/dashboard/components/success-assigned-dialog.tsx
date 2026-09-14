@@ -5,34 +5,42 @@ import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
 export function SuccessAssignedDialog({
   open,
   onClose,
-  unitName,
 }: {
   open: boolean
   onClose: () => void
-  unitName: string | null
 }) {
   return (
-    <Dialog open={open} onClose={onClose} maxW="max-w-[420px]">
-      <DialogBody className="!flex !flex-col !items-center !justify-center !px-6 !py-10 !text-center">
-        <span className="flex size-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-          <CircleCheckIcon className="size-8" strokeWidth={2} />
-        </span>
-        <h2 className="mt-5 text-[18px] font-bold leading-snug text-neutral-900">
-          {unitName
-            ? `Your submitted report was successfully assigned to ${unitName}`
-            : "Your submitted report is in review queue."}
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxW="max-w-[420px]"
+      mobileSheet
+      mobileSheetFitContent
+      desktopFitContent
+    >
+      <DialogBody className="!flex !min-h-0 !flex-none !flex-col !items-center !justify-center !space-y-0 bg-white !px-6 !pt-5 !pb-4 !text-center">
+        <CircleCheckIcon
+          className="size-16 text-emerald-600"
+          strokeWidth={1.8}
+          aria-hidden
+        />
+        <h2 className="mt-3 max-w-[360px] text-[18px] leading-snug font-bold text-neutral-900">
+          Your report is successfully submitted and is now under review by
+          barangay.
         </h2>
-        <p className="mt-2 text-[13px] leading-5 text-neutral-500">
-          It is now under review by barangay.
-        </p>
+      </DialogBody>
+      <div className="w-full shrink-0 bg-white px-4 pt-1 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <button
           type="button"
           onClick={onClose}
-          className="mt-6 h-11 w-full rounded-full bg-brand-orange px-6 text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
+          className="h-12 w-full rounded-full bg-brand-orange px-6 text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
         >
           Continue
         </button>
-      </DialogBody>
+        <p className="mt-3 text-center text-[13px] leading-snug text-neutral-500">
+          Thank you for your cooperation.
+        </p>
+      </div>
     </Dialog>
   )
 }

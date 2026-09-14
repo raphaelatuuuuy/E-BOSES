@@ -628,6 +628,8 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
     photo_assessment = serializers.SerializerMethodField()
     possible_categories = serializers.SerializerMethodField()
     suggested_category = serializers.SerializerMethodField()
+    incident_timing = serializers.SerializerMethodField()
+    current_danger = serializers.SerializerMethodField()
 
     class Meta:
         model = ConcernAiAssessment
@@ -655,6 +657,8 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
             "photo_assessment",
             "possible_categories",
             "suggested_category",
+            "incident_timing",
+            "current_danger",
             "flagged",
             "flag_reasons",
             "possible_duplicate",
@@ -678,6 +682,12 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
 
     def get_suggested_category(self, obj):
         return (obj.raw_result or {}).get("suggested_category") or ""
+
+    def get_incident_timing(self, obj):
+        return self._review(obj).get("incident_timing") or "unclear"
+
+    def get_current_danger(self, obj):
+        return bool(self._review(obj).get("current_danger"))
 
     def _duplicate_payload(self, obj):
         return (obj.raw_result or {}).get("duplicate") or {}
@@ -1058,6 +1068,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             "reporter_full_name",
             "title",
             "description",
+            "summary",
             "notification_subject",
             "category",
             "category_ref",
@@ -1525,9 +1536,9 @@ class ConcernCreateSerializer(serializers.Serializer):
     location_accuracy = serializers.FloatField(required=False, allow_null=True)
     duplicate_of = serializers.IntegerField(required=False, allow_null=True)
     recurrence_of = serializers.IntegerField(required=False, allow_null=True)
-    # These values are populated by the resident precheck. They are not shown
-    # as resident choices: the server validates the emergency type and routes
-    # it only when the precheck marked the report for automatic escalation.
+    # Kept as ignored legacy inputs so older clients can still submit a report.
+    # Normal concerns never create EmergencyAlert records; only the explicit
+    # SOS flow enters emergency tracking.
     emergency_type = serializers.CharField(max_length=80, required=False, allow_blank=True)
     auto_escalate = serializers.BooleanField(required=False, default=False)
 
@@ -1737,6 +1748,8 @@ class ConcernListSerializer(serializers.ModelSerializer):
     urgent_attention = serializers.SerializerMethodField()
     severity_reason = serializers.SerializerMethodField()
     resolution_actor = serializers.SerializerMethodField()
+    resolution_photo = serializers.SerializerMethodField()
+    resolution_photo_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Concern
@@ -1774,6 +1787,8 @@ class ConcernListSerializer(serializers.ModelSerializer):
             "urgent_attention",
             "severity_reason",
             "resolution_actor",
+            "resolution_photo",
+            "resolution_photo_count",
         )
 
     def get_reporter(self, obj):
@@ -1823,6 +1838,20 @@ class ConcernListSerializer(serializers.ModelSerializer):
         media = next((m for m in obj.media.all()), None)
         return concern_media_preview_url(media.pk) if media else None
 
+    def get_resolution_photo(self, obj) -> str | None:
+        if obj.status != Concern.Status.RESOLVED:
+            return None
+        evidence = next(
+            (item for item in obj.resolution_evidence.all() if item.mime_type.startswith("image/")),
+            None,
+        )
+        return f"/api/concerns/resolution-evidence/{evidence.pk}/preview/" if evidence else None
+
+    def get_resolution_photo_count(self, obj) -> int:
+        if obj.status != Concern.Status.RESOLVED:
+            return 0
+        return sum(1 for item in obj.resolution_evidence.all() if item.mime_type.startswith("image/"))
+
     def get_photo_count(self, obj) -> int:
         return len(obj.media.all())
 
@@ -1854,6 +1883,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "body",
+            "llm_summary",
             "tag",
             "audience",
             "barangay",
@@ -1877,7 +1907,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("created_at", "updated_at", "notification_sent_at", "image_url")
+        read_only_fields = ("created_at", "updated_at", "notification_sent_at", "image_url", "llm_summary")
         extra_kwargs = {"image": {"required": False, "write_only": True}}
 
     def to_internal_value(self, data):

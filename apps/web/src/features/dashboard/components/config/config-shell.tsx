@@ -92,6 +92,8 @@ export function ConfigShell({
   action,
   children,
   className,
+  embedded = false,
+  hideEmbeddedAction = false,
 }: {
   icon: LucideIcon
   /** A small button rendered right beside the icon badge — e.g. a quick "add" shortcut. */
@@ -103,43 +105,61 @@ export function ConfigShell({
   action?: ReactNode
   children: ReactNode
   className?: string
+  /** Removes page chrome when this configuration workspace is mounted in a sheet. */
+  embedded?: boolean
+  /** Lets the parent sheet place the page action beside its close button. */
+  hideEmbeddedAction?: boolean
 }) {
   return (
     // White ground, like the Help Center. The official shell paints `bg-canvas`
     // (#f6f7f9) behind every page, which is so close to white that a
     // configuration screen read as neither one thing nor the other.
-    <div className="min-h-full bg-white">
-      <div className={cn("mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28", className)}>
-        <ConfigBreadcrumb
-          trail={[
-            { label: "Configuration", to: "/dashboard/configuration" },
-            { label: eyebrow },
-            { label: title },
-          ]}
-        />
+    <div className={cn("bg-white", !embedded && "min-h-full")}>
+      <div className={cn(
+        embedded
+          ? "w-full"
+          : "mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28",
+        className,
+      )}>
+        {!embedded ? (
+          <ConfigBreadcrumb
+            trail={[
+              { label: "Configuration", to: "/dashboard/configuration" },
+              { label: eyebrow },
+              { label: title },
+            ]}
+          />
+        ) : null}
 
         {/* Stacked on a phone. This was one wrapping row, so a `shrink-0`
             action kept its full width while the title was squeezed into about
             140px and broke across three lines. */}
-        <header className="mt-8 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
-          <div className="flex min-w-0 items-start gap-6 sm:flex-1">
-            <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
-              <Icon className="size-7" strokeWidth={1.7} aria-hidden />
-            </span>
-            {iconAction ? <div className="shrink-0 self-center sm:self-start sm:mt-1">{iconAction}</div> : null}
-            <div className="min-w-0">
-              <h1 className="text-page-title text-balance text-brand-navy">{title}</h1>
-              <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
-                {description}
-              </p>
+        {embedded ? (
+          action && !hideEmbeddedAction ? <div className="mb-6 flex justify-end [&>*]:w-full sm:[&>*]:w-auto">{action}</div> : null
+        ) : (
+          <header className="mt-8 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
+            <div className="flex min-w-0 items-start gap-6 sm:flex-1">
+              <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
+                <Icon className="size-7" strokeWidth={1.7} aria-hidden />
+              </span>
+              {iconAction ? <div className="shrink-0 self-center sm:self-start sm:mt-1">{iconAction}</div> : null}
+              <div className="min-w-0">
+                <h1 className="text-page-title text-balance text-brand-navy">{title}</h1>
+                <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
+                  {description}
+                </p>
+              </div>
             </div>
-          </div>
 
-          {action ? <div className="shrink-0 [&>*]:w-full sm:[&>*]:w-auto">{action}</div> : null}
-        </header>
+            {action ? <div className="shrink-0 [&>*]:w-full sm:[&>*]:w-auto">{action}</div> : null}
+          </header>
+        )}
 
-        {stats && stats.length > 0 ? (
-          <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-6">
+        {!embedded && stats && stats.length > 0 ? (
+          <dl className={cn(
+            "flex flex-wrap gap-x-12 gap-y-6",
+            embedded ? "mb-7" : "mt-10",
+          )}>
             {stats.map((stat) => (
               <div key={stat.label} className="min-w-0">
                 <dd
@@ -159,7 +179,7 @@ export function ConfigShell({
           </dl>
         ) : null}
 
-        <div className="mt-12 space-y-12">{children}</div>
+        <div className={cn(embedded ? "space-y-4" : "mt-12 space-y-12")}>{children}</div>
       </div>
     </div>
   )

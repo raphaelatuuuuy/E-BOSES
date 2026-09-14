@@ -118,9 +118,9 @@ export function SosDetailsStep({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={maxed || checking}
-              className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full border border-white/20 bg-white/10 text-[14px] font-semibold text-white transition-colors hover:bg-white/15 disabled:opacity-50"
+              className="flex h-[52px] flex-1 items-center justify-center gap-2 rounded-full border border-dashed border-white/30 bg-white/[0.06] text-[14px] font-semibold text-white transition-colors hover:bg-white/10 disabled:opacity-50"
             >
-              <ImageIcon className="size-4" strokeWidth={2} aria-hidden="true" />
+              <ImageIcon className="size-5" strokeWidth={2} aria-hidden="true" />
               {checking ? "Checking…" : "Add photo"}
             </button>
             <button
@@ -128,15 +128,11 @@ export function SosDetailsStep({
               onClick={() => cameraInputRef.current?.click()}
               disabled={maxed || checking}
               aria-label="Take photo"
-              className="flex size-11 shrink-0 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white transition-colors hover:bg-white/15 disabled:opacity-50"
+              className="flex size-[52px] shrink-0 items-center justify-center rounded-full border border-dashed border-white/30 bg-white/[0.06] text-white transition-colors hover:bg-white/10 disabled:opacity-50"
             >
               <CameraIcon className="size-5" strokeWidth={1.9} aria-hidden="true" />
             </button>
           </div>
-          <p className="mt-2 text-[12px] text-white/45">
-            Optional · up to {SOS_MAX_FILES} photos · JPG or PNG
-          </p>
-
           {mediaFiles.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2.5">
               {mediaFiles.map((file, index) => (

@@ -6,7 +6,7 @@ import { Skeleton } from "@workspace/ui/components/skeleton"
 
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { displayPosition } from "@/features/dashboard/lib/position"
+import { displayUnit } from "@/features/dashboard/lib/position"
 import {
   SheetFactRow,
   SheetList,
@@ -45,10 +45,6 @@ export function OfficialProfilePanel() {
     { label: "Email", value: user?.email || "Not recorded" },
     { label: "Phone", value: user?.phone_number || "Not recorded" },
     { label: "Barangay", value: user?.barangay || "Not recorded" },
-    {
-      label: "Account status",
-      value: user?.status === "verified" ? "Verified" : user?.status || "Not recorded",
-    },
   ]
 
   return (
@@ -64,8 +60,8 @@ export function OfficialProfilePanel() {
           <h3 className="truncate text-[20px] font-bold leading-tight tracking-tight text-neutral-900">
             {fullName}
           </h3>
-          <p className="mt-1 truncate text-[15px] text-neutral-500">
-            Barangay official · {displayPosition(user)}
+          <p className="mt-1 break-words text-[15px] text-neutral-500">
+            {displayUnit(user)}
           </p>
         </div>
       </section>
@@ -78,7 +74,7 @@ export function OfficialProfilePanel() {
       </SheetList>
 
       <div className="mt-6">
-        <SheetPrimaryButton onClick={() => void signOut().finally(() => navigate("/sign-in"))}>
+        <SheetPrimaryButton tone="accent" onClick={() => void signOut().finally(() => navigate("/sign-in"))}>
           Sign out
         </SheetPrimaryButton>
       </div>

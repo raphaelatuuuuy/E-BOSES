@@ -21,7 +21,8 @@ export const ERROR_MESSAGES: Record<string, string> = {
     "This connection was flagged as unsafe. Please try your home Wi-Fi or mobile data.",
 
   // Sign-in
-  invalid_credentials: "That email or password did not match. Please try again.",
+  invalid_credentials:
+    "That email or password did not match. Please try again.",
   account_rejected:
     "This account was not approved. Please contact your barangay office.",
   maintenance:
@@ -30,18 +31,17 @@ export const ERROR_MESSAGES: Record<string, string> = {
   // Operations
   emergency_in_progress:
     "This cannot be done while an emergency is still active. Please try again once it is closed.",
-  throttle:
-    "You're doing that too often. Please wait a moment and try again.",
+  throttle: "You're doing that too often. Please wait a moment and try again.",
   too_many_attempts:
     "Too many attempts. Please wait a moment before trying again.",
-  session_expired:
-    "Your session expired. Please sign in again.",
-  not_found:
-    "The page you're looking for doesn't exist.",
-  server_error:
-    "Something went wrong on our end. Please try again.",
-  sign_in_required:
-    "Please sign in to continue.",
+  session_expired: "Your session expired. Please sign in again.",
+  not_found: "The page you're looking for doesn't exist.",
+  server_error: "Something went wrong on our end. Please try again.",
+  sign_in_required: "Please sign in to continue.",
+
+  // Report media validation
+  automated_photo_mismatch:
+    "The photo does not show the issue described in the report. Please submit a photo that clearly shows the reported issue.",
 
   // Identity verification
   ocr_name_mismatch:
@@ -52,8 +52,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
     "We could not read the ID number. Please retake the photo so the number is sharp and fully visible.",
   expiry_date_required:
     "We could not read the expiry date. Please retake the photo showing the whole ID.",
-  expiry_date_not_expired:
-    "That ID has expired. Please use a valid one.",
+  expiry_date_not_expired: "That ID has expired. Please use a valid one.",
   full_name_required:
     "We could not read the full name on the document. Please retake the photo in good light.",
   place_of_birth_required:
@@ -72,11 +71,15 @@ function looksLikeACode(text: string) {
 }
 
 const DRF_DETAIL_MAP: Record<string, string> = {
-  "Request was throttled. Expected available in": "You're doing that too often. Please wait a moment and try again.",
-  "Authentication credentials were not provided.": "Please sign in to continue.",
-  "Given token not valid for any token type.": "Your session expired. Please sign in again.",
+  "Request was throttled. Expected available in":
+    "You're doing that too often. Please wait a moment and try again.",
+  "Authentication credentials were not provided.":
+    "Please sign in to continue.",
+  "Given token not valid for any token type.":
+    "Your session expired. Please sign in again.",
   "Not found.": "The page you're looking for doesn't exist.",
-  "Internal server error.": "Something went wrong on our end. Please try again.",
+  "Internal server error.":
+    "Something went wrong on our end. Please try again.",
 }
 
 function friendlyDrfDetail(detail: string): string {
@@ -116,7 +119,9 @@ export function humanError(data: unknown, fallback = FALLBACK): string {
 }
 
 /** Hotlines the server attaches when a block could hide an emergency. */
-export function errorHotlines(data: unknown): { label: string; number: string }[] {
+export function errorHotlines(
+  data: unknown
+): { label: string; number: string }[] {
   if (!data || typeof data !== "object") return []
   const hotlines = (data as { hotlines?: unknown }).hotlines
   if (!Array.isArray(hotlines)) return []
@@ -125,6 +130,6 @@ export function errorHotlines(data: unknown): { label: string; number: string }[
       Boolean(item) &&
       typeof item === "object" &&
       typeof (item as { label?: unknown }).label === "string" &&
-      typeof (item as { number?: unknown }).number === "string",
+      typeof (item as { number?: unknown }).number === "string"
   )
 }

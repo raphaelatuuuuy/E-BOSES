@@ -69,11 +69,11 @@ const ResponderOnboardingPage = lazy(
   () => import("@/features/onboarding/responder-onboarding-page")
 )
 const HomePage = lazy(() => import("@/features/dashboard/pages/home"))
+const ResidentOverviewPage = lazy(
+  () => import("@/features/dashboard/pages/resident-overview")
+)
 const OfficialOverviewPage = lazy(
   () => import("@/features/dashboard/pages/official-overview")
-)
-const ResponderOverviewPage = lazy(
-  () => import("@/features/dashboard/pages/responder-overview")
 )
 const ProfilePage = lazy(() => import("@/features/dashboard/pages/profile"))
 const ResponderProfilePage = lazy(
@@ -83,37 +83,10 @@ const ReportsPage = lazy(() => import("@/features/dashboard/pages/reports"))
 const NotificationsPage = lazy(
   () => import("@/features/dashboard/pages/notifications")
 )
-const OfficialIdProofWorkspacePage = lazy(
-  () => import("@/features/dashboard/pages/official-id-proof-workspace")
-)
-const ConcernClassificationPage = lazy(
-  () => import("@/features/classification/concern-classification-page")
-)
 const OfficialConfigurationHubPage = lazy(
   () => import("@/features/dashboard/pages/official-configuration-hub")
 )
-const OfficialAuditLogPage = lazy(
-  () => import("@/features/dashboard/pages/official-audit-log-page")
-)
-const OfficialUnitsPage = lazy(
-  () => import("@/features/dashboard/pages/official-units-page")
-)
-const OfficialRolesPage = lazy(
-  () => import("@/features/dashboard/pages/official-roles-page")
-)
 const NotFoundPage = lazy(() => import("@/features/dashboard/pages/not-found"))
-const OfficialUsersManagePage = lazy(
-  () => import("@/features/dashboard/pages/official-users-manage-page")
-)
-const OfficialCategoriesPage = lazy(
-  () => import("@/features/dashboard/pages/official-categories-page")
-)
-const OfficialDispatchRulesPage = lazy(
-  () => import("@/features/dashboard/pages/official-dispatch-rules-page")
-)
-const OfficialCoverageAreaPage = lazy(
-  () => import("@/features/dashboard/pages/official-coverage-area-page")
-)
 const OfficialCommunityContentPage = lazy(
   () => import("@/features/dashboard/pages/official-community-content-page")
 )
@@ -202,7 +175,7 @@ function DashboardIndex() {
     <Navigate
       to={
         isResponder
-          ? "/dashboard/reports"
+          ? "/dashboard/overview"
           : isOfficial
             ? "/dashboard/overview"
             : "/dashboard/home"
@@ -215,6 +188,15 @@ function DashboardIndex() {
 function ResidentRoute({ children }: { children: ReactNode }) {
   const { user } = useAuthSession()
   return isResidentUser(user) ? (
+    children
+  ) : (
+    <Navigate to="/dashboard" replace />
+  )
+}
+
+function CommunityFeedRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuthSession()
+  return user && (isResidentUser(user) || isStaffUser(user)) ? (
     children
   ) : (
     <Navigate to="/dashboard" replace />
@@ -234,7 +216,7 @@ function ResponderRoute({ children }: { children: ReactNode }) {
 function DashboardOverviewRoute() {
   const { user } = useAuthSession()
   if (isOfficialUser(user)) return <OfficialOverviewPage />
-  if (isResponderUser(user)) return <ResponderOverviewPage />
+  if (isResponderUser(user)) return <OfficialOverviewPage audience="responder" />
   return <Navigate to="/dashboard" replace />
 }
 
@@ -261,11 +243,9 @@ function AlertsMapRoute() {
     )
   }
   if (!user) return <Navigate to="/sign-in" replace />
-  if (isResponderUser(user)) return <ResidentAlertsMapPage />
+  if (isResponderUser(user)) return <AlertsMapPage />
   const isOfficial = isOfficialUser(user)
   if (isOfficial) return <AlertsMapPage />
-  // Responders and residents share one map implementation so their pins,
-  // hover cards, community controls, and alert panel cannot drift apart.
   return <ResidentAlertsMapPage />
 }
 
@@ -435,8 +415,16 @@ function AppRoutes() {
           path="home"
           element={
             <ResidentRoute>
-              <HomePage />
+              <ResidentOverviewPage />
             </ResidentRoute>
+          }
+        />
+        <Route
+          path="feed"
+          element={
+            <CommunityFeedRoute>
+              <HomePage />
+            </CommunityFeedRoute>
           }
         />
         <Route path="overview" element={<DashboardOverviewRoute />} />
@@ -503,7 +491,7 @@ function AppRoutes() {
           path="concern-classification"
           element={
             <OfficialRoute>
-              <Navigate to="/dashboard/configuration/classification" replace />
+              <Navigate to="/dashboard/configuration/audit-log" replace />
             </OfficialRoute>
           }
         />
@@ -519,7 +507,7 @@ function AppRoutes() {
           path="configuration/units"
           element={
             <OfficialRoute>
-              <OfficialUnitsPage />
+              <OfficialConfigurationHubPage initialSectionKey="units" />
             </OfficialRoute>
           }
         />
@@ -527,7 +515,7 @@ function AppRoutes() {
           path="configuration/roles"
           element={
             <OfficialRoute>
-              <OfficialRolesPage />
+              <OfficialConfigurationHubPage initialSectionKey="roles" />
             </OfficialRoute>
           }
         />
@@ -535,7 +523,7 @@ function AppRoutes() {
           path="configuration/categories"
           element={
             <OfficialRoute>
-              <OfficialCategoriesPage />
+              <OfficialConfigurationHubPage initialSectionKey="categories" />
             </OfficialRoute>
           }
         />
@@ -551,7 +539,7 @@ function AppRoutes() {
           path="configuration/dispatch"
           element={
             <OfficialRoute>
-              <OfficialDispatchRulesPage />
+              <Navigate to="/dashboard/configuration/categories" replace />
             </OfficialRoute>
           }
         />
@@ -559,7 +547,7 @@ function AppRoutes() {
           path="configuration/coverage"
           element={
             <OfficialRoute>
-              <OfficialCoverageAreaPage />
+              <OfficialConfigurationHubPage initialSectionKey="coverage" />
             </OfficialRoute>
           }
         />
@@ -567,7 +555,7 @@ function AppRoutes() {
           path="configuration/id-proof-template"
           element={
             <OfficialRoute>
-              <OfficialIdProofWorkspacePage />
+              <OfficialConfigurationHubPage initialSectionKey="verification" />
             </OfficialRoute>
           }
         />
@@ -575,7 +563,7 @@ function AppRoutes() {
           path="configuration/classification"
           element={
             <OfficialRoute>
-              <ConcernClassificationPage />
+              <Navigate to="/dashboard/configuration/audit-log" replace />
             </OfficialRoute>
           }
         />
@@ -583,7 +571,7 @@ function AppRoutes() {
           path="configuration/users"
           element={
             <OfficialRoute>
-              <OfficialUsersManagePage />
+              <OfficialConfigurationHubPage initialSectionKey="users" />
             </OfficialRoute>
           }
         />
@@ -591,7 +579,7 @@ function AppRoutes() {
           path="configuration/audit-log"
           element={
             <OfficialRoute>
-              <OfficialAuditLogPage />
+              <OfficialConfigurationHubPage initialMonitoringKey="audit" />
             </OfficialRoute>
           }
         />
@@ -621,11 +609,7 @@ function AppRoutes() {
         />
         <Route
           path="responders/dispatch"
-          element={
-            <ResponderRoute>
-              <Navigate to="/dashboard/reports" replace />
-            </ResponderRoute>
-          }
+          element={<EmergencyOpsRoute />}
         />
         <Route
           path="responders/map"

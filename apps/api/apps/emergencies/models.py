@@ -378,6 +378,10 @@ class EmergencyCategory(models.Model):
     # exception (e.g. domestic violence, child protection) so a resident never
     # sees a pin that could out a neighbour's private emergency.
     visible_to_residents = models.BooleanField(default=True)
+    # Per-category intake questions shown in the resident SOS wizard. The
+    # values are intentionally data rather than client code so officials can
+    # adapt the questions without rebuilding the resident app.
+    quick_questions = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

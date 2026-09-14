@@ -120,13 +120,38 @@ function SheetContent({
   overlayClassName,
   side = "bottom",
   showHandle = true,
+  draggable = false,
   ...props
 }: React.ComponentProps<"div"> & {
   overlayClassName?: string
   side?: SheetSide
   showHandle?: boolean
+  draggable?: boolean
 }) {
-  const { open } = useSheet()
+  const { open, setOpen } = useSheet()
+  const [dragY, setDragY] = React.useState(0)
+  const [dragging, setDragging] = React.useState(false)
+  const dragStartY = React.useRef(0)
+
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (!draggable || side !== "bottom") return
+    dragStartY.current = event.clientY
+    setDragging(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    if (!dragging) return
+    setDragY(Math.max(0, event.clientY - dragStartY.current))
+  }
+
+  function handlePointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    if (!dragging) return
+    const distance = event.clientY - dragStartY.current
+    setDragging(false)
+    setDragY(0)
+    if (distance > 120) setOpen(false)
+  }
 
   if (!open) return null
 
@@ -137,12 +162,31 @@ function SheetContent({
         className={cn(
           "fixed z-50 flex flex-col border border-border/50 bg-background shadow-2xl",
           sidePanelClass[side],
+          draggable && "transition-transform duration-200 ease-out",
           className,
         )}
+        style={
+          draggable && side === "bottom"
+            ? {
+                transform: `translateY(${dragY}px)`,
+                transitionDuration: dragging ? "0ms" : undefined,
+              }
+            : undefined
+        }
         {...props}
       >
         {side === "bottom" && showHandle ? (
-          <div className="flex shrink-0 items-center justify-center pt-2.5 pb-1">
+          <div
+            className={cn(
+              "flex shrink-0 items-center justify-center pt-2.5 pb-1",
+              draggable && "cursor-grab touch-none active:cursor-grabbing",
+            )}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            aria-label={draggable ? "Drag sheet" : undefined}
+          >
             <span className="h-1.5 w-10 rounded-full bg-neutral-300" aria-hidden />
           </div>
         ) : null}

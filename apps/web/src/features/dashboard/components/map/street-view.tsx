@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { ExpandIcon, ShrinkIcon, XIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -39,12 +40,44 @@ type StreetViewCoverageState = {
   image?: string
 }
 
+type WebkitFullscreenDocument = Document & {
+  webkitFullscreenElement?: Element | null
+  webkitExitFullscreen?: () => Promise<void> | void
+}
+
+type WebkitFullscreenElement = HTMLDivElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void
+}
+
 function esc(text: string) {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
+}
+
+function currentFullscreenElement() {
+  const documentWithWebkit = document as WebkitFullscreenDocument
+  return (
+    document.fullscreenElement ??
+    documentWithWebkit.webkitFullscreenElement ??
+    null
+  )
+}
+
+async function exitFullscreen() {
+  const documentWithWebkit = document as WebkitFullscreenDocument
+  if (
+    documentWithWebkit.webkitFullscreenElement &&
+    documentWithWebkit.webkitExitFullscreen
+  ) {
+    await documentWithWebkit.webkitExitFullscreen()
+  } else if (document.exitFullscreen) {
+    await document.exitFullscreen()
+  } else {
+    await documentWithWebkit.webkitExitFullscreen?.()
+  }
 }
 
 function popupHtml(point: StreetViewMapPoint) {
@@ -54,25 +87,47 @@ function popupHtml(point: StreetViewMapPoint) {
   return `<div class="eboses-sv-pop__body">${image}<p class="eboses-sv-pop__title">${esc(point.title)}</p><p class="eboses-sv-pop__desc">${esc(point.excerpt ?? point.meta ?? "")}</p></div>`
 }
 
+function wrapPanoramaOffset(value: number, width: number) {
+  if (width <= 0) return value
+  const half = width / 2
+  return ((((value + half) % width) + width) % width) - half
+}
+
 function StreetViewPanorama({ src }: { src: string }) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
-  const dragRef = useRef<{ pointerId: number; x: number; offset: number } | null>(null)
+  const dragRef = useRef<{
+    pointerId: number
+    x: number
+    offset: number
+  } | null>(null)
   const [offset, setOffset] = useState(0)
+  const [imageWidth, setImageWidth] = useState(0)
 
   useEffect(() => {
-    setOffset(0)
-  }, [src])
-
-  function clampOffset(value: number) {
     const viewport = viewportRef.current
     const image = imageRef.current
-    if (!viewport || !image) return value
-    const overflow = Math.max(0, image.getBoundingClientRect().width - viewport.clientWidth)
-    return Math.max(-overflow / 2, Math.min(overflow / 2, value))
-  }
+    if (!viewport || !image) return
+
+    const measure = () => {
+      const width = image.getBoundingClientRect().width
+      if (!width) return
+      setImageWidth(width)
+      setOffset((current) => wrapPanoramaOffset(current, width))
+    }
+
+    measure()
+    image.addEventListener("load", measure)
+    const observer = new ResizeObserver(measure)
+    observer.observe(viewport)
+    return () => {
+      image.removeEventListener("load", measure)
+      observer.disconnect()
+    }
+  }, [src])
 
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
     dragRef.current = { pointerId: event.pointerId, x: event.clientX, offset }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -80,7 +135,9 @@ function StreetViewPanorama({ src }: { src: string }) {
   function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
     const drag = dragRef.current
     if (!drag || drag.pointerId !== event.pointerId) return
-    setOffset(clampOffset(drag.offset + event.clientX - drag.x))
+    setOffset(
+      wrapPanoramaOffset(drag.offset + event.clientX - drag.x, imageWidth)
+    )
   }
 
   function onPointerEnd(event: React.PointerEvent<HTMLDivElement>) {
@@ -94,20 +151,32 @@ function StreetViewPanorama({ src }: { src: string }) {
   return (
     <div
       ref={viewportRef}
-      className="absolute inset-0 min-h-0 min-w-0 max-w-full cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing"
+      className="absolute inset-0 min-h-0 max-w-full min-w-0 cursor-grab touch-none overflow-hidden select-none active:cursor-grabbing"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}
       onPointerCancel={onPointerEnd}
+      aria-label="Swipe to look around Street View"
     >
-      <img
-        ref={imageRef}
-        src={src}
-        alt="Street View panorama"
-        draggable={false}
-        className="absolute top-0 left-1/2 h-full max-w-none"
-        style={{ transform: `translate3d(calc(-50% + ${offset}px), 0, 0)` }}
-      />
+      <div
+        className="absolute top-0 left-1/2 flex h-full max-w-none will-change-transform"
+        style={{
+          width: imageWidth > 0 ? imageWidth * 3 : "max-content",
+          transform: `translate3d(calc(-50% + ${offset}px), 0, 0)`,
+        }}
+      >
+        {[0, 1, 2].map((copy) => (
+          <img
+            key={copy}
+            ref={copy === 1 ? imageRef : undefined}
+            src={src}
+            alt={copy === 1 ? "Street View panorama" : ""}
+            aria-hidden={copy === 1 ? undefined : true}
+            draggable={false}
+            className="block h-full max-w-none shrink-0"
+          />
+        ))}
+      </div>
     </div>
   )
 }
@@ -255,6 +324,9 @@ function StreetViewMiniMap({
       ...points.map((point) => [point.lat, point.lng] as [number, number]),
     ]
     if (all.length > 1) map.fitBounds(L.latLngBounds(all).pad(0.2))
+    // coord only anchors the initial bounds; the effect above keeps the
+    // current marker and map view synchronized when Street View moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, points])
 
   useEffect(() => {
@@ -264,6 +336,28 @@ function StreetViewMiniMap({
     })
     return () => cancelAnimationFrame(frame)
   }, [resizeSignal])
+
+  useEffect(() => {
+    const element = elRef.current
+    if (!element) return
+
+    let frame = 0
+    const invalidate = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        mapRef.current?.invalidateSize({ pan: false })
+      })
+    }
+
+    const observer = new ResizeObserver(invalidate)
+    observer.observe(element)
+    invalidate()
+
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [ready])
 
   return (
     <div className="absolute inset-0">
@@ -277,6 +371,10 @@ export function StreetViewModal({
   onClose,
   points = EMPTY_POINTS,
   onMove,
+  onResolved,
+  onConfirm,
+  confirmDisabled = false,
+  confirmDetail = "Use this location",
   mode = "browse",
   coverage = null,
   embedded = false,
@@ -286,6 +384,13 @@ export function StreetViewModal({
   points?: StreetViewMapPoint[]
   /** Double-clicking the nearby map relocates Street View here. */
   onMove?: (coord: StreetViewCoord) => void
+  /** Reports the actual panorama position returned by the imagery provider. */
+  onResolved?: (coord: StreetViewCoord) => void
+  /** Confirms the current panorama point when Street View is used as a picker. */
+  onConfirm?: () => void
+  /** Keeps the picker confirmation state in sync with reverse geocoding. */
+  confirmDisabled?: boolean
+  confirmDetail?: string
   /** Pick mode tints the view red outside coverage. */
   mode?: "browse" | "pick"
   coverage?: CoverageInput | null
@@ -293,13 +398,16 @@ export function StreetViewModal({
   embedded?: boolean
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const onResolvedRef = useRef(onResolved)
   const [miniOpen, setMiniOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const coordKey = `${coord.lat.toFixed(6)},${coord.lng.toFixed(6)}`
-  const [streetCoverage, setStreetCoverage] = useState<StreetViewCoverageState>({
-    key: "",
-    status: "loading",
-  })
+  const [streetCoverage, setStreetCoverage] = useState<StreetViewCoverageState>(
+    {
+      key: "",
+      status: "loading",
+    }
+  )
   const pickMode = mode === "pick"
   const outOfScope = useMemo(
     () => Boolean(coverage && !insideCoverage(coord.lat, coord.lng, coverage)),
@@ -314,6 +422,10 @@ export function StreetViewModal({
     h: number
   } | null>(null)
   const [mapResizing, setMapResizing] = useState(false)
+
+  useEffect(() => {
+    onResolvedRef.current = onResolved
+  }, [onResolved])
 
   function onMapResizeStart(event: React.PointerEvent<HTMLDivElement>) {
     const rect = mapPanelRef.current?.getBoundingClientRect()
@@ -350,7 +462,7 @@ export function StreetViewModal({
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose()
+      if (event.key === "Escape") void closeStreetView()
     }
     document.addEventListener("keydown", onKey)
     const previousBodyOverflow = document.body.style.overflow
@@ -368,10 +480,21 @@ export function StreetViewModal({
 
   useEffect(() => {
     const controller = new AbortController()
-    setStreetCoverage({ key: coordKey, status: "loading" })
-    void getStreetViewImage(coord, controller.signal)
+    void getStreetViewImage(
+      { lat: coord.lat, lng: coord.lng },
+      controller.signal
+    )
       .then((result) => {
         if (result.status === "available" && result.image) {
+          if (
+            Number.isFinite(result.latitude) &&
+            Number.isFinite(result.longitude)
+          ) {
+            onResolvedRef.current?.({
+              lat: result.latitude as number,
+              lng: result.longitude as number,
+            })
+          }
           setStreetCoverage({
             key: coordKey,
             status: "available",
@@ -392,38 +515,75 @@ export function StreetViewModal({
   useEffect(() => {
     const host = hostRef.current
     function onFullscreenChange() {
-      setFullscreen(document.fullscreenElement === host)
+      setFullscreen(currentFullscreenElement() === host)
     }
     document.addEventListener("fullscreenchange", onFullscreenChange)
+    document.addEventListener("webkitfullscreenchange", onFullscreenChange)
     return () => {
       document.removeEventListener("fullscreenchange", onFullscreenChange)
-      if (document.fullscreenElement && document.fullscreenElement === host) {
-        void document.exitFullscreen().catch(() => {})
+      document.removeEventListener("webkitfullscreenchange", onFullscreenChange)
+      if (currentFullscreenElement() === host) {
+        void exitFullscreen().catch(() => {})
       }
     }
   }, [])
 
-  function toggleFullscreen() {
-    if (document.fullscreenElement === hostRef.current) {
-      void document.exitFullscreen().catch(() => {})
-    } else {
-      void hostRef.current?.requestFullscreen().catch(() => {})
+  async function closeStreetView() {
+    if (currentFullscreenElement() === hostRef.current) {
+      await exitFullscreen().catch(() => {})
+    }
+    onClose()
+  }
+
+  async function toggleFullscreen() {
+    const host = hostRef.current as WebkitFullscreenElement | null
+    if (!host) return
+
+    if (currentFullscreenElement() === host) {
+      try {
+        await exitFullscreen()
+      } finally {
+        setFullscreen(false)
+      }
+      return
+    }
+
+    if (fullscreen) {
+      setFullscreen(false)
+      return
+    }
+
+    try {
+      if (host.requestFullscreen) {
+        await host.requestFullscreen()
+      } else if (host.webkitRequestFullscreen) {
+        await host.webkitRequestFullscreen()
+      } else {
+        throw new Error("Fullscreen is not supported")
+      }
+      setFullscreen(true)
+    } catch {
+      // Some embedded browsers expose neither a usable native fullscreen API
+      // nor its change event. Keep the viewer usable by filling the viewport.
+      setFullscreen(true)
     }
   }
 
-  const currentCoverage = streetCoverage.key === coordKey
-    ? streetCoverage
-    : { key: coordKey, status: "loading" as const }
-  const coverageUnavailable = currentCoverage.status === "no_coverage" || currentCoverage.status === "error"
+  const currentCoverage =
+    streetCoverage.key === coordKey
+      ? streetCoverage
+      : { key: coordKey, status: "loading" as const }
+  const coverageUnavailable =
+    currentCoverage.status === "no_coverage" ||
+    currentCoverage.status === "error"
 
-  return (
+  const viewer = (
     <div
       ref={hostRef}
       className={cn(
-        "z-[1000] min-h-0 min-w-0 max-w-full overflow-hidden bg-neutral-900",
-        embedded
-          ? "relative h-full w-full"
-          : "absolute inset-0"
+        "z-[1000] min-h-0 max-w-full min-w-0 overflow-hidden bg-neutral-900",
+        embedded ? "relative h-full w-full" : "absolute inset-0",
+        fullscreen && "fixed inset-0 z-[2147483647] h-[100dvh] w-screen"
       )}
       role="dialog"
       aria-modal="true"
@@ -431,12 +591,12 @@ export function StreetViewModal({
     >
       <div
         className={cn(
-          "absolute inset-0 min-h-0 min-w-0 max-w-full overflow-hidden",
+          "absolute inset-0 min-h-0 max-w-full min-w-0 overflow-hidden",
           pickMode && outOfScope && "eboses-map-blocked"
         )}
       >
         {currentCoverage.status === "available" && currentCoverage.image ? (
-          <StreetViewPanorama src={currentCoverage.image} />
+          <StreetViewPanorama key={coordKey} src={currentCoverage.image} />
         ) : coverageUnavailable ? (
           <div className="absolute inset-0 flex items-center justify-center bg-neutral-900 px-6 text-center text-white">
             <div className="max-w-sm">
@@ -452,17 +612,83 @@ export function StreetViewModal({
           </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-neutral-900 px-6 text-center text-white">
-            <p className="text-sm font-medium text-white/75">Loading Street View…</p>
+            <p className="text-sm font-medium text-white/75">
+              Loading Street View…
+            </p>
           </div>
         )}
       </div>
 
-      <div className="absolute top-2 right-2 z-20">
+      {pickMode && onConfirm ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4">
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={confirmDisabled || outOfScope}
+            className={cn(
+              "pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform",
+              !confirmDisabled && !outOfScope
+                ? "hover:scale-[1.02] active:scale-[0.99]"
+                : "cursor-not-allowed opacity-60"
+            )}
+          >
+            <span className="text-[16px] leading-none font-semibold text-neutral-900">
+              Use this location
+            </span>
+            <span className="mt-1.5 line-clamp-2 text-[14px] leading-snug font-medium text-neutral-500">
+              {confirmDetail}
+            </span>
+          </button>
+        </div>
+      ) : null}
+
+      <div className="absolute top-2 right-2 z-30">
+        <div className="relative">
+          {miniOpen ? (
+            <div
+              ref={mapPanelRef}
+              className={cn(
+                "absolute top-0 right-[calc(100%+0.5rem)] h-[8.25rem] w-80 max-w-[calc(100vw-4.5rem)] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg",
+                !mapResizing && "transition-[width,height] duration-150 ease-out",
+                !mapSize && "h-[8.25rem]"
+              )}
+              style={
+                mapSize ? { width: mapSize.w, height: mapSize.h } : undefined
+              }
+            >
+              <StreetViewMiniMap
+                coord={coord}
+                points={points}
+                resizeSignal={mapSize ? `${mapSize.w}x${mapSize.h}` : "fixed"}
+                onMove={onMove}
+              />
+              <div className="absolute top-2 right-2 z-[810] flex flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-md">
+                <button
+                  type="button"
+                  onClick={() => setMiniOpen(false)}
+                  aria-label="Close map"
+                  title="Close map"
+                  className="flex size-7 items-center justify-center text-neutral-600 hover:bg-neutral-100"
+                >
+                  <XIcon className="size-4" strokeWidth={2.25} />
+                </button>
+              </div>
+              <div
+                onPointerDown={onMapResizeStart}
+                onPointerMove={onMapResizeMove}
+                onPointerUp={onMapResizeEnd}
+                onPointerCancel={onMapResizeEnd}
+                className="absolute top-0 right-0 z-[820] size-4 cursor-nwse-resize touch-none"
+                aria-hidden
+              />
+            </div>
+          ) : null}
+
         <MapControlStack tone="light">
           <MapControlButton
             tone="light"
             label="Exit Street View"
-            onClick={onClose}
+            onClick={() => void closeStreetView()}
             className="size-11"
           >
             <span
@@ -487,57 +713,13 @@ export function StreetViewModal({
               <ExpandIcon className="size-5" strokeWidth={1.9} />
             )}
           </MapControlButton>
-        </MapControlStack>
-      </div>
-
-      <div className="absolute bottom-3 left-3 z-20 flex flex-col items-start gap-2">
-        {miniOpen ? (
-          <div
-            ref={mapPanelRef}
-            className={cn(
-              "relative overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg",
-              !mapResizing && "transition-[width,height] duration-150 ease-out",
-              !mapSize && "h-72 w-80 max-w-[calc(100vw-1.5rem)]"
-            )}
-            style={
-              mapSize ? { width: mapSize.w, height: mapSize.h } : undefined
-            }
-          >
-            <StreetViewMiniMap
-              coord={coord}
-              points={points}
-              resizeSignal={mapSize ? `${mapSize.w}x${mapSize.h}` : "fixed"}
-              onMove={onMove}
-            />
-            <div className="absolute top-2 right-2 z-[810] flex flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-md">
-              <button
-                type="button"
-                onClick={() => setMiniOpen(false)}
-                aria-label="Close map"
-                title="Close map"
-                className="flex size-7 items-center justify-center text-neutral-600 hover:bg-neutral-100"
-              >
-                <XIcon className="size-4" strokeWidth={2.25} />
-              </button>
-            </div>
-            <div
-              onPointerDown={onMapResizeStart}
-              onPointerMove={onMapResizeMove}
-              onPointerUp={onMapResizeEnd}
-              onPointerCancel={onMapResizeEnd}
-              className="absolute top-0 right-0 z-[820] size-4 cursor-nwse-resize touch-none"
-              aria-hidden
-            />
-          </div>
-        ) : null}
-        {miniOpen ? null : (
-          <button
-            type="button"
-            onClick={() => setMiniOpen(true)}
-            aria-label="Toggle nearby map"
-            aria-expanded={false}
-            title="Nearby map"
-            className="flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-900 shadow-md transition-colors hover:bg-neutral-50"
+          <MapControlButton
+            tone="light"
+            divider
+            active={miniOpen}
+            label={miniOpen ? "Hide nearby map" : "Show nearby map"}
+            onClick={() => setMiniOpen((open) => !open)}
+            className="size-11"
           >
             <span
               aria-hidden
@@ -546,11 +728,19 @@ export function StreetViewModal({
             >
               map
             </span>
-          </button>
-        )}
+          </MapControlButton>
+        </MapControlStack>
+        </div>
       </div>
     </div>
   )
+
+  const shouldPortalFullscreen =
+    fullscreen &&
+    typeof document !== "undefined" &&
+    currentFullscreenElement() !== hostRef.current
+
+  return shouldPortalFullscreen ? createPortal(viewer, document.body) : viewer
 }
 
 export function startStreetViewPick(
