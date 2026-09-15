@@ -751,6 +751,7 @@ function OfficialConcernDashboard({
         <MediaLightbox
           items={evidencePreview.items}
           index={evidencePreview.index}
+          simpleCounter
           onClose={() => setEvidencePreview(null)}
         />
       ) : null}

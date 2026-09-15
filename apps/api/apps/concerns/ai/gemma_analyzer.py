@@ -255,6 +255,7 @@ def empty_details() -> dict:
     """
     return {
         "relevance": "UNCLEAR",
+        "issue_count": 1,
         "primary_category": "",
         "possible_categories": [],
         "detected_objects": [],
@@ -581,9 +582,15 @@ def build_prompt(
         "4. detected_objects lists what you can actually see in the attached image, in ordinary words "
         "(for example: garbage, vehicle, residential gate, floodwater). Leave it empty when no image "
         "is attached. Never list something you only read about in the description.\n"
-        "5. If the description is gibberish, keyboard spam, repeated words, mostly symbols, or unrelated "
-        "chatter, mark it UNCLEAR or IRRELEVANT and ask for clearer details.\n"
-        "6. Strong language inside a real civic report does not make it invalid. Keep it meaningful.\n"
+         "5. If the description is gibberish, keyboard spam, repeated words, mostly symbols, or unrelated "
+         "chatter, mark it UNCLEAR or IRRELEVANT and ask for clearer details. A meaningful issue followed "
+         "by unrelated text is still unclear; do not accept only the meaningful fragment.\n"
+         "6. Check the complete description for foul, abusive, sexual, hateful, threatening, obscene, "
+         "promotional, spam, or otherwise inappropriate language. If any is present, mark the description "
+         "UNCLEAR, set issue_count to 0, leave primary_category empty, and use request_more_information. "
+         "Do not repeat or display the offending words in any generated field. Do not penalize ordinary "
+         "emotion, urgency, Taglish, or spelling mistakes when the complete statement remains appropriate "
+         "and understandable.\n"
         "7. First decide incident_timing from the grammar and time words: ongoing, ended, historical, planned, "
         "hypothetical, or unclear. Category words such as fire, crime, accident, or medical do not prove that "
         "danger exists now. Read tense, negation, completion, drills, examples, quoted news, and future plans. "
@@ -611,12 +618,30 @@ def build_prompt(
         "relevance contradicts_report, recommended_action must be request_more_information. "
         "Never accept a report when the photo contradicts the description, even if the selected "
         "category or reported area matches.\n"
-        "10b. When one or more photos are attached and successfully reviewed, every "
-        "photo_verdicts item must have relevance supports_report before recommended_action can be "
-        "accept. A photo that merely shows the general location, road, or surroundings does not "
-        "support a claimed defect unless that defect is actually visible. If any photo is neutral, "
-        "unclear, or contradicts the report, use request_more_information.\n"
-        "11. Choose the single best primary_category from the configured concern categories using "
+         "10b. When one or more photos are attached and successfully reviewed, every "
+         "photo_verdicts item must have relevance supports_report before recommended_action can be "
+         "accept. A photo that merely shows the general location, road, or surroundings does not "
+         "support a claimed defect unless that defect is actually visible. If any photo is neutral, "
+         "unclear, or contradicts the report, use request_more_information.\n"
+         "10c. Split the description into its concrete issue claims and compare every claim against "
+         "each photo. Ignore polite requests and filler words. Use supports_report only when the "
+         "photo visibly confirms all concrete issue claims in that description. Generic overlap is "
+         "not enough: debris is not automatically garbage collection, a wet road is not automatically "
+         "flooding, and a street or sidewalk is not automatically the reported damage. If a photo "
+          "confirms only some claims, use unclear for that photo and set evidence_relationship to "
+          "partially_supports_report; never treat partial support as a passing match.\n"
+          "10d. Set issue_count to the number of distinct concrete civic issues in the description. "
+          "One issue with several details or symptoms counts as 1. Two separate requests, such as a "
+          "broken sidewalk and garbage collection, count as 2. If the description combines a valid "
+          "issue with unrelated word salad, nonsense, or casual text that does not explain the issue, "
+          "set issue_count to 0, relevance to UNCLEAR, primary_category to null, and "
+          "recommended_action to request_more_information. If issue_count is greater than 1, set "
+          "recommended_action to request_more_information.\n"
+          "10e. The photo cannot repair an unclear or inappropriate description. If the photo clearly shows the valid "
+          "part of a mixed description, still set issue_count to 0 and request a new understandable "
+          "statement. Only a description whose complete meaningful content is about the same civic issue "
+          "shown in the photo can pass.\n"
+         "11. Choose the single best primary_category from the configured concern categories using "
         "the report and image. This category is authoritative and will be used for routing. Do not "
         "compare it with a resident-selected category. Never use reject_as_irrelevant only because "
         "of category choice.\n"
@@ -736,8 +761,9 @@ def build_prompt(
         f"Payload:\n{json.dumps(payload, ensure_ascii=False)}\n\n"
         "Return exactly this JSON shape:\n"
         "{\n"
-        '  "relevance": null,\n'
-        '  "primary_category": null,\n'
+         '  "relevance": null,\n'
+         '  "issue_count": 1,\n'
+         '  "primary_category": null,\n'
         '  "possible_categories": [],\n'
         '  "detected_objects": [],\n'
         '  "report_title": null,\n'
@@ -830,6 +856,19 @@ def parse_gemma_result(
     action = str(data.get("recommended_action") or "").lower()
     if action not in RECOMMENDED_ACTIONS:
         action = "accept"
+
+    try:
+        issue_count = int(data.get("issue_count", 1))
+    except (TypeError, ValueError):
+        issue_count = 1
+    issue_count = max(0, min(issue_count, 5))
+    if issue_count == 0:
+        relevance = "UNCLEAR"
+        primary = ""
+        possible = []
+        action = "request_more_information"
+    elif issue_count > 1:
+        action = "request_more_information"
 
     urgent = bool(data.get("urgent_attention"))
     if urgent and action == "accept":
@@ -933,6 +972,7 @@ def parse_gemma_result(
     details = {
         **empty_details(),
         "relevance": relevance,
+        "issue_count": issue_count,
         "primary_category": primary,
         "possible_categories": possible,
         "detected_objects": detected_objects,
@@ -1168,7 +1208,6 @@ def _response_content(response) -> str:
 
 
 def low_information_reason(text: str) -> str:
-    """Catch obviously empty submissions before spending a model call on them."""
     cleaned = str(text or "").strip().lower()
     letters = re.findall(r"[a-zA-ZÀ-ÿ0-9]+", cleaned)
     joined = " ".join(letters)
@@ -1195,6 +1234,7 @@ def low_information_result(*, model_version: str, reason: str, image_attached: b
         "photo_assessment": "The photo can be checked once the description is clear." if image_attached else "",
         "evidence_relationship": "no_useful_image_evidence" if image_attached else "image_unavailable",
         "missing_information": ["a clear description of what happened"],
+        "issue_count": 0,
         "ai_result_uncertain": True,
         "low_information": True,
         "recommended_action": "request_more_information",

@@ -379,6 +379,7 @@ export function ResidentReportsWorkspace({
         <MediaLightbox
           items={proofPreview.items}
           index={proofPreview.index}
+          simpleCounter
           onClose={() => setProofPreview(null)}
         />
       ) : null}

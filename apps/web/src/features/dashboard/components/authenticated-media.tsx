@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleCheck,
-  EyeOffIcon,
   FileIcon,
   ImageIcon,
   Loader2Icon,
@@ -12,22 +11,9 @@ import {
   XIcon,
 } from "lucide-react"
 
-import { toast } from "sonner"
-import { EraserIcon } from "lucide-react"
-
 import { cn } from "@workspace/ui/lib/utils"
 import { getAccessToken } from "@/lib/api"
-import {
-  invalidateAuthenticatedMedia,
-  type MediaPreviewItem,
-} from "@/features/dashboard/lib/authenticated-media"
-import { useAuthSession } from "@/features/auth/auth-session"
-import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
-import {
-  addConcernMediaRedactions,
-  removeConcernMediaRedaction,
-  type ConcernMedia,
-} from "@/features/dashboard/api"
+import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 
 const blobCache = new Map<string, string>()
 const BLOB_CACHE_MAX = 120
@@ -214,24 +200,6 @@ export function AuthenticatedMediaVideo({
   return <video src={objectUrl} controls playsInline className={className} />
 }
 
-interface BlurDraft {
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
-function normalisedBlurPoint(
-  event: React.PointerEvent<HTMLDivElement>,
-  element: HTMLDivElement
-) {
-  const rect = element.getBoundingClientRect()
-  return {
-    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
-    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
-  }
-}
-
 type PreviewFilter = "concern" | "resolution"
 
 function previewFilterFor(item: MediaPreviewItem): PreviewFilter | null {
@@ -253,49 +221,22 @@ export function MediaLightbox({
   /** Report previews use a centered image counter instead of status pills. */
   simpleCounter?: boolean
 }) {
-  const { user } = useAuthSession()
-  const canBlur = isOfficialUser(user) || isResponderUser(user)
   const [active, setActive] = useState(index)
   const [requestedIndex, setRequestedIndex] = useState(index)
-  const [renderedActive, setRenderedActive] = useState(active)
-  const [blurMode, setBlurMode] = useState(false)
-  const [draft, setDraft] = useState<BlurDraft | null>(null)
-  const [pending, setPending] = useState<BlurDraft[]>([])
-  const [overrides, setOverrides] = useState<Record<number, ConcernMedia>>({})
-  const surfaceRef = useRef<HTMLDivElement | null>(null)
-  const originRef = useRef<{ x: number; y: number } | null>(null)
-  const [busy, setBusy] = useState(false)
 
   if (requestedIndex !== index) {
     setRequestedIndex(index)
     setActive(Math.max(0, Math.min(index, items.length - 1)))
   }
-  if (renderedActive !== active) {
-    setRenderedActive(active)
-    setPending([])
-    setDraft(null)
-  }
 
   const media = items[active]
-  const currentMedia = media?.media
-    ? (overrides[media.media.id] ?? media.media)
-    : undefined
-  const blurTarget =
-    blurMode && media?.kind === "image" ? (currentMedia ?? null) : null
-  const saved = blurTarget?.redactions ?? []
 
   useEffect(() => {
     if (items.length === 0) return
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        if (blurMode) {
-          setBlurMode(false)
-          setPending([])
-          return
-        }
         onClose()
       }
-      if (blurMode) return
       if (event.key === "ArrowLeft")
         setActive((current) => Math.max(0, current - 1))
       if (event.key === "ArrowRight")
@@ -308,105 +249,9 @@ export function MediaLightbox({
       window.removeEventListener("keydown", onKey)
       document.body.style.overflow = previous
     }
-  }, [items.length, onClose, blurMode])
+  }, [items.length, onClose])
 
   if (items.length === 0 || !media) return null
-
-  function onSurfacePointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (!surfaceRef.current || busy || !blurTarget) return
-    event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    originRef.current = normalisedBlurPoint(event, surfaceRef.current)
-    setDraft({ ...originRef.current, width: 0, height: 0 })
-  }
-
-  function onSurfacePointerMove(event: React.PointerEvent<HTMLDivElement>) {
-    const origin = originRef.current
-    if (!origin || !surfaceRef.current) return
-    const point = normalisedBlurPoint(event, surfaceRef.current)
-    setDraft({
-      x: Math.min(origin.x, point.x),
-      y: Math.min(origin.y, point.y),
-      width: Math.abs(point.x - origin.x),
-      height: Math.abs(point.y - origin.y),
-    })
-  }
-
-  function onSurfacePointerUp() {
-    const box = draft
-    originRef.current = null
-    setDraft(null)
-    if (!box || box.width < 0.01 || box.height < 0.01) return
-    setPending((current) => [...current, box])
-  }
-
-  async function saveBlur() {
-    if (!blurTarget || !pending.length) return
-    setBusy(true)
-    try {
-      const next = await addConcernMediaRedactions(blurTarget.id, pending)
-      applyMediaUpdate(next)
-      setPending([])
-      toast.success("The photo was updated with your blurred areas.")
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "The blurred areas could not be saved."
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function removeBlur(redactionId: number) {
-    if (!blurTarget) return
-    setBusy(true)
-    try {
-      const next = await removeConcernMediaRedaction(blurTarget.id, redactionId)
-      applyMediaUpdate(next)
-      toast.success("The blurred area was removed.")
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "The blurred area could not be removed."
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function removeAllBlur() {
-    if (!blurTarget) return
-    const regions = saved.slice()
-    if (!regions.length) return
-    setBusy(true)
-    try {
-      let next = blurTarget
-      for (const region of regions) {
-        next = await removeConcernMediaRedaction(blurTarget.id, region.id)
-      }
-      applyMediaUpdate(next)
-      toast.success("All blurred areas were removed.")
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "The blurred areas could not be removed."
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  function applyMediaUpdate(next: ConcernMedia) {
-    setOverrides((prev) => ({ ...prev, [next.id]: next }))
-    setPending([])
-    invalidateAuthenticatedMedia(items[active].src)
-  }
-
-  const boxes = [...saved, ...pending, ...(draft && blurTarget ? [draft] : [])]
   const badgeText = (media.badge ?? "").trim().toLowerCase()
   const isResolvedBadge = badgeText === "resolved case"
   const isReportedBadge = badgeText === "reported issue"
@@ -455,24 +300,17 @@ export function MediaLightbox({
     setActive(filterNavigationIndexes[nextPosition] ?? active)
   }
 
-  function handleClose() {
-    setBlurMode(false)
-    setPending([])
-    setDraft(null)
-    onClose()
-  }
-
   return createPortal(
     <div
       className="fixed inset-0 z-[500] flex items-center justify-center bg-black/85 p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Media preview"
-      onClick={blurMode ? undefined : onClose}
+      onClick={onClose}
     >
       <button
         type="button"
-        onClick={handleClose}
+        onClick={onClose}
         aria-label="Close preview"
         className="absolute top-4 right-4 z-10 flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
       >
@@ -482,14 +320,7 @@ export function MediaLightbox({
         className="relative flex max-h-[92vh] w-full max-w-4xl flex-col items-center"
         onClick={(event) => event.stopPropagation()}
       >
-        {blurMode ? (
-          <p className="mb-2 text-center text-[13px] text-white/70">
-            Drag across anything that should not be public. The blur is applied
-            to the copy residents see; the original stays available to you.
-          </p>
-        ) : null}
-
-        {!blurMode && !simpleCounter && !isResolvedBadge && !isReportedBadge ? (
+        {!simpleCounter && !isResolvedBadge && !isReportedBadge ? (
           <div className="mb-3 w-full text-white">
             {media.eyebrow ? (
               <p className="text-center text-[12px] text-white/55">
@@ -514,7 +345,7 @@ export function MediaLightbox({
           </div>
         ) : null}
 
-        {!blurMode && simpleCounter ? (
+        {simpleCounter ? (
           <div className="mb-3 flex w-full items-center justify-center gap-1 text-white">
             <button
               type="button"
@@ -547,55 +378,7 @@ export function MediaLightbox({
 
         <div className="flex w-full items-center justify-center gap-2 sm:gap-3">
           <div className="relative flex min-w-0 flex-1 items-center justify-center">
-            {blurTarget ? (
-              <div
-                ref={surfaceRef}
-                onPointerDown={onSurfacePointerDown}
-                onPointerMove={onSurfacePointerMove}
-                onPointerUp={onSurfacePointerUp}
-                onPointerCancel={onSurfacePointerUp}
-                onDragStart={(event) => event.preventDefault()}
-                className="relative max-h-[80vh] cursor-crosshair touch-none overflow-hidden rounded-xl select-none"
-              >
-                <AuthenticatedMediaImage
-                  src={media.src}
-                  alt={media.filename}
-                  className="pointer-events-none max-h-[80vh] w-auto max-w-full object-contain"
-                />
-                {boxes.map((box, boxIndex) => {
-                  const savedRegion =
-                    boxIndex < saved.length ? saved[boxIndex] : null
-                  return savedRegion ? (
-                    <button
-                      key={`${box.x}-${box.y}-${boxIndex}`}
-                      type="button"
-                      disabled={busy}
-                      title="Remove this blurred area"
-                      onClick={() => void removeBlur(savedRegion.id)}
-                      className="absolute border-2 border-status-closed bg-status-closed/35"
-                      style={{
-                        left: `${box.x * 100}%`,
-                        top: `${box.y * 100}%`,
-                        width: `${box.width * 100}%`,
-                        height: `${box.height * 100}%`,
-                      }}
-                    />
-                  ) : (
-                    <span
-                      key={`${box.x}-${box.y}-${boxIndex}`}
-                      aria-hidden
-                      className="pointer-events-none absolute border-2 border-brand-orange bg-brand-orange/35"
-                      style={{
-                        left: `${box.x * 100}%`,
-                        top: `${box.y * 100}%`,
-                        width: `${box.width * 100}%`,
-                        height: `${box.height * 100}%`,
-                      }}
-                    />
-                  )
-                })}
-              </div>
-            ) : media.kind === "image" ? (
+            {media.kind === "image" ? (
               <div className="relative max-h-[80vh] overflow-hidden rounded-xl">
                 <AuthenticatedMediaImage
                   src={media.src}
@@ -623,8 +406,7 @@ export function MediaLightbox({
           </div>
         </div>
 
-        {!blurMode &&
-        !simpleCounter &&
+        {!simpleCounter &&
         (items.length > 1 || isResolvedBadge || isReportedBadge) ? (
           <div className="mt-3 flex items-center justify-center gap-2">
             {items.length > 1 ? (
@@ -672,7 +454,7 @@ export function MediaLightbox({
           </div>
         ) : null}
 
-        {!blurMode && simpleCounter && previewFilters.length > 0 ? (
+        {simpleCounter && previewFilters.length > 0 ? (
           <div className="mt-3 flex items-center justify-center gap-6 text-[13px] text-white">
             {previewFilters.map((filter) => {
               const selected = activeFilter === filter.key
@@ -700,65 +482,6 @@ export function MediaLightbox({
           </div>
         ) : null}
 
-        {blurMode || (canBlur && media.kind === "image" && media.media) ? (
-          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-            {blurMode ? (
-              <>
-                {pending.length ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setPending([])}
-                    className="inline-flex h-9 items-center rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
-                  >
-                    Clear
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={busy || !pending.length}
-                  onClick={() => void saveBlur()}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-full bg-brand-orange px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-50"
-                >
-                  {busy ? (
-                    <Loader2Icon className="size-4 animate-spin" />
-                  ) : null}
-                  Save blurred areas
-                </button>
-                {saved.length ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void removeAllBlur()}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
-                  >
-                    <EraserIcon className="size-4" />
-                    Remove all blur
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBlurMode(false)
-                    setPending([])
-                  }}
-                  className="inline-flex h-9 items-center rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
-                >
-                  Done
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setBlurMode(true)}
-                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/20"
-              >
-                <EyeOffIcon className="size-4" />
-                Blur an area
-              </button>
-            )}
-          </div>
-        ) : null}
       </div>
     </div>,
     document.body

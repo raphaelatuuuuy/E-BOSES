@@ -24,20 +24,19 @@ def category_name(alert):
 
 
 def emergency_ack(alert, *, unit_name=""):
-    unit = unit_name or unit_label(alert)
-    return f"{resident_greeting(alert)} Your {category_name(alert)} emergency was received. {unit} has been assigned and notified."
+    return f"{resident_greeting(alert)} Your {category_name(alert)} emergency was received. Responders have been notified."
 
 
 def pending_response(alert):
-    return f"{resident_greeting(alert)} Your emergency was received. We are still arranging a response unit."
+    return f"{resident_greeting(alert)} Your emergency was received. We are still arranging responders."
 
 
 def resident_progress(alert, status, *, unit_name=""):
-    unit = unit_name or unit_label(alert)
     bodies = {
-        "en_route": f"A responder from {unit} is on the way.",
-        "arrived": f"A responder from {unit} has arrived at your location.",
-        "resolved": f"{unit[0].upper() + unit[1:]} has marked your emergency resolved.",
+        "en_route": "Responders are on the way. Stay safe and keep your phone open.",
+        "nearby": "Responders are almost there. Watch for them if safe.",
+        "arrived": "Responders have arrived at your location.",
+        "resolved": "Your emergency is marked resolved. Thank you, stay safe.",
     }
     body = bodies.get(status)
     return f"{resident_greeting(alert)} {body}" if body else ""

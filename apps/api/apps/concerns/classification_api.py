@@ -862,17 +862,12 @@ class ResidentConcernPrecheckView(APIView):
             return Response({"location": ["Choose a location inside an active community."]}, status=status.HTTP_400_BAD_REQUEST)
         config = ConcernClassificationConfiguration.current(incident_community)
         images, image_errors, prepared_indices = _prepared_images_from_uploads(uploaded_files)
-        # Text analysis only, on a short budget: the resident is waiting on
-        # this response. Photos are validated locally (so rejected/unreadable
-        # files still get feedback) but never uploaded to the model here — the
-        # full image review + SAM3 privacy scan run in the pipeline after the
-        # report is actually submitted.
         result = classification_payload(
             title=title,
             description=description,
             selected_category=selected_category,
             configuration=config,
-            images=None,
+            images=images or None,
             image_uploaded=bool(uploaded_files),
             text_timeout=getattr(settings, "OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", 8),
         )
@@ -901,25 +896,36 @@ class ResidentConcernPrecheckView(APIView):
             request.data.get("latitude") is None or request.data.get("longitude") is None
         ):
             inferred_errors["address"] = "Pin where the issue is located."
-        duplicate_feedback = _report_duplicate_feedback(
-            config,
-            request=request,
-            selected_category=inferred_category,
-            title=title,
-            description=description,
-        )
         payload = _resident_feedback(
             result,
             image_uploaded=bool(uploaded_files),
             photo_count=len(uploaded_files),
             image_errors=image_errors,
             prepared_indices=prepared_indices,
-            duplicate_feedback=duplicate_feedback,
+            duplicate_feedback=None,
         )
         if inferred_errors:
             payload["field_errors"] = {**payload.get("field_errors", {}), **inferred_errors}
             payload["can_submit"] = False
             payload["needs_revision"] = True
+        duplicate_feedback = None
+        if payload["can_submit"]:
+            duplicate_feedback = _report_duplicate_feedback(
+                config,
+                request=request,
+                selected_category=inferred_category,
+                title=title,
+                description=description,
+            )
+            if duplicate_feedback:
+                payload = _resident_feedback(
+                    result,
+                    image_uploaded=bool(uploaded_files),
+                    photo_count=len(uploaded_files),
+                    image_errors=image_errors,
+                    prepared_indices=prepared_indices,
+                    duplicate_feedback=duplicate_feedback,
+                )
         payload.update(
             _precheck_extras(
                 request,
@@ -1208,12 +1214,26 @@ def _resident_feedback(
     field_errors = {}
     can_submit = True
     needs_revision = False
-    if not details.get("failure_type") and result.get("outcome") == "irrelevant":
-        field_errors["description"] = "This report does not describe a valid community issue."
-        can_submit = False
-        needs_revision = True
-    if not details.get("failure_type") and result.get("outcome") == "needs_review" and not primary:
-        field_errors["description"] = "Add a clearer description of the issue."
+    photo_error = (
+        "Please remove photos that don't show the reported issue and upload clear ones."
+        if photo_count > 1
+        else "Please submit a photo that clearly shows the reported issue."
+    )
+    text_feedback = None
+    try:
+        issue_count = int(details.get("issue_count", 1))
+    except (TypeError, ValueError):
+        issue_count = 1
+    if not details.get("failure_type") and issue_count > 1:
+        text_feedback = "Please report one issue at a time only"
+    elif not details.get("failure_type") and issue_count == 0:
+        text_feedback = "Please describe one concern clearly and include only relevant details about the issue."
+    elif not details.get("failure_type") and result.get("outcome") == "irrelevant":
+        text_feedback = "Please describe one concern clearly and include only relevant details about the issue."
+    elif not details.get("failure_type") and result.get("outcome") == "needs_review" and not primary:
+        text_feedback = "Please describe one concern clearly and include only relevant details about the issue."
+    if text_feedback:
+        field_errors["description"] = text_feedback
         can_submit = False
         needs_revision = True
     photo_evidence_contradicted = relationship == "contradicts_report" or any(
@@ -1221,13 +1241,51 @@ def _resident_feedback(
         and str(item.get("relevance") or "").lower() == "contradicts_report"
         for item in details.get("photo_verdicts") or []
     )
-    if photo_evidence_contradicted:
-        field_errors["media"] = "The photo contradicts the issue described. Upload a matching photo."
+    if not text_feedback and photo_evidence_contradicted:
+        field_errors["media"] = photo_error
         can_submit = False
         needs_revision = True
-    elif relationship == "no_useful_image_evidence":
+    elif not text_feedback and image_uploaded and image_errors:
+        field_errors["media"] = photo_error
+        can_submit = False
         needs_revision = True
-    if duplicate_feedback and duplicate_feedback.get("found"):
+    elif not text_feedback and image_uploaded and details.get("image_review_succeeded") is not True:
+        field_errors["media"] = photo_error
+        can_submit = False
+        needs_revision = True
+    elif not text_feedback and details.get("image_review_succeeded") is True:
+        reviewed_verdicts = [
+            item
+            for item in details.get("photo_verdicts") or []
+            if isinstance(item, dict)
+        ]
+        if (
+            relationship != "supports_report"
+            or len(reviewed_verdicts) < len(prepared_indices or [])
+            or not reviewed_verdicts
+            or any(
+            str(item.get("relevance") or "").lower() != "supports_report"
+            for item in reviewed_verdicts
+            )
+        ):
+            field_errors["media"] = photo_error
+            can_submit = False
+            needs_revision = True
+    elif not text_feedback and relationship == "no_useful_image_evidence":
+        needs_revision = True
+    if (
+        can_submit
+        and not details.get("failure_type")
+        and details.get("recommended_action") == "request_more_information"
+    ):
+        field_errors["media" if image_uploaded else "description"] = (
+            photo_error
+            if image_uploaded
+            else "Add more detail about the issue before submitting."
+        )
+        can_submit = False
+        needs_revision = True
+    if can_submit and duplicate_feedback and duplicate_feedback.get("found"):
         action = duplicate_feedback.get("action")
         if action == ConcernClassificationConfiguration.ReportDuplicateAction.BLOCK:
             field_errors["description"] = "A similar report already exists near this location."
@@ -1249,7 +1307,9 @@ def _resident_feedback(
         "suggested_category_label": "",
         "category_confirm_required": False,
         "photo_required": False,
-        "photo_verdicts": _photo_verdict_payload(
+        "photo_verdicts": []
+        if text_feedback
+        else _photo_verdict_payload(
             details,
             photo_count=photo_count,
             image_errors=image_errors or {},
@@ -1267,33 +1327,13 @@ def _resident_feedback(
 
 
 def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dict, prepared_indices: list) -> list[dict]:
-    """One frontend verdict per attached photo, in file order.
-
-    A verdict per photo comes from the model only for the images that were
-    actually sent; a photo that could not be prepared is "unsupported". The
-    resident precheck intentionally defers vision review, so an uploaded photo
-    with no review result has no verdict yet and must not be presented as an
-    error. The post-submit pipeline still returns real verdicts when review
-    completes.
-    """
+    """Return one frontend verdict per attached photo in file order."""
     if photo_count <= 0:
         return []
     relationship = details.get("evidence_relationship") or ""
     review_failed = details.get("image_review_succeeded") is False
     raw_model_verdicts = details.get("photo_verdicts") or []
     model_verdicts = {item["index"]: item for item in raw_model_verdicts}
-
-    # The resident precheck validates files locally but deliberately does not
-    # send them to the vision model. `image_unavailable` here means “review is
-    # deferred”, not “the image is unrelated”. Returning no rows keeps the
-    # dialog from showing a false red border/message before submission.
-    if (
-        not image_errors
-        and not review_failed
-        and details.get("image_review_succeeded") is None
-        and not raw_model_verdicts
-    ):
-        return []
 
     relevance_to_state = {
         "supports_report": "relevant",
@@ -1343,6 +1383,8 @@ def _photo_verdict_payload(details: dict, *, photo_count: int, image_errors: dic
             payload.append({"index": index, "state": state, "message": unclear_message})
             continue
         state = relevance_to_state.get(verdict.get("relevance"), "unclear")
+        if state == "relevant" and relationship != "supports_report" and photo_count == 1:
+            state = "unclear"
         message = "" if state == "relevant" else (verdict.get("note") or unclear_message)
         payload.append({"index": index, "state": state, "message": message})
     return payload

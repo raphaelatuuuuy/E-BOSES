@@ -4,10 +4,6 @@ import { toast } from "sonner"
 
 import { type LiveMapSnapshot } from "@/features/dashboard/api"
 import {
-  drawRoute,
-  routeRenderGeometry,
-} from "@/features/dashboard/lib/route-line"
-import {
   MapControlButton,
   MapControlStack,
 } from "@/features/dashboard/components/map/map-chrome"
@@ -188,18 +184,17 @@ function AlertsLeafletMapInner({
   /**
    * Two groups, not one.
    *
-   * Alerts (concerns, emergencies, routes, streets) change when someone files
+   * Alerts (concerns, emergencies, streets) change when someone files
    * or resolves something — rarely. People move constantly: every signed-in
    * device pings its location every 30s. Sharing one group meant a single
    * location ping ran `clearLayers()` and rebuilt every concern pin, every
-   * emergency pin, every route polyline and every street line on the map.
+   * emergency pin and every street line on the map.
    */
   const alertLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const alertMarkersRef = useRef<Map<string, MarkerEntry>>(new Map())
   const onSelectRef = useRef(onSelect)
   const onMapInteractRef = useRef(onMapInteract)
   const streetLayersRef = useRef<leaflet.LayerGroup | null>(null)
-  const routeLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const advisoryLayersRef = useRef<leaflet.LayerGroup | null>(null)
   const advisoryRoadsRef = useRef<
     Map<
@@ -571,7 +566,6 @@ function AlertsLeafletMapInner({
       // Hover-only barangay fill: sits beneath every advisory road/marker.
       highlightGroupRef.current = L.layerGroup().addTo(map)
       advisoryLayersRef.current = L.layerGroup().addTo(map)
-      routeLayersRef.current = L.layerGroup().addTo(map)
       alertLayersRef.current = L.layerGroup().addTo(map)
       mapRef.current = map
       closeHoverCardsOnLeave(map)
@@ -719,51 +713,6 @@ function AlertsLeafletMapInner({
       }).addTo(group)
     }
   }, [layers.streets, selectedStreetNames, streetLines, mapReady])
-
-  // Routes follow their emergency: there is no separate Routes toggle, because a
-  // journey with no incident on the map means nothing. The route to the selected
-  // incident is drawn at full weight and the rest are dimmed.
-  useEffect(() => {
-    const L = LRef.current
-    const group = routeLayersRef.current
-    if (!L || !group) return
-    group.clearLayers()
-    if (!layers.concerns) return
-
-    const byId = new Map(snapshot.emergencies.map((item) => [item.id, item]))
-    const liveAlertIds = new Set(
-      snapshot.emergencies
-        .filter(isActiveEmergency)
-        .map((emergency) => emergency.id)
-    )
-    const focusId = selected?.kind === "emergency" ? selected.id : null
-
-    for (const route of snapshot.routes) {
-      if (route.status === "unavailable" || !route.geometry) continue
-      const incident = byId.get(route.alert_id)
-      if (!incident) continue
-      const live = liveAlertIds.has(route.alert_id)
-      const focused = focusId === route.alert_id
-      const { road, approach, connectors } = routeRenderGeometry(route, {
-        destination: validCoord(incident.latitude, incident.longitude),
-      })
-      drawRoute(L, group, {
-        road,
-        approach,
-        connectors,
-        live,
-        weight: focused ? 8 : 5,
-        dim: focusId != null && !focused,
-      })
-    }
-  }, [
-    snapshot.routes,
-    snapshot.emergencies,
-    layers.concerns,
-    selected?.kind,
-    selected?.id,
-    mapReady,
-  ])
 
   // Advisory areas: the same street corridors the Community tab publishes, not
   // a shape invented for the map. An advisory with no corridor (one street, or

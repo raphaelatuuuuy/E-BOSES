@@ -1090,6 +1090,27 @@ body.eboses-sv-open .eboses-pin__core {
 .eboses-pin--dot.is-live .eboses-pin__core {
   animation: eboses-pin-blink 2.8s ease-in-out infinite;
 }
+.eboses-report-dot {
+  position: relative;
+  display: block;
+  width: var(--size);
+  height: var(--size);
+}
+.eboses-report-dot__pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--pin);
+  opacity: 0.55;
+  animation: eboses-pin-pulse 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.eboses-report-dot__core {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--pin);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
 .eboses-pin--glyph.is-live .eboses-pin__halo {
   opacity: 0.3;
   animation: eboses-pin-halo-soft 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
@@ -1149,10 +1170,29 @@ body.eboses-sv-open .eboses-pin__core {
       0 0 7px 2px color-mix(in srgb, var(--pin) 55%, transparent);
   }
 }
+.leaflet-container .eboses-live-route {
+  animation: eboses-live-route-dash 1.1s linear infinite;
+}
+.leaflet-container .eboses-route-flow {
+  animation: eboses-route-flow-dash 1s linear infinite;
+}
+@keyframes eboses-live-route-dash {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+@keyframes eboses-route-flow-dash {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .eboses-pin__halo,
   .eboses-pin--dot.is-live .eboses-pin__core,
-  .eboses-map-pin__ring {
+  .eboses-report-dot__pulse,
+  .eboses-map-pin__ring,
+  .leaflet-container .eboses-live-route,
+  .leaflet-container .eboses-route-flow {
     animation: none;
   }
   .eboses-pin__halo {

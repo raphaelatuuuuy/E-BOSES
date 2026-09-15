@@ -695,6 +695,7 @@ export function OfficialStatusPanel({
         <MediaLightbox
           items={previewFiles.items}
           index={previewFiles.index}
+          simpleCounter
           onClose={() => setPreviewFiles(null)}
         />
       ) : null}

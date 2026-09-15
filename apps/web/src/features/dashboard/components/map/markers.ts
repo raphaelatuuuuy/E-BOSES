@@ -237,3 +237,7 @@ export function personDotHtml(
 ) {
   return dotPinHtml({ color, size: focused ? 13 : 10, live: focused, tone })
 }
+
+export function reportDotHtml(color: string, size = 12) {
+  return `<span class="eboses-report-dot" style="--pin:${color};--size:${size}px"><span class="eboses-report-dot__pulse"></span><span class="eboses-report-dot__core"></span></span>`
+}

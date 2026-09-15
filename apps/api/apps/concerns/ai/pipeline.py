@@ -414,7 +414,15 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     if visual_duplicate:
         duplicate_payload["visual_check"] = visual_duplicate
 
-    street_check = _street_imagery_check(config, concern=concern, prepared_images=prepared_images)
+    try:
+        issue_count = int(details.get("issue_count", 1))
+    except (TypeError, ValueError):
+        issue_count = 1
+    street_check = (
+        None
+        if issue_count != 1
+        else _street_imagery_check(config, concern=concern, prepared_images=prepared_images)
+    )
 
     integrity_check = _media_integrity_check(
         config,
@@ -633,6 +641,8 @@ def _record_decision_log(
         "automated_media_integrity_resubmit": "Photo authenticity check",
         "automated_irrelevant": "Relevance check",
         "automated_incomplete": "Required information check",
+        "automated_multiple_issues": "Description issue-count check",
+        "automated_unclear_description": "Description clarity check",
     }
     output_snapshot = {
         "model_recommended_action": details.get("recommended_action"),
@@ -662,8 +672,9 @@ def _record_decision_log(
             output_snapshot={
                 **output_snapshot,
                 "relevance": details.get("relevance"),
-                "primary_category": details.get("primary_category"),
-                "notification_subject": details.get("notification_subject"),
+        "primary_category": details.get("primary_category"),
+        "issue_count": details.get("issue_count"),
+        "notification_subject": details.get("notification_subject"),
                 "severity": details.get("severity"),
                 "evidence_relationship": details.get("evidence_relationship"),
             },
@@ -776,6 +787,25 @@ def _apply_automated_validation(
     if duplicate_match.possible_duplicate and duplicate_match.matched_concern_id:
         concern.duplicate_of_id = duplicate_match.matched_concern_id
 
+    try:
+        issue_count = int(details.get("issue_count", 1))
+    except (TypeError, ValueError):
+        issue_count = 1
+    if issue_count > 1:
+        _reject_concern(
+            concern,
+            rejection_code="automated_multiple_issues",
+            summary="Please report one issue at a time only",
+        )
+        return
+    if issue_count == 0:
+        _reject_concern(
+            concern,
+            rejection_code="automated_unclear_description",
+            summary="Please describe one concern clearly and include only relevant details about the issue.",
+        )
+        return
+
     if uncertain:
         concern.validation_status = Concern.ValidationStatus.PENDING
         concern.validation_summary = (
@@ -805,8 +835,7 @@ def _apply_automated_validation(
             concern,
             rejection_code="automated_photo_unsupported",
             summary=(
-                "The photo does not show the issue described in the report. Please submit a photo "
-                "that clearly shows the reported issue."
+                "Please submit a photo that clearly shows the reported issue."
             ),
         )
         return
@@ -908,7 +937,7 @@ def _apply_automated_validation(
                     else "automated_street_imagery_resubmit"
                 )
                 summary = (
-                    "Please pin the exact area where the issue is found and upload a matching photo."
+                    "Please pin the exact area where the issue is found."
                 )
 
             if street_action in {Actions.REJECT, Actions.RESUBMIT}:
@@ -988,6 +1017,8 @@ def _photo_evidence_unsupported(details: dict, *, photo_count: int | None = None
     """
     if details.get("image_review_succeeded") is not True:
         return False
+    if str(details.get("evidence_relationship") or "").lower() != "supports_report":
+        return True
     verdicts = [item for item in details.get("photo_verdicts") or [] if isinstance(item, dict)]
     if not verdicts:
         return True

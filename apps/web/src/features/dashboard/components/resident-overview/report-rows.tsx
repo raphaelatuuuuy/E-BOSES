@@ -22,7 +22,7 @@ import {
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { streetSegment } from "@/features/dashboard/lib/location-text"
 import { isCriticalConcern } from "@/features/dashboard/lib/critical-concern"
-import { emergencyDescription } from "@/features/dashboard/lib/emergency-description"
+import { emergencyTitleText } from "@/features/dashboard/lib/emergency-description"
 
 export function OverviewReportRow({
   post,
@@ -184,20 +184,7 @@ function EmergencyOverviewRow({
 }) {
   const navigate = useNavigate()
   const resolved = ["resolved", "closed"].includes(alert.status)
-  const hasResponder = Boolean(
-    alert.current_assignment ||
-    (alert.active_assignments?.length ?? 0) > 0 ||
-    alert.assignments?.some((assignment) =>
-      ["assigned", "acknowledged", "en_route", "arrived", "assisting"].includes(
-        assignment.status
-      )
-    )
-  )
-  const title = hasResponder
-    ? "Responder is assigned to your location"
-    : "Your emergency report"
-  const description =
-    alert.display_description?.trim() || emergencyDescription(alert)
+  const title = emergencyTitleText(alert)
   const street =
     streetSegment(
       alert.display_location ||
@@ -234,9 +221,6 @@ function EmergencyOverviewRow({
             />
           )}
           {title}
-        </span>
-        <span className="mt-1 block text-[13px] leading-snug text-neutral-600">
-          {description}
         </span>
         <span className="mt-1 flex items-center gap-1 text-[13px] text-neutral-500">
           <MapPinIcon className="size-3.5 shrink-0" aria-hidden="true" />

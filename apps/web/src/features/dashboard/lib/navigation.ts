@@ -6,7 +6,6 @@ import {
   ChartColumn,
   HomeIcon,
   MapPinnedIcon,
-  MegaphoneIcon,
   NewspaperIcon,
   UserCircleIcon,
   UsersIcon,
@@ -233,10 +232,10 @@ const officialFeedMobile: NavItemConfig = {
   isActive: (pathname) => matches(pathname, "/dashboard/feed"),
 }
 
-const officialCommunityMobile: NavItemConfig = {
-  ...officialCommunity,
-  label: "Announce",
-  icon: MegaphoneIcon,
+const officialConcernsMobile: NavItemConfig = {
+  ...officialConcerns,
+  label: "Reports",
+  capability: undefined,
 }
 
 const officialNav: RoleNavConfig = {
@@ -256,8 +255,8 @@ const officialNav: RoleNavConfig = {
   mobileItems: [
     officialOverviewMobile,
     officialFeedMobile,
+    officialConcernsMobile,
     officialOperationsMapMobile,
-    officialCommunityMobile,
   ],
   more: {
     label: "Config",
@@ -307,6 +306,11 @@ const responderFeed: NavItemConfig = {
   isActive: (pathname) => matches(pathname, "/dashboard/feed"),
 }
 
+const responderConcernsMobile: NavItemConfig = {
+  ...responderConcerns,
+  label: "Reports",
+}
+
 const responderProfile: NavItemConfig = {
   key: "profile",
   label: "Profile",
@@ -334,8 +338,9 @@ const responderNav: RoleNavConfig = {
   ],
   mobileItems: [
     { ...responderOverview, label: "Home", icon: HomeIcon },
-    { ...responderAlerts, label: "Alerts" },
     responderFeed,
+    responderConcernsMobile,
+    { ...responderAlerts, label: "Alerts" },
   ],
 }
 

@@ -16,8 +16,7 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { useAuthSession } from "@/features/auth/auth-session"
 import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
-import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
-import { ResolvedPhoto } from "@/features/dashboard/components/concerns/resolved-photo"
+import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
 import {
   categoryLabels,
   formatDate,
@@ -763,47 +762,14 @@ export function ConcernQueueItem({
             "relative mt-2.5",
             active && "flex min-h-0 flex-1 flex-col"
           )}
+          onClick={(event) => event.stopPropagation()}
         >
-          {concernResolved ? (
-            <div onClick={(event) => event.stopPropagation()}>
-              <ResolvedPhoto
-                originalSrc={concern.first_photo}
-                resolutionSrc={concern.resolution_photo}
-                resolutionCount={concern.resolution_photo_count}
-                alt={concern.title}
-                className="rounded-[16px]"
-                imageClassName={active ? "min-h-0 flex-1" : "h-36"}
-                onOpen={() => void openPreview()}
-              />
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation()
-                void openPreview()
-              }}
-              className={cn(
-                "block w-full cursor-zoom-in overflow-hidden rounded-[16px] bg-card-raised",
-                active && "flex min-h-36 flex-1"
-              )}
-              aria-label="Open photo preview"
-            >
-              <AuthenticatedMediaImage
-                src={concern.first_photo}
-                alt={concern.title}
-                className={cn(
-                  "w-full object-cover",
-                  active ? "min-h-0 flex-1" : "h-36"
-                )}
-              />
-              {(concern.photo_count ?? 1) > 1 ? (
-                <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-bold text-white">
-                  +{(concern.photo_count ?? 1) - 1}
-                </span>
-              ) : null}
-            </button>
-          )}
+          <ReportPhotoPreview
+            originalSrc={concern.first_photo}
+            resolutionSrc={concern.resolution_photo}
+            alt={concern.title}
+            onOpen={() => void openPreview()}
+          />
         </div>
       ) : null}
 
@@ -938,6 +904,7 @@ export function ConcernQueueItem({
         <MediaLightbox
           items={preview.items}
           index={0}
+          simpleCounter
           onClose={() => setPreview(null)}
         />
       ) : null}

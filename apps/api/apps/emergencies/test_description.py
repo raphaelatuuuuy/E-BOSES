@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 from django.test import SimpleTestCase
 
 from .description import description_for_display, fallback_description
-from .description import generate_description
+from .description import generate_description, generate_title, incident_title, title_for_display
 
 
 class EmergencyDescriptionTests(SimpleTestCase):
@@ -95,3 +95,32 @@ class EmergencyDescriptionTests(SimpleTestCase):
         )
 
         self.assertEqual(description_for_display(alert), fallback_description(alert))
+
+    def test_deterministic_title_names_the_type_and_street(self):
+        self.assertEqual(incident_title(self.alert()), "Fire around Champaca Street")
+        self.assertEqual(incident_title(self.alert(canonical_street="")), "Fire emergency")
+        self.assertEqual(incident_title(self.alert(type="")), "Emergency report around Champaca Street")
+        self.assertEqual(incident_title(self.alert(type="", canonical_street="")), "Emergency report")
+
+    def test_title_uses_the_model_when_it_answers_well(self):
+        alert = self.alert()
+        with self.settings(OLLAMA_API_KEY='test-only'), patch('ollama.Client') as client:
+            client.return_value.chat.return_value = {'message': {'content':
+                '{"title": "House fire on Champaca Street"}'}}
+            self.assertEqual(generate_title(alert), "House fire on Champaca Street")
+
+    def test_title_falls_back_when_the_model_is_unavailable_or_off_topic(self):
+        alert = self.alert()
+        with self.settings(OLLAMA_API_KEY=''):
+            self.assertEqual(generate_title(alert), incident_title(alert))
+        with self.settings(OLLAMA_API_KEY='test-only'), patch('ollama.Client') as client:
+            client.return_value.chat.return_value = {'message': {'content':
+                '{"title": "E-BOSES STATUS - E-313 Reply SAFE"}'}}
+            self.assertEqual(generate_title(alert), incident_title(alert))
+
+    def test_display_title_never_leaks_boilerplate(self):
+        alert = self.alert(ai_assist={"title": "E-BOSES STATUS Reply SAFE if safe"})
+        self.assertEqual(title_for_display(alert), incident_title(alert))
+        alert = self.alert(ai_assist={"title": "Vehicle collision near Ayala Malls"})
+        self.assertEqual(title_for_display(alert), "Vehicle collision near Ayala Malls")
+        self.assertEqual(title_for_display(self.alert(ai_assist={})), incident_title(alert))

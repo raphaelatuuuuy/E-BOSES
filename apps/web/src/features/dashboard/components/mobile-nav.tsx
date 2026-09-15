@@ -1,10 +1,19 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import {
+  ActivityIcon,
   ArrowLeftIcon,
+  BoltIcon,
+  FolderOpenIcon,
+  IdCardLanyard,
+  MapIcon,
+  MegaphoneIcon,
   PlusIcon,
+  ShieldCheckIcon,
   TriangleAlert,
   UserCircleIcon,
+  UserCogIcon,
+  UsersIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -16,15 +25,30 @@ import {
   isResponderUser,
   isResidentUser,
 } from "@/features/auth/roles"
-import { getActiveEmergency } from "@/features/dashboard/emergency-api"
+import {
+  getActiveEmergency,
+  getEmergency,
+  listAssignedEmergencies,
+  type EmergencyAlert,
+} from "@/features/dashboard/emergency-api"
+import {
+  getConcern,
+  listManagedConcerns,
+  listUnitConcerns,
+  type Concern,
+  type OfficialOverviewReport,
+} from "@/features/dashboard/api"
 import { getRoleNav, type NavItemConfig } from "@/features/dashboard/lib/navigation"
 import { CAPABILITIES, hasCapability } from "@/features/dashboard/lib/capabilities"
-import { useAssignedDispatches } from "@/features/dashboard/hooks/use-assigned-dispatches"
 import { useOfficialBadges } from "@/features/dashboard/hooks/use-official-badges"
 import { useOfficialUnitScope } from "@/features/dashboard/hooks/use-official-unit"
-import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
+import { isEmergencyActive } from "@/features/dashboard/lib/status-vocabulary"
+import { emergencyTitleText } from "@/features/dashboard/lib/emergency-description"
+import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
+import { OverviewReportsSheet } from "@/features/dashboard/components/resident-overview/reports-sheet"
+import { OverviewReportDetailSheet } from "@/features/dashboard/components/resident-overview/report-detail-sheet"
+import { MobileEmergencyReportDetailPage } from "@/features/dashboard/components/concerns/mobile-report-detail"
 import {
-  OfficialNotificationsDialog,
   OfficialProfileDialog,
 } from "@/features/dashboard/components/official/official-account-dialogs"
 
@@ -36,6 +60,7 @@ const OFFICIAL_CONFIGURATION_CAPABILITIES = [
   CAPABILITIES.configureClassification,
   CAPABILITIES.configureDispatch,
   CAPABILITIES.configureGeography,
+  CAPABILITIES.publishAnnouncements,
 ] as const
 
 function SosTab({ tab = false }: { tab?: boolean }) {
@@ -49,7 +74,7 @@ function SosTab({ tab = false }: { tab?: boolean }) {
         const alert = await getActiveEmergency()
         if (!cancelled) {
           setActiveEmergency(
-            Boolean(alert && ACTIVE_EMERGENCY_STATUSES.has(String(alert.status))),
+            Boolean(alert && isEmergencyActive(alert.status)),
           )
         }
       } catch {
@@ -133,51 +158,236 @@ function SosTab({ tab = false }: { tab?: boolean }) {
   )
 }
 
-function ResponderBar() {
+function toOverviewReport(alert: EmergencyAlert): OfficialOverviewReport {
+  const status = ["resolved", "closed"].includes(alert.status)
+    ? "resolved"
+    : ["cancelled", "false_alarm", "invalid"].includes(alert.status)
+      ? "rejected"
+      : "in_progress"
+  const address = alert.display_location || alert.resolved_location || alert.address || alert.reported_area || alert.barangay
+  return {
+    id: alert.id,
+    record_type: "emergency",
+    emergency_id: alert.id,
+    public_id: alert.public_id,
+    tracking_id: alert.tracking_id || alert.public_id,
+    title: emergencyTitleText(alert),
+    official_title: emergencyTitleText(alert),
+    summary: "",
+    category: "public_safety",
+    category_ref: null,
+    status,
+    severity: "critical",
+    address,
+    barangay: alert.barangay,
+    assigned_department: alert.responding_unit,
+    created_at: alert.created_at,
+  }
+}
+
+function StaffConfigSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const navigate = useNavigate()
+  const { user } = useAuthSession()
+  const caps = user?.capabilities
+  const rows: { key: string; label: string; hint: string; to: string; icon: LucideIcon; cap?: string }[] = [
+    { key: "units", label: "Units", hint: "Desks and committees", to: "/dashboard/configuration/units", icon: UsersIcon, cap: CAPABILITIES.manageUnits },
+    { key: "roles", label: "Permissions", hint: "What each position can do", to: "/dashboard/configuration/roles", icon: ShieldCheckIcon, cap: CAPABILITIES.manageRoles },
+    { key: "users", label: "Users", hint: "Accounts and status", to: "/dashboard/configuration/users", icon: UserCogIcon, cap: CAPABILITIES.manageUsers },
+    { key: "categories", label: "Report categories", hint: "What residents can report", to: "/dashboard/configuration/categories", icon: FolderOpenIcon, cap: CAPABILITIES.manageCategories },
+    { key: "coverage", label: "Coverage area", hint: "Where reports are accepted", to: "/dashboard/configuration/coverage", icon: MapIcon, cap: CAPABILITIES.configureGeography },
+    { key: "verification", label: "ID Documents", hint: "Proof of residency", to: "/dashboard/configuration/id-proof-template", icon: IdCardLanyard, cap: CAPABILITIES.manageUsers },
+    { key: "announcements", label: "Announcements", hint: "Advisories and updates", to: "/dashboard/configuration/announcements", icon: MegaphoneIcon, cap: CAPABILITIES.publishAnnouncements },
+    { key: "monitoring", label: "Monitoring", hint: "System and audit logs", to: "/dashboard/configuration/audit-log", icon: ActivityIcon },
+  ]
+  const visible = rows.filter((row) => hasCapability(caps, row.cap))
+  return (
+    <SheetDialog open={open} onClose={onClose} title="Configuration" description="Set up how your unit routes concerns and updates residents." size="wide" draggable>
+      <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-3">
+        {visible.map((row) => {
+          const Icon = row.icon
+          return (
+            <button
+              key={row.key}
+              type="button"
+              onClick={() => {
+                onClose()
+                navigate(row.to)
+              }}
+              className="flex w-[136px] shrink-0 snap-start flex-col rounded-2xl border border-neutral-200 bg-white p-3 pb-4 text-left transition-colors hover:border-neutral-300 hover:bg-neutral-50"
+            >
+              <span className="flex size-9 items-center justify-center rounded-full bg-brand-navy text-white">
+                <Icon className="size-4" strokeWidth={1.9} aria-hidden />
+              </span>
+              <span className="mt-3 text-[13px] font-bold text-neutral-900">{row.label}</span>
+              <span className="mt-1 text-[11px] leading-snug text-neutral-500">{row.hint}</span>
+            </button>
+          )
+        })}
+      </div>
+    </SheetDialog>
+  )
+}
+
+function StaffBar({ role }: { role: "official" | "responder" }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const navItems = getRoleNav("responder").mobileItems
-  const { activeAlerts } = useAssignedDispatches(true)
+  const { user } = useAuthSession()
+  const isResponder = role === "responder"
+  const navItems = getRoleNav(role).mobileItems.filter((item) => hasCapability(user?.capabilities, item.capability))
   const homeItem = navItems.find((item) => item.key === "overview")
-  const alertsItem = navItems.find((item) => item.key === "alerts-map")
   const feedItem = navItems.find((item) => item.key === "feed")
-  const criticalAlert = activeAlerts[0]
+  const reportsItem = navItems.find((item) => item.key === "concerns")
+  const mapItem = navItems.find((item) => item.key === "operations-map" || item.key === "alerts-map")
+  const caps = user?.capabilities
+  const capsLoaded = Array.isArray(caps) || Boolean(user?.is_superuser)
+  const showConfig = capsLoaded && (caps == null || OFFICIAL_CONFIGURATION_CAPABILITIES.some((cap) => caps?.includes(cap) ?? false))
+  const [configOpen, setConfigOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [reportsOpen, setReportsOpen] = useState(false)
+  const [detailPost, setDetailPost] = useState<Concern | null>(null)
+  const [detailAlert, setDetailAlert] = useState<EmergencyAlert | null>(null)
+  const { selectedUnit, selectedUnitId } = useOfficialUnitScope(user)
+  const { criticalReport } = useOfficialBadges(!isResponder, selectedUnitId, "official")
+  const { criticalReport: responderCritical } = useOfficialBadges(isResponder, undefined, "responder")
+  const critical = isResponder ? responderCritical : criticalReport
+  const unitName = selectedUnit?.short_name || selectedUnit?.name || "All units"
+
+  const loadReports = useCallback(async () => {
+    if (isResponder) return listUnitConcerns()
+    const all = await listManagedConcerns()
+    if (selectedUnitId == null) return all
+    return all.filter((report) => report.assigned_department?.id === selectedUnitId)
+  }, [isResponder, selectedUnitId])
+
+  const loadEmergencies = useCallback(async () => {
+    try {
+      const alerts = await listAssignedEmergencies()
+      return alerts.map(toOverviewReport)
+    } catch {
+      return []
+    }
+  }, [])
+
+  function openCritical(report: OfficialOverviewReport) {
+    if (report.record_type === "emergency" && report.emergency_id != null) {
+      void getEmergency(report.emergency_id)
+        .then((next) => setDetailAlert(next))
+        .catch(() => navigate(`/dashboard/overview?alert=${report.emergency_id}`))
+      return
+    }
+    void getConcern(report.id)
+      .then((next) => setDetailPost(next))
+      .catch(() => navigate(`/dashboard/overview?report=${report.id}`))
+  }
+
+  function handleReportsTap() {
+    if (critical) openCritical(critical)
+    else setReportsOpen(true)
+  }
+
+  const profileItem: NavItemConfig = {
+    key: "profile",
+    label: "Profile",
+    to: "#profile",
+    icon: UserCircleIcon,
+    isActive: () => false,
+  }
 
   return (
-    <div data-mobile-nav className="pointer-events-none fixed right-0 bottom-0 left-0 z-30 lg:hidden">
-      <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
-        <nav
-          aria-label="Primary"
-          className="pointer-events-auto flex w-full max-w-md items-center justify-around gap-1 rounded-[22px] border border-neutral-200 bg-white px-2 py-2.5 shadow-[0_10px_32px_rgba(15,23,42,0.14)]"
-        >
-          {homeItem ? (
-            <LabeledMobileTab
-              item={homeItem}
-              active={homeItem.isActive(location.pathname)}
-            />
-          ) : null}
-          {alertsItem ? (
-            <CentralAlertTab
-              item={alertsItem}
-              active={alertsItem.isActive(location.pathname)}
-              critical={Boolean(criticalAlert)}
-              criticalLabel={
-                criticalAlert
-                  ? `Critical alert: ${criticalAlert.display_description || criticalAlert.type}`
-                  : undefined
-              }
-              onClick={() => navigate("/dashboard/alerts-map")}
-            />
-          ) : null}
-          {feedItem ? (
-            <LabeledMobileTab
-              item={feedItem}
-              active={feedItem.isActive(location.pathname)}
-            />
-          ) : null}
-        </nav>
+    <>
+      <div data-mobile-nav className="pointer-events-none fixed right-0 bottom-0 left-0 z-30 lg:hidden">
+        <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
+          <nav
+            aria-label="Primary"
+            className="pointer-events-auto flex w-full max-w-md items-center justify-around gap-1 rounded-[22px] border border-neutral-200 bg-white px-2 py-2.5 shadow-[0_10px_32px_rgba(15,23,42,0.14)]"
+          >
+            {homeItem ? (
+              <LabeledMobileTab
+                item={homeItem}
+                active={homeItem.isActive(location.pathname)}
+              />
+            ) : null}
+            {feedItem ? (
+              <LabeledMobileTab
+                item={feedItem}
+                active={feedItem.isActive(location.pathname)}
+              />
+            ) : null}
+            {reportsItem ? (
+              <CentralAlertTab
+                item={reportsItem}
+                active={reportsItem.isActive(location.pathname)}
+                critical={Boolean(critical)}
+                criticalLabel={critical ? `Critical report: ${critical.title}` : undefined}
+                onClick={handleReportsTap}
+                keepIcon
+              />
+            ) : null}
+            {mapItem ? (
+              <LabeledMobileTab
+                item={mapItem}
+                active={mapItem.isActive(location.pathname)}
+              />
+            ) : null}
+            {capsLoaded && showConfig ? (
+              <LabeledMobileTab
+                item={{ key: "config", label: "Config", to: "/dashboard/configuration", icon: BoltIcon, isActive: (p) => p.startsWith("/dashboard/configuration") }}
+                active={location.pathname.startsWith("/dashboard/configuration")}
+                onClick={() => setConfigOpen(true)}
+              />
+            ) : capsLoaded ? (
+              <LabeledMobileTab
+                item={profileItem}
+                active={false}
+                onClick={() => {
+                  if (isResponder) navigate("/dashboard/responders/profile")
+                  else setProfileOpen(true)
+                }}
+              />
+            ) : null}
+          </nav>
+        </div>
       </div>
-    </div>
+      <StaffConfigSheet open={configOpen} onClose={() => setConfigOpen(false)} />
+      <OverviewReportsSheet
+        open={reportsOpen}
+        onClose={() => setReportsOpen(false)}
+        onSelectReport={(post) => {
+          setReportsOpen(false)
+          setDetailPost(post)
+        }}
+        onOpenEmergency={(report) => {
+          setReportsOpen(false)
+          openCritical(report)
+        }}
+        loadReports={loadReports}
+        loadEmergencies={loadEmergencies}
+        title={isResponder ? "All reports" : selectedUnitId == null ? "All reports" : `${unitName} reports`}
+        description={isResponder ? "Every report assigned to your unit." : selectedUnitId == null ? "Every report across your units." : `Every report assigned to ${unitName}.`}
+      />
+      <OverviewReportDetailSheet
+        post={detailPost}
+        audience="official"
+        onClose={() => setDetailPost(null)}
+        onUpdated={(next) => setDetailPost(next)}
+      />
+      {detailAlert ? (
+        <MobileEmergencyReportDetailPage
+          alert={detailAlert}
+          onBack={() => setDetailAlert(null)}
+          onRefresh={async () => {
+            const next = await getEmergency(detailAlert.id)
+            setDetailAlert(next)
+          }}
+          audience={isResponder ? "responder" : "official"}
+          viewerId={user?.id ?? null}
+          onChanged={(next) => setDetailAlert(next)}
+        />
+      ) : null}
+      {!isResponder ? (
+        <OfficialProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
+      ) : null}
+    </>
   )
 }
 
@@ -251,14 +461,16 @@ function CentralAlertTab({
   critical,
   criticalLabel,
   onClick,
+  keepIcon = false,
 }: {
   item: NavItemConfig
   active: boolean
   critical: boolean
   criticalLabel?: string
   onClick: () => void
+  keepIcon?: boolean
 }) {
-  const Icon = critical ? TriangleAlert : item.icon
+  const Icon = critical && !keepIcon ? TriangleAlert : item.icon
   const label = critical
     ? criticalLabel ?? `Critical report: ${item.label}`
     : item.label
@@ -474,28 +686,20 @@ export function MobileNav() {
   const navigate = useNavigate()
   const { user } = useAuthSession()
   const [moreOpen, setMoreOpen] = useState(false)
-  const [officialProfileOpen, setOfficialProfileOpen] = useState(false)
-  const [officialNotificationsOpen, setOfficialNotificationsOpen] = useState(false)
 
   const isResponderRole = isResponderUser(user)
   const isOfficialRole = isOfficialUser(user)
   const isResident = isResidentUser(user)
+  const isStaff = isResponderRole || isOfficialRole
 
   const nav = getRoleNav(isResponderRole ? "responder" : isOfficialRole ? "official" : "resident")
   const navItems = nav.mobileItems.filter((item) => hasCapability(user?.capabilities, item.capability))
   const more = nav.more
   const moreItems = more?.items.filter((item) => hasCapability(user?.capabilities, item.capability)) ?? []
   const moreActive = more ? more.isActive(location.pathname) : false
-  const capabilities = user?.capabilities
-  const hasConfigurationAccess =
-    capabilities == null ||
-    OFFICIAL_CONFIGURATION_CAPABILITIES.some((capability) => capabilities.includes(capability))
 
-  const { selectedUnitId } = useOfficialUnitScope(user)
-  const { criticalReport } = useOfficialBadges(isOfficialRole, selectedUnitId)
-
-  if (isResponderRole) {
-    return <ResponderBar />
+  if (isStaff) {
+    return <StaffBar role={isResponderRole ? "responder" : "official"} />
   }
 
   if (
@@ -525,117 +729,6 @@ export function MobileNav() {
 
   if (isResident) {
     return <ResidentBar />
-  }
-
-  if (isOfficialRole) {
-    const homeItem = navItems.find((item) => item.key === "overview")
-    const feedItem = navItems.find((item) => item.key === "feed")
-    const alertsItem = navItems.find((item) => item.key === "operations-map")
-    const announceItem = navItems.find((item) => item.key === "community")
-    const notificationItem = nav.account?.find((item) => item.key === "notifications")
-    const profileItem: NavItemConfig = {
-      key: "profile",
-      label: "Profile",
-      to: "#profile",
-      icon: UserCircleIcon,
-      isActive: () => false,
-    }
-    const MoreIcon = more?.icon
-    const usePersonalMobileNav = !announceItem && !hasConfigurationAccess
-
-    return (
-      <>
-        <div data-mobile-nav className="pointer-events-none fixed right-0 bottom-0 left-0 z-30 lg:hidden">
-          <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
-            <nav
-              className="pointer-events-auto flex w-full max-w-md items-center justify-around gap-1 rounded-[22px] border border-neutral-200 bg-white px-2 py-2.5 shadow-[0_10px_32px_rgba(15,23,42,0.14)]"
-              aria-label="Primary"
-            >
-              {homeItem ? (
-                <LabeledMobileTab
-                  item={homeItem}
-                  active={homeItem.isActive(location.pathname)}
-                />
-              ) : null}
-              {feedItem ? (
-                <LabeledMobileTab
-                  item={feedItem}
-                  active={feedItem.isActive(location.pathname)}
-                />
-              ) : null}
-              {alertsItem ? (
-                <CentralAlertTab
-                  item={alertsItem}
-                  active={alertsItem.isActive(location.pathname)}
-                  critical={Boolean(criticalReport)}
-                  criticalLabel={
-                    criticalReport
-                      ? `Critical report: ${criticalReport.title}`
-                      : undefined
-                  }
-                  onClick={() => navigate("/dashboard/alerts-map")}
-                />
-              ) : null}
-              {announceItem && !usePersonalMobileNav ? (
-                <LabeledMobileTab
-                  item={announceItem}
-                  active={announceItem.isActive(location.pathname)}
-                />
-              ) : null}
-              {usePersonalMobileNav && notificationItem ? (
-                <LabeledMobileTab
-                  item={notificationItem}
-                  active={notificationItem.isActive(location.pathname)}
-                  onClick={() => setOfficialNotificationsOpen(true)}
-                />
-              ) : null}
-              {usePersonalMobileNav ? (
-                <LabeledMobileTab
-                  item={profileItem}
-                  active={false}
-                  onClick={() => setOfficialProfileOpen(true)}
-                />
-              ) : null}
-              {!usePersonalMobileNav && more && MoreIcon && hasConfigurationAccess ? (
-                <button
-                  type="button"
-                  onClick={() => navigate("/dashboard/configuration")}
-                  aria-current={moreActive ? "page" : undefined}
-                  aria-label={more.label}
-                  className={cn(
-                    "flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2",
-                    moreActive
-                      ? "text-brand-orange"
-                      : "text-neutral-400 hover:text-neutral-700",
-                  )}
-                >
-                  <MoreIcon
-                    className="size-6 shrink-0"
-                    strokeWidth={moreActive ? 2.4 : 1.8}
-                    aria-hidden="true"
-                  />
-                  <span className="text-[11px] leading-none font-bold">
-                    {more.label}
-                  </span>
-                </button>
-              ) : null}
-            </nav>
-          </div>
-        </div>
-        {usePersonalMobileNav ? (
-          <>
-            <OfficialProfileDialog
-              open={officialProfileOpen}
-              onOpenChange={setOfficialProfileOpen}
-            />
-            <OfficialNotificationsDialog
-              open={officialNotificationsOpen}
-              onOpenChange={setOfficialNotificationsOpen}
-            />
-          </>
-        ) : null}
-      </>
-    )
   }
 
   return (

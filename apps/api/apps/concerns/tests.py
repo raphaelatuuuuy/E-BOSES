@@ -658,6 +658,105 @@ class ResidentDashboardAPITests(APITestCase):
         item = next(entry for entry in response.data if entry["id"] == concern.pk)
         self.assertEqual(item["ai_assessment"]["status"], ConcernAiAssessment.Status.NOT_CONFIGURED)
 
+    def test_feed_scopes_staff_to_their_unit_while_residents_see_all(self):
+        User = get_user_model()
+        official = User.objects.create_user(
+            email="unit-official@example.com",
+            phone_number="+639100000401",
+            password="pass",
+            role=User.Role.BARANGAY_OFFICIAL,
+            status=User.Status.VERIFIED,
+        )
+        home_department = grant_position(official).department
+        community = home_department.community
+        other_department = Department.objects.create(
+            community=community,
+            name="Other Unit",
+            code="other-unit",
+        )
+        home_category = ConcernCategory.objects.create(
+            community=community,
+            name="Home Category",
+            code="home-category",
+            department=home_department,
+        )
+        base = {
+            "reporter": self.other,
+            "community": community,
+            "visibility": Concern.Visibility.COMMUNITY,
+            "validation_status": Concern.ValidationStatus.ACCEPTED,
+            "status": Concern.Status.SUBMITTED,
+        }
+        home_concern = Concern.objects.create(
+            **base,
+            title="Home unit concern",
+            description="Handled by the official home unit.",
+            assigned_department=home_department,
+        )
+        other_concern = Concern.objects.create(
+            **base,
+            title="Other unit concern",
+            description="Handled by another unit.",
+            assigned_department=other_department,
+        )
+        fallback_concern = Concern.objects.create(
+            **base,
+            title="Untriaged home concern",
+            description="Not yet assigned but categorized under the home unit.",
+            category_ref=home_category,
+        )
+
+        self.client.force_authenticate(official)
+        staff_response = self.client.get("/api/concerns/feed/?scope=all")
+
+        self.assertEqual(staff_response.status_code, status.HTTP_200_OK)
+        staff_ids = {item["id"] for item in staff_response.data}
+        self.assertIn(home_concern.pk, staff_ids)
+        self.assertIn(fallback_concern.pk, staff_ids)
+        self.assertNotIn(other_concern.pk, staff_ids)
+
+        self.client.force_authenticate(self.resident)
+        resident_response = self.client.get("/api/concerns/feed/?scope=all")
+
+        self.assertEqual(resident_response.status_code, status.HTTP_200_OK)
+        resident_ids = {item["id"] for item in resident_response.data}
+        self.assertTrue(
+            {home_concern.pk, other_concern.pk, fallback_concern.pk}
+            <= resident_ids
+        )
+
+    def test_unit_scope_falls_back_to_legacy_responder_unit(self):
+        User = get_user_model()
+        responder = User.objects.create_user(
+            email="legacy-responder@example.com",
+            phone_number="+639100000402",
+            password="pass",
+            role=User.Role.FIRST_RESPONDER,
+            status=User.Status.VERIFIED,
+            responder_unit=User.ResponderUnit.BDRRMO,
+        )
+        department = Department.objects.get(
+            community=self.community, code="bdrrmo"
+        )
+        concern = Concern.objects.create(
+            reporter=self.other,
+            community=self.community,
+            title="Legacy unit concern",
+            description="Handled by the legacy unit department.",
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+            status=Concern.Status.SUBMITTED,
+            assigned_department=department,
+        )
+
+        self.client.force_authenticate(responder)
+        response = self.client.get("/api/concerns/assigned/?scope=unit")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(
+            concern.pk, [item["id"] for item in response.data["results"]]
+        )
+
     def test_non_resident_roles_cannot_create_report(self):
         User = get_user_model()
         for role in [User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER]:
@@ -853,7 +952,7 @@ class ResidentDashboardAPITests(APITestCase):
             concern = Concern.objects.get(pk=concern_id)
             concern.validation_status = Concern.ValidationStatus.REJECTED
             concern.status = Concern.Status.REJECTED
-            concern.validation_summary = "Please pin the exact area where the issue is found and upload a matching photo."
+            concern.validation_summary = "Please pin the exact area where the issue is found."
             concern.save(update_fields=["validation_status", "status", "validation_summary"])
 
         with patch("apps.concerns.ai.pipeline.process_concern_ai", side_effect=reject):
@@ -876,7 +975,7 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
             response.data["description"][0],
-            "Please pin the exact area where the issue is found and upload a matching photo.",
+            "Please pin the exact area where the issue is found.",
         )
         self.assertFalse(Concern.objects.filter(title="Wrong location photo").exists())
         self.assertFalse(ConcernMedia.objects.filter(original_filename="rejected-validation.png").exists())

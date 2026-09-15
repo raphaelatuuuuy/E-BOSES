@@ -12,6 +12,7 @@ class EmergencySmsContractTests(SimpleTestCase):
                 "unit_dispatch",
                 "resident_confirmation",
                 "resident_en_route",
+                "resident_nearby",
                 "resident_arrived",
                 "resident_resolved",
                 "resident_exception",

@@ -38,3 +38,43 @@ export function ResolvedPhoto({
     </button>
   )
 }
+
+export function ReportPhotoPreview({
+  originalSrc,
+  resolutionSrc,
+  alt,
+  onOpen,
+}: {
+  originalSrc?: string | null
+  resolutionSrc?: string | null
+  alt: string
+  onOpen: () => void
+}) {
+  if (!originalSrc && !resolutionSrc) return null
+  return (
+    <div className="overflow-hidden rounded-2xl border border-neutral-200">
+      {resolutionSrc ? (
+        <ResolvedPhoto
+          originalSrc={originalSrc}
+          resolutionSrc={resolutionSrc}
+          alt={alt}
+          imageClassName="h-auto w-full object-contain"
+          onOpen={onOpen}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label="Preview photo"
+          className="block w-full cursor-zoom-in"
+        >
+          <AuthenticatedMediaImage
+            src={originalSrc ?? ""}
+            alt={alt}
+            className="h-auto w-full object-contain"
+          />
+        </button>
+      )}
+    </div>
+  )
+}

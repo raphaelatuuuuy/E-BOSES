@@ -64,13 +64,14 @@ def enqueue_emergency_description(alert_id: int):
 
 @shared_task(time_limit=180, soft_time_limit=150)
 def generate_emergency_description_task(alert_id: int):
-    from .description import generate_description
+    from .description import generate_description, generate_title
     from .models import EmergencyAlert
 
     alert = EmergencyAlert.objects.filter(pk=alert_id).prefetch_related("media").first()
     if alert is None:
         return {"alert_id": alert_id, "status": "missing"}
     description = generate_description(alert)
+    title = generate_title(alert)
     from django.db import transaction
 
     with transaction.atomic():
@@ -78,7 +79,7 @@ def generate_emergency_description_task(alert_id: int):
         if alert is None:
             return {"alert_id": alert_id, "status": "missing"}
         assist = dict(alert.ai_assist or {})
-        assist.update({"description": description, "description_status": "ready"})
+        assist.update({"description": description, "description_status": "ready", "title": title, "title_status": "ready"})
         alert.ai_assist = assist
         alert.save(update_fields=["ai_assist", "updated_at"])
     try:

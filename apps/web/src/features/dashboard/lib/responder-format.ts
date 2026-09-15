@@ -164,6 +164,19 @@ export function formatDayTime(value: string | null | undefined) {
   }).format(new Date(value))
 }
 
+export function formatResolvedOn(value: string | null | undefined) {
+  if (!value) return ""
+  const day = new Intl.DateTimeFormat("en", {
+    month: "long",
+    day: "numeric",
+  }).format(new Date(value))
+  const time = new Intl.DateTimeFormat("en", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value))
+  return `${day} at ${time}`
+}
+
 export function isSettled(status: string) {
   return SETTLED_EMERGENCY_STATUSES.has(status)
 }

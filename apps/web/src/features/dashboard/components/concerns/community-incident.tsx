@@ -7,7 +7,7 @@ import type {
   Concern,
 } from "@/features/dashboard/api"
 import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
-import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
 import { concernCategoryLabel } from "@/features/dashboard/components/concerns/concern-display"
 import { toStatusView } from "@/features/dashboard/components/record/status"
 import { StateMarker } from "@/components/ui/state-marker"
@@ -58,40 +58,6 @@ function VisibilityFact({ incident }: { incident: CommunityIncident }) {
           : undefined
       }
     />
-  )
-}
-
-function PhotoTile({
-  photo,
-  onOpen,
-}: {
-  photo: CommunityIncidentPhoto
-  onOpen: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="relative overflow-hidden rounded-control border border-card-line bg-canvas"
-      title={`${photo.reporter_name} · ${photo.report_tracking_id}`}
-    >
-      {photo.mime_type.startsWith("image/") ? (
-        <AuthenticatedMediaImage
-          src={photo.preview_url}
-          alt={photo.original_filename}
-          className="h-36 w-full object-cover"
-        />
-      ) : (
-        <span className="flex h-36 items-center justify-center text-label text-muted-foreground">
-          File
-        </span>
-      )}
-      {photo.relevance_state === "unrelated" ? (
-        <span className="absolute bottom-1.5 left-1.5 rounded-pill bg-severity-critical-surface px-1.5 py-0.5 text-[10px] font-semibold text-severity-critical-ink">
-          Unrelated
-        </span>
-      ) : null}
-    </button>
   )
 }
 
@@ -278,15 +244,26 @@ export function CommunityIncidentDetails({
       >
         {photos.length ? (
           <>
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4">
-              {photos.map((photo, index) => (
-                <PhotoTile
-                  key={photo.id}
-                  photo={photo}
-                  onOpen={() => onOpenPhoto(incident.photos, index)}
+            {(() => {
+              const imageIndex = incident.photos.findIndex((photo) =>
+                photo.mime_type.startsWith("image/")
+              )
+              const displayIndex = imageIndex >= 0 ? imageIndex : 0
+              const display = incident.photos[displayIndex]
+              if (!display) return null
+              if (!display.mime_type.startsWith("image/")) {
+                return (
+                  <p className="text-body text-muted-foreground">File</p>
+                )
+              }
+              return (
+                <ReportPhotoPreview
+                  originalSrc={display.preview_url}
+                  alt={display.original_filename}
+                  onOpen={() => onOpenPhoto(incident.photos, displayIndex)}
                 />
-              ))}
-            </div>
+              )
+            })()}
             <button
               type="button"
               onClick={onViewAllPhotos}
@@ -312,44 +289,34 @@ export function CommunityIncidentDetails({
             </span>
           }
         >
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4">
-            {resolutionEvidence.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() =>
-                  onOpenProof(
-                    resolutionEvidence.map((entry) => ({
-                      src: entry.preview_url || entry.raw_url,
-                      filename: entry.original_filename,
-                      kind: "image" as const,
-                      eyebrow:
-                        streetOnly(incident.address || report.address) ||
-                        undefined,
-                      postedLabel: formatMoment(report.created_at),
-                      heading:
-                        (
-                          report.notification_subject ||
-                          report.title ||
-                          ""
-                        ).trim() || undefined,
-                      badge: "Resolved case",
-                      blurb: (report.description || "").trim() || undefined,
-                    })),
-                    resolutionEvidence.indexOf(item)
-                  )
-                }
-                className="overflow-hidden rounded-control border border-card-line bg-canvas text-left"
-                title={item.note}
-              >
-                <AuthenticatedMediaImage
-                  src={item.preview_url || item.raw_url}
-                  alt={item.original_filename}
-                  className="h-36 w-full object-cover"
-                />
-              </button>
-            ))}
-          </div>
+          <ReportPhotoPreview
+            resolutionSrc={
+              resolutionEvidence[0].preview_url || resolutionEvidence[0].raw_url
+            }
+            alt={resolutionEvidence[0].original_filename}
+            onOpen={() =>
+              onOpenProof(
+                resolutionEvidence.map((entry) => ({
+                  src: entry.preview_url || entry.raw_url,
+                  filename: entry.original_filename,
+                  kind: "image" as const,
+                  eyebrow:
+                    streetOnly(incident.address || report.address) ||
+                    undefined,
+                  postedLabel: formatMoment(report.created_at),
+                  heading:
+                    (
+                      report.notification_subject ||
+                      report.title ||
+                      ""
+                    ).trim() || undefined,
+                  badge: "Resolved case",
+                  blurb: (report.description || "").trim() || undefined,
+                })),
+                0
+              )
+            }
+          />
           {resolutionEvidence[0]?.note ? (
             <p className="mt-2.5 text-body leading-6 text-muted-foreground">
               {resolutionEvidence[0].note}

@@ -86,7 +86,7 @@ def notify_reporter_ack(alert, *, unit_name="", assigned=True):
 
 
 def notify_reporter_progress(alert, status):
-    if status == "routed":
+    if status in {"routed", "acknowledged", "in_progress", "backup_assigned"}:
         return
     body = templates.resident_progress(alert, status)
     if body:

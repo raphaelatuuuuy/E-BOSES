@@ -2433,6 +2433,7 @@ class EmergencyAssignmentStatusView(APIView):
             alert.status_version += 1
             alert.save(update_fields=["status", "status_version", "resolved_at", "updated_at"] if new_status == EmergencyResponderAssignment.Status.RESOLVED else ["status", "status_version", "updated_at"])
             create_status_event(alert, alert.status, request.user, note)
+            notify_emergency_status(alert, type=alert.status, body=note or f"Responder update: {alert.status}.")
         log_assignment_action(alert=alert, assignment=assignment, responder=assignment.responder, actor=request.user, action="status_changed", old_status=old_status, new_status=new_status, note=note)
         return Response(EmergencyResponderAssignmentSerializer(assignment, context={"request": request}).data)
 
@@ -2608,6 +2609,36 @@ class EmergencyRouteView(APIView):
             )
             if route.get("status") != "ok" or not route.get("geometry"):
                 return Response(status=status.HTTP_204_NO_CONTENT)
+            assignment = (
+                alert.assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES)
+                .order_by("assigned_at", "id")
+                .first()
+            )
+            if assignment is not None and alert.status in ACTIVE_STATUSES:
+                stored, created = EmergencyAssignmentRoute.objects.get_or_create(
+                    assignment=assignment
+                )
+                if stored.geometry != route.get("geometry") or stored.status != EmergencyAssignmentRoute.Status.OK:
+                    stored.status = EmergencyAssignmentRoute.Status.OK
+                    stored.profile = profile
+                    stored.distance_meters = route.get("distance_meters")
+                    stored.eta_seconds = route.get("eta_seconds")
+                    stored.geometry = route.get("geometry")
+                    stored.summary = route.get("summary") or ""
+                    stored.origin_snap = route.get("origin_snap")
+                    stored.destination_snap = route.get("destination_snap")
+                    stored.approach = route.get("approach")
+                    stored.steps = route.get("steps") or []
+                    stored.error_code = ""
+                    stored.generated_at = timezone.now()
+                    if not created:
+                        stored.route_revision += 1
+                    stored.save()
+                    alert.updated_at = timezone.now()
+                    alert.save(update_fields=["updated_at"])
+                    transaction.on_commit(
+                        lambda: broadcast_emergency_update(alert)
+                    )
             payload = {
                 **route,
                 "alert_id": alert.pk,

@@ -361,7 +361,11 @@ export function Sidebar() {
   const navItems = nav.items.filter((item) =>
     hasCapability(user?.capabilities, item.capability)
   )
-  const { badges } = useOfficialBadges(isOfficialRole)
+  const { badges } = useOfficialBadges(
+    isOfficialRole || isResponderRole,
+    undefined,
+    isResponderRole ? "responder" : "official",
+  )
 
   // Unread notifications ride on the account block.
   const { unreadCount } = useNotifications()

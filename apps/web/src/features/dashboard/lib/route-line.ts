@@ -2,13 +2,13 @@ import type leaflet from "leaflet"
 
 /**
  * One definition of how a route is drawn, everywhere: a fat solid line with a
- * darker casing under it, rounded at every cap and join. Blue while a
+ * darker casing under it, rounded at every cap and join. Orange while a
  * responder is travelling to an open incident, grey once it is settled.
- * Nothing on a route moves.
+ * Live routes carry a moving highlight.
  *
  * Where an endpoint sits off the road network the route is completed with a
- * grey `approach` walked on footways and a dashed `connector` for whatever is
- * left. Both ends get a connector, on every profile.
+ * blue `approach` and a blue dashed `connector` for whatever is left. Both
+ * ends get a connector, on every profile.
  */
 
 const DEFAULT_WEIGHT = 7
@@ -44,7 +44,7 @@ export function routeLineStyle({
   dim = false,
 }: RouteLineOptions): leaflet.PolylineOptions {
   return {
-    color: live ? "var(--color-map-responder)" : "#9ca3af",
+    color: live ? "#ff6a1a" : "#9ca3af",
     weight,
     opacity: (live ? 1 : 0.5) * (dim ? DIM_FACTOR : 1),
     lineCap: "round",
@@ -53,31 +53,54 @@ export function routeLineStyle({
   }
 }
 
-export function approachLineStyle(dim = false): leaflet.PolylineOptions {
+export function routeFlowStyle({
+  weight = DEFAULT_WEIGHT,
+  dim = false,
+}: RouteLineOptions): leaflet.PolylineOptions {
   return {
-    color: "#9ca3af",
-    weight: 4,
-    opacity: dim ? 0.85 * DIM_FACTOR : 0.85,
-    dashArray: "1 8",
+    color: "#ffffff",
+    weight: Math.max(2, Math.round(weight / 3)),
+    opacity: dim ? 0.9 * DIM_FACTOR : 0.9,
+    dashArray: "2 14",
     lineCap: "round",
     lineJoin: "round",
     interactive: false,
+    className: "eboses-route-flow",
   }
 }
 
-export function connectorLineStyle(dim = false): leaflet.PolylineOptions {
+export function approachLineStyle(
+  dim = false,
+  live = false
+): leaflet.PolylineOptions {
   return {
-    color: "#9ca3af",
+    color: live ? "#2563eb" : "#9ca3af",
+    weight: 4,
+    opacity: dim ? 0.85 * DIM_FACTOR : 0.85,
+    dashArray: live ? "10 8" : "1 8",
+    lineCap: "round",
+    lineJoin: "round",
+    interactive: false,
+    className: live && !dim ? "eboses-live-route" : undefined,
+  }
+}
+
+export function connectorLineStyle(
+  dim = false,
+  live = false
+): leaflet.PolylineOptions {
+  return {
+    color: live ? "#2563eb" : "#9ca3af",
     weight: 3,
     opacity: dim ? 0.9 * DIM_FACTOR : 0.9,
-    dashArray: "1 7",
+    dashArray: live ? "10 8" : "1 7",
     lineCap: "round",
     interactive: false,
+    className: live && !dim ? "eboses-live-route" : undefined,
   }
 }
 
-export function latLngsFromGeoJson(geometry: unknown): leaflet.LatLngTuple[] {
-  if (!geometry || typeof geometry !== "object") return []
+export function latLngsFromGeoJson(geometry: unknown): leaflet.LatLngTuple[] {  if (!geometry || typeof geometry !== "object") return []
   const coordinates = (geometry as { coordinates?: unknown }).coordinates
   if (!Array.isArray(coordinates)) return []
   return coordinates.flatMap((point) => {
@@ -103,6 +126,18 @@ export interface RouteGeometrySource {
     meters: number | null
   } | null
   approach?: { geometry?: unknown } | null
+}
+
+export function routeStartPoint(
+  route: RouteGeometrySource | null | undefined
+): leaflet.LatLngTuple | null {
+  const snap = route?.origin_snap
+  if (snap) {
+    const lat = Number(snap.latitude)
+    const lng = Number(snap.longitude)
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return [lat, lng]
+  }
+  return latLngsFromGeoJson(route?.geometry)[0] ?? null
 }
 
 export interface RouteRenderGeometry {
@@ -187,15 +222,16 @@ export function drawRoute(
   if (road.length > 1) {
     layers.push(L.polyline(road, routeCasingStyle({ live, weight, dim })))
     layers.push(L.polyline(road, routeLineStyle({ live, weight, dim })))
+    if (live && !dim) layers.push(L.polyline(road, routeFlowStyle({ live, weight, dim })))
     points.push(...road)
   }
   if (approach && approach.length > 1) {
-    layers.push(L.polyline(approach, approachLineStyle(dim)))
+    layers.push(L.polyline(approach, approachLineStyle(dim, live)))
     points.push(...approach)
   }
   for (const connector of connectors ?? []) {
     if (connector.length < 2) continue
-    layers.push(L.polyline(connector, connectorLineStyle(dim)))
+    layers.push(L.polyline(connector, connectorLineStyle(dim, live)))
     points.push(...connector)
   }
   if (!layers.length) return null

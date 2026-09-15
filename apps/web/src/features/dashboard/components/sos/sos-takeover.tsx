@@ -47,7 +47,7 @@ export function SosTakeover({
       aria-label={label}
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
-      className={cn("fixed inset-0 z-[400] flex flex-col", className)}
+      className={cn("fixed inset-0 z-[1100] flex flex-col", className)}
     >
       {children}
     </div>,

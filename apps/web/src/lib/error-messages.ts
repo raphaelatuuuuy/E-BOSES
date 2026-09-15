@@ -41,7 +41,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
 
   // Report media validation
   automated_photo_mismatch:
-    "The photo does not show the issue described in the report. Please submit a photo that clearly shows the reported issue.",
+    "Please submit a photo that clearly shows the reported issue.",
 
   // Identity verification
   ocr_name_mismatch:

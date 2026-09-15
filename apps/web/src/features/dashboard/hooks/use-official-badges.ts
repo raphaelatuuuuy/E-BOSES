@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 
 import {
   getOfficialDashboardSummary,
+  getResponderDashboardSummary,
   type OfficialOverviewReport,
   type OfficialRoleSummary,
 } from "@/features/dashboard/api"
@@ -23,6 +24,7 @@ export interface OfficialBadgeState {
 export function useOfficialBadges(
   enabled: boolean,
   unitId?: number | null,
+  role: "official" | "responder" = "official",
 ): OfficialBadgeState {
   const [badges, setBadges] = useState<Record<string, number>>({})
   const [criticalReport, setCriticalReport] = useState<OfficialOverviewReport | null>(null)
@@ -34,6 +36,14 @@ export function useOfficialBadges(
 
     async function load() {
       try {
+        if (role === "responder") {
+          const summary = await getResponderDashboardSummary()
+          if (cancelled) return
+          setBadges({ emergencies: summary.assigned_active_emergencies })
+          setCriticalReport(summary.critical_report ?? null)
+          setCommunityCenter(null)
+          return
+        }
         const summary = await getOfficialDashboardSummary(unitId)
         if (cancelled) return
         setBadges({
@@ -68,7 +78,7 @@ export function useOfficialBadges(
       window.removeEventListener("eboses:concern-updated", refresh)
       window.removeEventListener("eboses:emergency-updated", refresh)
     }
-  }, [enabled, unitId])
+  }, [enabled, unitId, role])
 
   return { badges, criticalReport, communityCenter }
 }

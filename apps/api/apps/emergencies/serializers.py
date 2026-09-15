@@ -558,6 +558,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
     # actually working this incident and writes an audit row. Before this, any
     # viewer of an alert received the resident's complete mobile number.
     reporter_phone = serializers.SerializerMethodField()
+    tracking_id = serializers.SerializerMethodField()
     display_location = serializers.SerializerMethodField()
     media = EmergencyMediaSerializer(many=True, read_only=True)
     assignments = EmergencyResponderAssignmentSerializer(many=True, read_only=True)
@@ -575,6 +576,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
     response_duration_seconds = serializers.SerializerMethodField()
     disposition_reason = serializers.SerializerMethodField()
     display_description = serializers.SerializerMethodField()
+    display_title = serializers.SerializerMethodField()
     resolution_evidence = EmergencyResolutionEvidenceSerializer(many=True, read_only=True)
 
     class Meta:
@@ -582,6 +584,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "public_id",
+            "tracking_id",
             "community",
             "access_mode",
             "can_interact",
@@ -590,6 +593,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
             "type",
             "note",
             "display_description",
+            "display_title",
             "resolution_evidence",
             "status",
             "barangay",
@@ -641,6 +645,9 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
 
         number = (obj.reporter_contact_number or "").strip() or getattr(obj.reporter, "phone_number", "")
         return mask_ph_mobile(number) if number else ""
+
+    def get_tracking_id(self, obj):
+        return obj.tracking_id
 
     def get_community(self, obj):
         from apps.community_access import community_summary
@@ -752,6 +759,11 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         from .description import description_for_display
 
         return description_for_display(obj)
+
+    def get_display_title(self, obj):
+        from .description import title_for_display
+
+        return title_for_display(obj)
 
     def _active_assignments(self, obj):
         # Python-filter over the prefetched relation: chaining .filter() on

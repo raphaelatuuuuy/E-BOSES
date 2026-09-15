@@ -382,7 +382,7 @@ export function SosWizard({
       listQueuedSosEmergencies().catch(() => []),
       getActiveEmergency().catch(() => null),
     ])
-    if (active) {
+    if (active && isActiveAlert(active)) {
       for (const item of queued) {
         if (item.userId === user?.id) await deleteQueuedSosEmergency(item.id)
       }

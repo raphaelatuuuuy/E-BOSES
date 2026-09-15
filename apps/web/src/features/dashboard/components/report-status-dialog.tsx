@@ -18,7 +18,13 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@/features/dashboard/components/dialog"
-import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
+import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
+import {
+  mediaDisplaySource,
+  toMediaPreviewItem,
+  type MediaPreviewItem,
+} from "@/features/dashboard/lib/authenticated-media"
 import type {
   Concern,
   ConcernStatus,
@@ -307,6 +313,10 @@ export function ReportStatusDialog({
   onTrack?: () => void
 }) {
   const [copied, setCopied] = useState(false)
+  const [evidencePreview, setEvidencePreview] = useState<{
+    items: MediaPreviewItem[]
+    index: number
+  } | null>(null)
   const resolvedMode = mode ?? statusModeFromReport(report)
   const config = MODE_CONFIG[resolvedMode]
   const isInProgress =
@@ -476,23 +486,35 @@ export function ReportStatusDialog({
           </div>
         ) : null}
 
-        {resolvedMode === "resolved" &&
-        report.media.some((media) => media.mime_type?.startsWith("image/")) ? (
+        {report.media.some((media) => media.mime_type?.startsWith("image/")) ? (
           <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-4 sm:px-5">
             <p className="text-[12px] font-bold text-neutral-500 sm:text-[13px]">
               Photo evidence
             </p>
-            <div className="mt-3 grid grid-cols-2 gap-2.5">
-              {report.media.map((media) =>
-                media.mime_type?.startsWith("image/") ? (
-                  <AuthenticatedMediaImage
-                    key={media.id}
-                    src={media.preview_url}
-                    alt={media.original_filename}
-                    className="h-32 w-full rounded-xl border border-neutral-200 object-cover"
+            <div className="mt-3">
+              {(() => {
+                const images = report.media.filter((media) =>
+                  media.mime_type?.startsWith("image/")
+                )
+                const first = images[0]
+                if (!first) return null
+                const previewItems = images.map((entry) => ({
+                  ...toMediaPreviewItem(
+                    mediaDisplaySource(entry),
+                    entry.original_filename || "Report evidence",
+                    entry.mime_type,
+                    entry
+                  ),
+                  badge: "Reported issue",
+                }))
+                return (
+                  <ReportPhotoPreview
+                    originalSrc={mediaDisplaySource(first)}
+                    alt={first.original_filename || "Report evidence"}
+                    onOpen={() => setEvidencePreview({ items: previewItems, index: 0 })}
                   />
-                ) : null
-              )}
+                )
+              })()}
             </div>
           </div>
         ) : null}
@@ -538,6 +560,14 @@ export function ReportStatusDialog({
           </div>
         )}
       </DialogFooter>
+      {evidencePreview ? (
+        <MediaLightbox
+          items={evidencePreview.items}
+          index={evidencePreview.index}
+          simpleCounter
+          onClose={() => setEvidencePreview(null)}
+        />
+      ) : null}
     </Dialog>
   )
 }

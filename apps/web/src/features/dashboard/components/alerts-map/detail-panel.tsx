@@ -29,10 +29,8 @@ import {
   ResponderAssignment,
   type AssignableResponder,
 } from "@/features/dashboard/components/emergencies/responder-assignment"
-import {
-  AuthenticatedMediaImage,
-  MediaLightbox,
-} from "@/features/dashboard/components/authenticated-media"
+import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
+import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
 import {
   mediaDisplaySource,
   toMediaPreviewItem,
@@ -283,28 +281,25 @@ export function DetailPanel({
           summaryTone={critical ? "critical" : "default"}
         />
         {concern.preview_url ? (
-          <button
-            type="button"
-            onClick={() =>
+          <ReportPhotoPreview
+            originalSrc={concern.preview_url}
+            alt={`${concern.title} evidence photo`}
+            onOpen={() =>
               setEvidencePreview({
                 items: [
-                  toMediaPreviewItem(
-                    concern.preview_url,
-                    concern.title,
-                    "image/jpeg"
-                  ),
+                  {
+                    ...toMediaPreviewItem(
+                      concern.preview_url,
+                      concern.title,
+                      "image/jpeg"
+                    ),
+                    badge: "Reported issue",
+                  },
                 ],
                 index: 0,
               })
             }
-            className="overflow-hidden rounded-control border border-card-line"
-          >
-            <AuthenticatedMediaImage
-              src={concern.preview_url}
-              alt={`${concern.title} evidence photo`}
-              className="h-32 w-full object-cover"
-            />
-          </button>
+          />
         ) : null}
         <Button
           type="button"
@@ -486,47 +481,47 @@ export function DetailPanel({
     })
 
     if (emergencyMedia.length) {
-      const evidenceItems: MediaPreviewItem[] = emergencyMedia.map((media) =>
-        toMediaPreviewItem(
+      const evidenceItems: MediaPreviewItem[] = emergencyMedia.map((media) => ({
+        ...toMediaPreviewItem(
           mediaDisplaySource(media),
           media.original_filename,
           media.mime_type
-        )
-      )
+        ),
+        badge: "Reported issue",
+      }))
       sections.push({
         key: "emergency-evidence",
         title: "Protected evidence",
         badge: String(emergencyMedia.length),
-        content: (
-          <div className="grid grid-cols-2 gap-2">
-            {emergencyMedia.map((media, mediaIndex) => (
-              <button
-                key={media.id}
-                type="button"
-                onClick={() =>
-                  setEvidencePreview({
-                    items: evidenceItems,
-                    index: mediaIndex,
-                  })
-                }
-                className="overflow-hidden rounded-control border border-card-line bg-canvas text-left"
-              >
-                {media.mime_type.startsWith("image/") ? (
-                  <AuthenticatedMediaImage
-                    src={mediaDisplaySource(media)}
-                    alt={`${media.original_filename} evidence photo`}
-                    className="h-24 w-full object-cover"
-                  />
-                ) : (
-                  <span className="flex h-24 items-center justify-center gap-2 px-2 text-center text-xs font-bold text-brand-navy">
-                    <PlayIcon className="size-4" />
-                    Preview video
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        ),
+        content: (() => {
+          const imageIndex = emergencyMedia.findIndex((media) =>
+            media.mime_type.startsWith("image/")
+          )
+          const displayIndex = imageIndex >= 0 ? imageIndex : 0
+          const display = emergencyMedia[displayIndex]
+          if (!display) return null
+          const openAt = () =>
+            setEvidencePreview({
+              items: evidenceItems,
+              index: displayIndex,
+            })
+          return display.mime_type.startsWith("image/") ? (
+            <ReportPhotoPreview
+              originalSrc={mediaDisplaySource(display)}
+              alt={`${display.original_filename} evidence photo`}
+              onOpen={openAt}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={openAt}
+              className="flex h-24 w-full items-center justify-center gap-2 rounded-2xl border border-neutral-200 bg-white text-[12px] font-semibold text-neutral-700"
+            >
+              <PlayIcon className="size-4" />
+              Preview video
+            </button>
+          )
+        })(),
       })
     }
 
@@ -701,6 +696,7 @@ export function DetailPanel({
         <MediaLightbox
           items={evidencePreview.items}
           index={evidencePreview.index}
+          simpleCounter
           onClose={() => setEvidencePreview(null)}
         />
       ) : null}

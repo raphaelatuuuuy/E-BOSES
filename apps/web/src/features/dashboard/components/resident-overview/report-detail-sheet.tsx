@@ -23,6 +23,7 @@ import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-me
 import {
   ReportDescriptionCard,
   ReportAssignmentFooter,
+  ReportReporterCard,
 } from "@/features/dashboard/components/concerns/report-detail-content"
 
 export function OverviewReportDetailSheet({
@@ -129,6 +130,7 @@ export function OverviewReportDetailSheet({
         <MediaLightbox
           items={proofPreview.items}
           index={proofPreview.index}
+          simpleCounter
           onClose={() => setProofPreview(null)}
         />
       ) : null}
@@ -164,6 +166,7 @@ export function OverviewReportDetailSheet({
         backdropScrim={false}
         backdropInteractive
         className="h-auto max-h-[min(760px,72dvh)] sm:max-h-[min(760px,82vh)]"
+        bodyClassName="pb-3"
         backdrop={
           post ? (
             <ReportLocationMap
@@ -206,15 +209,24 @@ export function OverviewReportDetailSheet({
         }
         footer={
           view === "details" ? (
-            <div className="space-y-3">
-              {report ? (
+            <div className="space-y-1.5">
+              {report && audience === "official" ? (
+                <ReportReporterCard
+                  report={report}
+                  onChat={() => setView("chat")}
+                />
+              ) : report ? (
                 <ReportAssignmentFooter
                   report={report}
                   onChat={() => setView("chat")}
                 />
               ) : null}
               <p className="text-center text-[11px] leading-4 text-neutral-400">
-                Status updates and messages from the barangay will appear here.
+                {audience === "official"
+                  ? report?.is_anonymous === true || report?.reporter?.id === 0
+                    ? "This report was sent anonymously."
+                    : "Contact the resident in case of follow-ups."
+                  : "Status updates and messages from the barangay will appear here."}
               </p>
             </div>
           ) : undefined
@@ -269,15 +281,20 @@ export function OverviewReportDetailSheet({
             canFileAppeal={canFileAppeal}
           />
         ) : (
-          <div className="flex flex-col gap-4 pb-2">
+          <div className="flex flex-col gap-3 pb-1">
             <ReportDescriptionCard
               report={report}
               onMediaPreview={(items, index) => setProofPreview({ items, index })}
             />
             <section>
-              <p className="mb-2 text-[15px] font-bold tracking-tight text-neutral-900">
-                Status
-              </p>
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <p className="text-[17px] font-bold tracking-tight text-neutral-900">
+                  Status
+                </p>
+                <p className="text-[12px] font-normal text-neutral-500">
+                  Track the process
+                </p>
+              </div>
               <ConcernTimeline
                 key={report.id}
                 items={timeline}

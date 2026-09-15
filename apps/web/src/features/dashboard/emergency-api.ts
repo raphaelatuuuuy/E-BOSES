@@ -275,6 +275,7 @@ export interface EmergencyStatusEvent {
 export interface EmergencyAlert {
   id: number
   public_id: string
+  tracking_id: string
   community: CommunitySummary
   access_mode: CommunityAccessMode
   can_interact: boolean
@@ -292,6 +293,8 @@ export interface EmergencyAlert {
   note: string
   /** A concise factual description composed from the emergency report. */
   display_description?: string
+  /** Short LLM-generated incident headline (e.g. "House fire on Champaca Street"). */
+  display_title?: string
   status: EmergencyStatus
   barangay: string
   latitude: string

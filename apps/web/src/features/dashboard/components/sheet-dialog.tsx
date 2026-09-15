@@ -80,7 +80,7 @@ export function SheetDialog({
   onClose: () => void
   /** Shows the back arrow. Omit on a first-step / single-step dialog. */
   onBack?: () => void
-  title: string
+  title: ReactNode
   titleClassName?: string
   description?: ReactNode
   /** Optional centered line shown above the sheet title. */

@@ -675,25 +675,9 @@ def official_report_payload(concern):
 
 def official_emergency_payload(alert):
     """Expose an SOS in the same compact shape as an overview report row."""
-    from apps.emergencies.description import description_for_display
+    from apps.emergencies.description import title_for_display
     from apps.emergencies.views import preferred_departments_for
 
-    location = next(
-        (
-            str(value).strip()
-            for value in (
-                alert.canonical_street,
-                alert.resolved_location,
-                alert.address,
-                alert.reported_area,
-            )
-            if str(value or "").strip()
-        ),
-        "",
-    )
-    title = f"{alert.get_type_display()} emergency"
-    if location:
-        title = f"{title} around {location}"
     departments = preferred_departments_for(alert.type, alert.community)
     unit = departments[0] if departments else None
     return {
@@ -702,9 +686,11 @@ def official_emergency_payload(alert):
         "emergency_id": alert.pk,
         "public_id": str(alert.public_id),
         "tracking_id": f"E-{alert.pk}",
-        "title": title,
-        "official_title": title,
-        "summary": description_for_display(alert),
+        "title": title_for_display(alert),
+        "official_title": title_for_display(alert),
+        # The row header is the generated incident title; the long resident
+        # description stays inside the detail view, never on the overview row.
+        "summary": "",
         "category": "public_safety",
         "category_ref": None,
         "status": (

@@ -3,6 +3,7 @@ import {
   ArrowUpIcon,
   ChevronUpIcon,
   Loader2Icon,
+  MessageCircleIcon,
   MicIcon,
   PaperclipIcon,
   PlayIcon,
@@ -442,20 +443,27 @@ export function EmergencyChatPanel({
             </button>
           </div>
         ) : messages.length === 0 && !loading ? (
-          <p
-            className={cn(
-              "py-6 text-center text-[12px] leading-5",
-              modern
-                ? "text-neutral-400"
-                : isDark
-                  ? "text-white/45"
-                  : "text-subtle-foreground"
-            )}
-          >
-            {modern
-              ? "Chat with your responder here. Status updates land in this thread as they happen."
-              : "Group chat is open. Status updates (en route, nearby, arrived) appear here automatically. Everyone assigned to this alert can read and reply."}
-          </p>
+          <div className="flex flex-col items-center px-1 py-6 text-center">
+            <span className="flex size-12 items-center justify-center rounded-full bg-neutral-100 text-neutral-500">
+              <MessageCircleIcon className="size-5" aria-hidden />
+            </span>
+            <p
+              className={cn(
+                "mt-3 max-w-xs text-[12px] leading-5",
+                modern
+                  ? "text-neutral-400"
+                  : isDark
+                    ? "text-white/45"
+                    : "text-subtle-foreground"
+              )}
+            >
+              {modern
+                ? user?.role === "resident"
+                  ? "Chat with your responder here. Status updates land in this thread as they happen."
+                  : "No conversation yet. Messages with the resident appear here."
+                : "Group chat is open. Status updates (en route, nearby, arrived) appear here automatically. Everyone assigned to this alert can read and reply."}
+            </p>
+          </div>
         ) : null}
 
         {messages.map((msg) => {

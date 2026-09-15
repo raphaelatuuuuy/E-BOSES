@@ -70,12 +70,6 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         const active = await getActiveEmergency()
         if (cancelled) return
         setTrackingAlert(active ?? null)
-        if (active) {
-          if (!suppressed && isActiveAlert(active)) {
-            setShellMode("tracking")
-            setShellOpen(true)
-          }
-        }
       } catch {
         /* non-blocking */
       } finally {
@@ -158,6 +152,10 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
       if (!emergencyId) return
       void getEmergency(emergencyId)
         .then((alert) => {
+          if (!isActiveAlert(alert)) {
+            toast.error("This emergency is already closed.")
+            return
+          }
           setTrackingAlert(alert)
           setShellMode("tracking")
           setShellOpen(true)

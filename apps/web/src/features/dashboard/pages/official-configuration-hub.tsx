@@ -4,6 +4,7 @@ import {
   FolderOpenIcon,
   IdCardLanyard,
   MapIcon,
+  MegaphoneIcon,
   PlusIcon,
   SaveIcon,
   ShieldCheckIcon,
@@ -21,6 +22,7 @@ import { Note } from "@/components/ui/note"
 import { SheetDialog, SheetIconButton } from "@/features/dashboard/components/sheet-dialog"
 import { ServiceStatusSection } from "@/features/dashboard/components/official/service-status-section"
 import OfficialCategoriesPage from "@/features/dashboard/pages/official-categories-page"
+import OfficialCommunityContentPage from "@/features/dashboard/pages/official-community-content-page"
 import OfficialCoverageAreaPage from "@/features/dashboard/pages/official-coverage-area-page"
 import OfficialIdProofWorkspacePage from "@/features/dashboard/pages/official-id-proof-workspace"
 import OfficialRolesPage from "@/features/dashboard/pages/official-roles-page"
@@ -118,6 +120,14 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
         to: "/dashboard/configuration/id-proof-template",
         capability: CAPABILITIES.manageUsers,
       },
+      {
+        key: "announcements",
+        label: "Announcements",
+        description: "Advisories, schedules and resident updates",
+        icon: MegaphoneIcon,
+        to: "/dashboard/configuration/announcements",
+        capability: CAPABILITIES.publishAnnouncements,
+      },
     ],
   },
 ]
@@ -171,6 +181,7 @@ function ConfigurationSection({ section }: { section: SectionDef }) {
     case "categories": return <OfficialCategoriesPage embedded />
     case "coverage": return <OfficialCoverageAreaPage embedded />
     case "verification": return <OfficialIdProofWorkspacePage embedded />
+    case "announcements": return <OfficialCommunityContentPage embedded />
     default: return null
   }
 }
@@ -181,6 +192,7 @@ function actionFor(section: SectionDef) {
   if (section.key === "users") return { label: "Create user", icon: PlusIcon }
   if (section.key === "roles") return { label: "New position", icon: PlusIcon }
   if (section.key === "categories") return { label: "Add category", icon: PlusIcon }
+  if (section.key === "announcements") return { label: "New announcement", icon: PlusIcon }
   return { label: "New unit", icon: PlusIcon }
 }
 

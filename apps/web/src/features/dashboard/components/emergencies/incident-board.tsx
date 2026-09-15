@@ -1,24 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
+  ArrowLeftIcon,
   FileIcon,
   FootprintsIcon,
   LocateFixedIcon,
-  MapPinIcon,
   LoaderCircleIcon,
+  Maximize2Icon,
+  Minimize2Icon,
   NavigationIcon,
   PhoneIcon,
   PlayIcon,
   ShieldCheckIcon,
   UserCheckIcon,
 } from "lucide-react"
+import { toast } from "sonner"
 
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import { fullTimestamp } from "@/features/dashboard/components/record/emergency-adapter"
 import { isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
 import {
-  GLYPHS,
   glyphPinHtml,
   glyphPinSize,
+  reportDotHtml,
   MAP_COLORS,
 } from "@/features/dashboard/components/map/markers"
 import { lucideIconPaths } from "@/features/dashboard/components/map/lucide-glyphs"
@@ -27,6 +30,7 @@ import {
   MapControlButton,
   MapControlStack,
 } from "@/features/dashboard/components/map/map-chrome"
+import { useMapFullscreen } from "@/features/dashboard/components/map/use-map-fullscreen"
 import {
   StreetViewModal,
   type StreetViewCoord,
@@ -34,12 +38,11 @@ import {
 import {
   drawRoute,
   routeRenderGeometry,
+  routeStartPoint,
   type RouteLayers,
 } from "@/features/dashboard/lib/route-line"
-import {
-  AuthenticatedMediaImage,
-  MediaLightbox,
-} from "@/features/dashboard/components/authenticated-media"
+import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
+import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
 import {
   mediaDisplaySource,
   toMediaPreviewItem,
@@ -96,21 +99,29 @@ function readCurrentPosition() {
 export function IncidentMap({
   alert,
   viewerId = null,
+  onBack,
+  onFullscreenChange,
 }: {
   alert: EmergencyAlert
   viewerId?: number | null
+  onBack?: () => void
+  onFullscreenChange?: (full: boolean) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const resizeRef = useRef<ResizeObserver | null>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const leafletRef = useRef<typeof leaflet | null>(null)
+  const { wrapRef, fullView, toggleFullscreen, expandStyle } =
+    useMapFullscreen(
+      () => mapRef.current?.invalidateSize(),
+      onFullscreenChange
+    )
   const boundsPointsRef = useRef<leaflet.LatLngTuple[]>([])
   const routeLayersRef = useRef<RouteLayers[]>([])
-  const responderMarkerRef = useRef<leaflet.Marker | null>(null)
-  const currentGuideRef = useRef<leaflet.Polyline | null>(null)
+  const assignmentMarkersRef = useRef<Map<number, leaflet.Marker>>(new Map())
+  const fittedKeyRef = useRef("")
   const officialLayersRef = useRef<RouteLayers | null>(null)
   const officialMarkerRef = useRef<leaflet.Marker | null>(null)
-  const officialTipRef = useRef<leaflet.Tooltip | null>(null)
   const officialPosRef = useRef<leaflet.LatLngTuple | null>(null)
   const lastOfficialRouteRef = useRef<EmergencyRoute | null>(null)
   const watchIdRef = useRef<number | null>(null)
@@ -119,9 +130,12 @@ export function IncidentMap({
   const navigatingRef = useRef(false)
   const [navigating, setNavigating] = useState(false)
   const [navBusy, setNavBusy] = useState(false)
+  const [mapReady, setMapReady] = useState(0)
   const [streetView, setStreetView] = useState<StreetViewCoord | null>(null)
-  const [routeBusy, setRouteBusy] = useState(false)
-  const [routeHint, setRouteHint] = useState<string | null>(null)
+  const [centerEta, setCenterEta] = useState<{
+    distance: number | null
+    eta: number | null
+  } | null>(null)
   const assignment = alert.current_assignment
   const settled = !isActiveEmergency(alert)
   const responderAssignments = useMemo(
@@ -137,12 +151,11 @@ export function IncidentMap({
           : responderAssignments.slice(0, 1),
     [assignment, responderAssignments, settled]
   )
-  const primaryAssignment = mapAssignments[0] ?? null
-  const incident = coord(alert.latitude, alert.longitude)
-  const responder = coord(
-    primaryAssignment?.last_location?.latitude,
-    primaryAssignment?.last_location?.longitude
+  const incident = useMemo(
+    () => coord(alert.latitude, alert.longitude),
+    [alert.latitude, alert.longitude]
   )
+  const incidentKey = `${alert.latitude ?? ""},${alert.longitude ?? ""}`
 
   const routeIsLive = isActiveEmergency(alert)
 
@@ -157,28 +170,32 @@ export function IncidentMap({
       )
     ) || "Location pinned on the map"
 
-  const signature = [
-    alert.latitude,
-    alert.longitude,
-    locationLabel,
-    mapAssignments
-      .map((item) =>
-        [
-          item.id,
-          item.last_location?.latitude ?? "",
-          item.last_location?.longitude ?? "",
-          item.route?.status ?? "",
-          item.route?.summary ?? "",
-          item.location_history?.length ?? 0,
-        ].join(":")
-      )
-      .join(";"),
-  ].join("|")
+  const mapAssignmentsRef = useRef(mapAssignments)
+  useEffect(() => {
+    mapAssignmentsRef.current = mapAssignments
+  })
+  const assignmentId = assignment?.id ?? null
+
+  const mapSig = mapAssignments
+    .map((item) =>
+      [
+        item.id,
+        item.status,
+        item.last_location?.latitude ?? "",
+        item.last_location?.longitude ?? "",
+        item.route?.status ?? "",
+        item.route?.geometry ? JSON.stringify(item.route.geometry) : "",
+        item.location_history?.length ?? 0,
+      ].join(":")
+    )
+    .join(";")
+  const fitKey = `${settled}|${incidentKey}|${mapAssignments.map((item) => item.id).join(",")}`
 
   useEffect(() => {
     if (!containerRef.current || !incident) return
     let cancelled = false
     let map: leaflet.Map | null = null
+    let settleTimer: number | undefined
 
     async function init() {
       const L = await import("leaflet")
@@ -236,82 +253,175 @@ export function IncidentMap({
         zIndexOffset: 900,
       }).addTo(map)
 
-      // Fit the view to whatever is on screen: incident + responder + the
-      // drawn route. Centring on the incident at a fixed zoom clipped any
-      // route longer than a couple of blocks, which made it look broken.
-      const routePoints: leaflet.LatLngTuple[] = []
-      for (const mapAssignment of mapAssignments) {
-        const assignmentResponder = coord(
+      const frameMap = () => {
+        if (cancelled || !containerRef.current) return
+        const box = containerRef.current.getBoundingClientRect()
+        if (!box.width || !box.height) return
+        map?.invalidateSize({ animate: false })
+        const bounds = boundsPointsRef.current
+        if (bounds.length > 1) {
+          map?.fitBounds(L.latLngBounds(bounds), {
+            padding: [28, 28],
+            maxZoom: 17,
+            animate: false,
+          })
+        } else if (incident) {
+          map?.setView(incident, 18)
+        }
+        if (navigatingRef.current && officialPosRef.current) {
+          drawOfficialPreview(
+            officialPosRef.current,
+            lastOfficialRouteRef.current,
+            false
+          )
+        }
+      }
+      frameMap()
+
+      const observer = new ResizeObserver(() => {
+        frameMap()
+      })
+      if (containerRef.current) observer.observe(containerRef.current)
+      resizeRef.current = observer
+      requestAnimationFrame(frameMap)
+      settleTimer = window.setTimeout(frameMap, 250)
+      setMapReady((value) => value + 1)
+    }
+
+    void init()
+    return () => {
+      cancelled = true
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer)
+      resizeRef.current?.disconnect()
+      resizeRef.current = null
+      routeLayersRef.current.forEach((layer) => layer.remove())
+      routeLayersRef.current = []
+      if (watchIdRef.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current)
+      }
+      watchIdRef.current = null
+      officialLayersRef.current?.remove()
+      officialLayersRef.current = null
+      officialMarkerRef.current?.remove()
+      officialMarkerRef.current = null
+      assignmentMarkersRef.current.clear()
+      fittedKeyRef.current = ""
+      mapRef.current = null
+      leafletRef.current = null
+      boundsPointsRef.current = []
+      map?.remove()
+    }
+  }, [incident, incidentKey, settled, locationLabel])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const L = leafletRef.current
+    if (!map || !L || !incident) return
+    const items = mapAssignmentsRef.current
+    const origins = new Map<number, leaflet.LatLngTuple>()
+
+    for (const mapAssignment of items) {
+      if (!mapAssignment.responder) continue
+      const assignmentRoute =
+        mapAssignment.route ??
+        (mapAssignment.id === assignmentId ? alert.route : null)
+      const liveAt = coord(
+        mapAssignment.last_location?.latitude,
+        mapAssignment.last_location?.longitude
+      )
+      const at = liveAt ?? routeStartPoint(assignmentRoute)
+      if (!at) continue
+      origins.set(mapAssignment.id, at)
+      const existing = assignmentMarkersRef.current.get(mapAssignment.id)
+      if (existing) {
+        existing.setLatLng(at)
+        continue
+      }
+      const own =
+        viewerId != null && mapAssignment.responder.id === viewerId
+      const dotSize = own ? 14 : 12
+      const marker = L.marker(at, {
+        icon: L.divIcon({
+          className: "",
+          iconSize: [dotSize, dotSize],
+          iconAnchor: [dotSize / 2, dotSize / 2],
+          html: reportDotHtml(MAP_COLORS.responder, dotSize),
+        }),
+        keyboard: false,
+      }).addTo(map)
+      marker.on("click", () => {
+        map.flyTo(marker.getLatLng(), 17, { animate: true })
+      })
+      assignmentMarkersRef.current.set(mapAssignment.id, marker)
+    }
+    for (const [id, marker] of assignmentMarkersRef.current) {
+      if (!items.some((item) => item.id === id)) {
+        marker.remove()
+        assignmentMarkersRef.current.delete(id)
+      }
+    }
+
+    routeLayersRef.current.forEach((layer) => layer.remove())
+    routeLayersRef.current = []
+    const routePoints: leaflet.LatLngTuple[] = []
+    for (const mapAssignment of items) {
+      const assignmentResponder =
+        coord(
           mapAssignment.last_location?.latitude,
           mapAssignment.last_location?.longitude
-        )
-        const history = (mapAssignment.location_history ?? [])
-          .map((ping) => coord(ping.latitude, ping.longitude))
-          .filter((point): point is leaflet.LatLngTuple => point != null)
-        if (history.length > 1) {
-          L.polyline(history, {
-            color: settled
-              ? "var(--color-map-route-idle)"
-              : "var(--color-map-trail)",
-            weight: settled ? 2.5 : 2,
-            opacity: settled ? 0.7 : 0.5,
-            interactive: false,
-          }).addTo(map)
-        }
-
-        const assignmentRoute =
-          mapAssignment.route ??
-          (mapAssignment.id === assignment?.id ? alert.route : null)
-        if (
-          assignmentRoute &&
-          assignmentRoute.status !== "unavailable" &&
-          assignmentRoute.geometry
-        ) {
-          const { road, approach, connectors } = routeRenderGeometry(
-            assignmentRoute,
-            { origin: assignmentResponder, destination: incident }
-          )
-          const layers = drawRoute(L, map, {
-            road,
-            approach,
-            connectors,
-            live: routeIsLive,
-          })
-          if (layers) {
-            routeLayersRef.current.push(layers)
-            routePoints.push(...layers.points)
-          }
-        }
-
-        if (!assignmentResponder || !mapAssignment.responder) continue
-        const responderPinSize = 26
-        const marker = L.marker(assignmentResponder, {
-          icon: L.divIcon({
-            className: "eboses-emergency-pin",
-            iconSize: [responderPinSize, responderPinSize],
-            iconAnchor: [responderPinSize / 2, responderPinSize / 2],
-            html: glyphPinHtml({
-              paths: GLYPHS.userResponder,
-              color: MAP_COLORS.responder,
-              size: responderPinSize,
-              label:
-                viewerId != null && mapAssignment.responder.id === viewerId
-                  ? "You"
-                  : undefined,
-            }),
-          }),
+        ) ?? origins.get(mapAssignment.id) ?? null
+      const history = (mapAssignment.location_history ?? [])
+        .map((ping) => coord(ping.latitude, ping.longitude))
+        .filter((point): point is leaflet.LatLngTuple => point != null)
+      if (history.length > 1) {
+        const trail = L.polyline(history, {
+          color: settled
+            ? "var(--color-map-route-idle)"
+            : "var(--color-map-trail)",
+          weight: settled ? 2.5 : 2,
+          opacity: settled ? 0.7 : 0.5,
+          interactive: false,
         }).addTo(map)
-        if (mapAssignment.id === primaryAssignment?.id) {
-          responderMarkerRef.current = marker
-        }
-        routePoints.push(assignmentResponder)
+        routeLayersRef.current.push({
+          points: history,
+          remove: () => trail.remove(),
+        })
       }
-      const boundsPoints = [incident, responder, ...routePoints].filter(
-        (point): point is leaflet.LatLngTuple => point != null
-      )
-      boundsPointsRef.current = boundsPoints
-      if (boundsPoints.length > 1) {
-        map.fitBounds(L.latLngBounds(boundsPoints), {
+      const assignmentRoute =
+        mapAssignment.route ??
+        (mapAssignment.id === assignmentId ? alert.route : null)
+      if (
+        assignmentRoute &&
+        assignmentRoute.status !== "unavailable" &&
+        assignmentRoute.geometry
+      ) {
+        const { road, approach, connectors } = routeRenderGeometry(
+          assignmentRoute,
+          { origin: assignmentResponder, destination: incident }
+        )
+        const layers = drawRoute(L, map, {
+          road,
+          approach,
+          connectors,
+          live: routeIsLive,
+        })
+        if (layers) {
+          routeLayersRef.current.push(layers)
+          routePoints.push(...layers.points)
+        }
+      }
+      if (assignmentResponder) routePoints.push(assignmentResponder)
+    }
+    const bounds: leaflet.LatLngTuple[] = [incident]
+    for (const marker of assignmentMarkersRef.current.values()) {
+      const at = marker.getLatLng()
+      bounds.push([at.lat, at.lng])
+    }
+    boundsPointsRef.current = [...bounds, ...routePoints]
+    if (fittedKeyRef.current !== fitKey) {
+      fittedKeyRef.current = fitKey
+      if (boundsPointsRef.current.length > 1) {
+        map.fitBounds(L.latLngBounds(boundsPointsRef.current), {
           padding: [28, 28],
           maxZoom: 17,
           animate: false,
@@ -319,243 +429,8 @@ export function IncidentMap({
       } else {
         map.setView(incident, 18)
       }
-      if (navigatingRef.current && officialPosRef.current) {
-        drawOfficialPreview(
-          officialPosRef.current,
-          lastOfficialRouteRef.current,
-          false
-        )
-      }
-
-      const observer = new ResizeObserver(() => {
-        const box = containerRef.current?.getBoundingClientRect()
-        if (!box?.width || !box.height) return
-        map?.invalidateSize({ animate: false })
-      })
-      if (containerRef.current) observer.observe(containerRef.current)
-      resizeRef.current = observer
-      requestAnimationFrame(() => map?.invalidateSize({ animate: false }))
     }
-
-    void init()
-    return () => {
-      cancelled = true
-      resizeRef.current?.disconnect()
-      resizeRef.current = null
-      routeLayersRef.current.forEach((layer) => layer.remove())
-      routeLayersRef.current = []
-      currentGuideRef.current?.remove()
-      currentGuideRef.current = null
-      if (watchIdRef.current != null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchIdRef.current)
-      }
-      watchIdRef.current = null
-      officialLayersRef.current?.remove()
-      officialLayersRef.current = null
-      officialTipRef.current?.remove()
-      officialTipRef.current = null
-      officialMarkerRef.current?.remove()
-      officialMarkerRef.current = null
-      responderMarkerRef.current = null
-      mapRef.current = null
-      leafletRef.current = null
-      boundsPointsRef.current = []
-      map?.remove()
-    }
-  }, [
-    signature,
-    alert.route,
-    assignment?.id,
-    mapAssignments,
-    incident,
-    locationLabel,
-    primaryAssignment?.id,
-    responder,
-    routeIsLive,
-    settled,
-    viewerId,
-  ])
-
-  const reroute = () => {
-    const map = mapRef.current
-    if (map && boundsPointsRef.current.length > 1) {
-      map.fitBounds(boundsPointsRef.current, {
-        padding: [28, 28],
-        maxZoom: 17,
-        animate: true,
-      })
-    } else if (map && incident) {
-      map.setView(incident, 18, { animate: true })
-    }
-    if (routeBusy || viewerId == null) return
-    setRouteBusy(true)
-    void (async () => {
-      const isAssignedViewer =
-        viewerId != null && primaryAssignment?.responder?.id === viewerId
-      let currentResponder = responder
-      try {
-        if (navigator.geolocation) {
-          try {
-            const position = await readCurrentPosition()
-            currentResponder = [
-              position.coords.latitude,
-              position.coords.longitude,
-            ]
-            await sendEmergencyLocationPing(alert.id, {
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              accuracy: position.coords.accuracy,
-              timestamp: position.timestamp,
-            }).catch(() => {})
-          } catch {
-            currentResponder = responder
-          }
-        }
-
-        const currentMap = mapRef.current
-        const L = leafletRef.current
-        if (!currentMap || !L || !incident || !currentResponder) return
-
-        // Officials can preview a route even before an assignment exists. In
-        // that case the API has no assignment route to return, so keep the
-        // interaction useful with a clear animated guide to the emergency pin.
-        if (!primaryAssignment) {
-          currentGuideRef.current?.remove()
-          currentGuideRef.current = L.polyline(
-            [currentResponder, incident],
-            {
-              color: "#1d4ed8",
-              weight: 4,
-              opacity: 0.9,
-              dashArray: "10 10",
-              className: "eboses-live-route",
-              interactive: false,
-            }
-          ).addTo(currentMap)
-          const markerSize = 26
-          const currentMarker = L.divIcon({
-            className: "eboses-emergency-pin",
-            iconSize: [markerSize, markerSize],
-            iconAnchor: [markerSize / 2, markerSize / 2],
-            html: glyphPinHtml({
-              paths: GLYPHS.userResponder,
-              color: MAP_COLORS.you,
-              size: markerSize,
-              label: "You",
-            }),
-          })
-          if (responderMarkerRef.current) {
-            responderMarkerRef.current.setLatLng(currentResponder)
-            responderMarkerRef.current.setIcon(currentMarker)
-          } else {
-            responderMarkerRef.current = L.marker(currentResponder, {
-              icon: currentMarker,
-              zIndexOffset: 1000,
-            }).addTo(currentMap)
-          }
-          const meters = currentMap.distance(
-            currentResponder as leaflet.LatLngExpression,
-            incident as leaflet.LatLngExpression
-          )
-          const eta = Math.max(1, Math.round((meters / 1000 / 20) * 60))
-          setRouteHint(
-            `Approx. ${meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`} · ~${eta} min`
-          )
-          currentMap.fitBounds(L.latLngBounds([currentResponder, incident]), {
-            padding: [28, 28],
-            maxZoom: 17,
-            animate: true,
-          })
-          return
-        }
-
-        const next = await getEmergencyRoute(alert.id, {
-          refresh: isAssignedViewer,
-        })
-        if (!currentMap || !L || !incident) return
-
-        if (currentResponder && primaryAssignment.responder) {
-          const responderPinSize = 26
-          const icon = L.divIcon({
-            className: "eboses-emergency-pin",
-            iconSize: [responderPinSize, responderPinSize],
-            iconAnchor: [responderPinSize / 2, responderPinSize / 2],
-            html: glyphPinHtml({
-              paths: GLYPHS.userResponder,
-              color: MAP_COLORS.responder,
-              size: responderPinSize,
-              label: isAssignedViewer ? "You" : undefined,
-            }),
-          })
-          if (responderMarkerRef.current) {
-            responderMarkerRef.current.setLatLng(currentResponder)
-            responderMarkerRef.current.setIcon(icon)
-          } else {
-            responderMarkerRef.current = L.marker(currentResponder, {
-              icon,
-            }).addTo(currentMap)
-          }
-        }
-
-        if (!next?.geometry) {
-          const points = [incident, currentResponder].filter(
-            (point): point is leaflet.LatLngTuple => point != null
-          )
-          boundsPointsRef.current = points
-          if (points.length > 1) {
-            currentMap.fitBounds(points, {
-              padding: [28, 28],
-              maxZoom: 17,
-              animate: true,
-            })
-          }
-          return
-        }
-
-        const geometry = routeRenderGeometry(next, {
-          origin: currentResponder,
-          destination: incident,
-        })
-        routeLayersRef.current.forEach((layer) => layer.remove())
-        const layers = drawRoute(L, currentMap, {
-          ...geometry,
-          live: routeIsLive,
-        })
-        routeLayersRef.current = layers ? [layers] : []
-        currentGuideRef.current?.remove()
-        currentGuideRef.current = null
-        setRouteHint(next.summary || routeLabel(alert))
-        const points = [
-          incident,
-          currentResponder,
-          ...(layers?.points ?? []),
-        ].filter((point): point is leaflet.LatLngTuple => point != null)
-        boundsPointsRef.current = points
-        if (points.length > 1) {
-          currentMap.fitBounds(points, {
-            padding: [28, 28],
-            maxZoom: 17,
-            animate: true,
-          })
-        }
-      } catch {
-        return
-      } finally {
-        setRouteBusy(false)
-      }
-    })()
-  }
-
-  const approxPreviewLabel = (pos: leaflet.LatLngTuple) => {
-    const map = mapRef.current
-    if (!map || !incident) return "Locating route"
-    const meters = map.distance(
-      pos as leaflet.LatLngExpression,
-      incident as leaflet.LatLngExpression
-    )
-    const eta = Math.max(1, Math.round((meters / 1000 / 20) * 60))
-    return `${formatDistance(meters)} · ETA ~${eta} min`
-  }
+  }, [mapSig, fitKey, mapReady, viewerId, routeIsLive, assignmentId, settled])
 
   const drawOfficialPreview = (
     pos: leaflet.LatLngTuple,
@@ -567,17 +442,11 @@ export function IncidentMap({
     if (!map || !L || !incident) return
     officialPosRef.current = pos
     lastOfficialRouteRef.current = route ?? null
-    const size = 26
     const icon = L.divIcon({
-      className: "eboses-emergency-pin",
-      iconSize: [size, size],
-      iconAnchor: [size / 2, size / 2],
-      html: glyphPinHtml({
-        paths: GLYPHS.userResponder,
-        color: MAP_COLORS.you,
-        size,
-        label: "You",
-      }),
+      className: "",
+      iconSize: [12, 12],
+      iconAnchor: [6, 6],
+      html: reportDotHtml(MAP_COLORS.responder, 12),
     })
     if (officialMarkerRef.current) {
       officialMarkerRef.current.setLatLng(pos)
@@ -588,28 +457,8 @@ export function IncidentMap({
         zIndexOffset: 1100,
       }).addTo(map)
     }
-    const label = route?.geometry
-      ? `${formatDistance(route.distance_meters)} · ${formatEta(route.eta_seconds)}`
-      : approxPreviewLabel(pos)
-    if (officialTipRef.current) {
-      officialTipRef.current.setLatLng(pos)
-      officialTipRef.current.setContent(label)
-    } else {
-      officialTipRef.current = L.tooltip({
-        permanent: true,
-        direction: "top",
-        offset: [0, -16],
-        className: "eboses-official-eta-tip",
-        interactive: false,
-      })
-        .setLatLng(pos)
-        .setContent(label)
-        .addTo(map)
-    }
     officialLayersRef.current?.remove()
     officialLayersRef.current = null
-    currentGuideRef.current?.remove()
-    currentGuideRef.current = null
     if (route?.geometry) {
       const geometry = routeRenderGeometry(route, {
         origin: pos,
@@ -619,17 +468,13 @@ export function IncidentMap({
         ...geometry,
         live: routeIsLive,
       })
+      setCenterEta({
+        distance: route.distance_meters,
+        eta: route.eta_seconds,
+      })
     } else {
-      currentGuideRef.current = L.polyline([pos, incident], {
-        color: "#1d4ed8",
-        weight: 4,
-        opacity: 0.9,
-        dashArray: "10 10",
-        className: "eboses-live-route",
-        interactive: false,
-      }).addTo(map)
+      setCenterEta(null)
     }
-    setRouteHint(label)
     if (fit) {
       map.fitBounds(L.latLngBounds([pos, incident]), {
         padding: [28, 28],
@@ -647,12 +492,11 @@ export function IncidentMap({
     watchIdRef.current = null
     officialLayersRef.current?.remove()
     officialLayersRef.current = null
-    officialTipRef.current?.remove()
-    officialTipRef.current = null
     officialMarkerRef.current?.remove()
     officialMarkerRef.current = null
     officialPosRef.current = null
     lastOfficialRouteRef.current = null
+    setCenterEta(null)
     setNavigating(false)
     setNavBusy(false)
   }
@@ -662,13 +506,25 @@ export function IncidentMap({
       stopNavigation()
       return
     }
-    if (!navigator.geolocation || !incident || viewerId == null) return
+    if (!incident) return
+    if (!navigator.geolocation) {
+      toast.error("Location is unavailable on this device.")
+      return
+    }
     navigatingRef.current = true
     setNavigating(true)
     setNavBusy(true)
     void (async () => {
+      let position: GeolocationPosition
       try {
-        const position = await readCurrentPosition()
+        position = await readCurrentPosition()
+      } catch {
+        navigatingRef.current = false
+        setNavigating(false)
+        setNavBusy(false)
+        toast.error("Allow location access to navigate to this emergency.")
+        return
+      }
         if (!navigatingRef.current) return
         const pos: leaflet.LatLngTuple = [
           position.coords.latitude,
@@ -685,6 +541,10 @@ export function IncidentMap({
         }
         if (!navigatingRef.current) return
         drawOfficialPreview(pos, route)
+        if (!route?.geometry) {
+          toast.error("Currently experiencing issue, try again.")
+        }
+        setNavBusy(false)
         lastNavFetchRef.current = Date.now()
         lastNavPingRef.current = Date.now()
         void sendEmergencyLocationPing(alert.id, {
@@ -702,7 +562,6 @@ export function IncidentMap({
             ]
             officialPosRef.current = next
             officialMarkerRef.current?.setLatLng(next)
-            officialTipRef.current?.setLatLng(next)
             const now = Date.now()
             if (now - lastNavFetchRef.current > 12000) {
               lastNavFetchRef.current = now
@@ -736,14 +595,23 @@ export function IncidentMap({
           () => {},
           { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
         )
-      } catch {
-        navigatingRef.current = false
-        setNavigating(false)
-      } finally {
         setNavBusy(false)
-      }
     })()
   }
+
+  const assignmentRoute =
+    mapAssignments[0]?.route ??
+    (mapAssignments[0] && mapAssignments[0].id === assignmentId
+      ? alert.route
+      : null)
+  const pillEta =
+    centerEta ??
+    (fullView && assignmentRoute?.geometry
+      ? {
+          distance: assignmentRoute.distance_meters,
+          eta: assignmentRoute.eta_seconds,
+        }
+      : null)
 
   if (!incident) {
     return (
@@ -754,32 +622,36 @@ export function IncidentMap({
   }
 
   return (
-    <div className="relative h-full w-full overflow-hidden rounded-[16px] bg-tint">
+    <div
+      ref={wrapRef}
+      style={expandStyle}
+      className="relative h-full w-full overflow-hidden rounded-[16px] bg-tint"
+    >
       <div
         ref={containerRef}
         className="eboses-emergency-map pointer-events-auto absolute inset-0 z-0 h-full w-full"
       />
+      {onBack ? (
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back"
+          title="Back"
+          className="absolute top-3 left-3 z-10 flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 shadow-md transition-colors hover:bg-neutral-50 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:outline-none"
+        >
+          <ArrowLeftIcon className="size-5" strokeWidth={2} />
+        </button>
+      ) : null}
       <div className="absolute top-3 right-3 z-10">
         <MapControlStack tone="light">
           <MapControlButton
             tone="light"
-            label="Follow current location to emergency"
-            onClick={reroute}
-            loading={routeBusy}
+            label="Center on pin"
+            onClick={() => {
+              if (incident) mapRef.current?.setView(incident, 18, { animate: true })
+            }}
           >
-            {routeBusy ? (
-              <LoaderCircleIcon className="size-4 animate-spin" />
-            ) : (
-              <LocateFixedIcon className="size-5" strokeWidth={1.9} />
-            )}
-          </MapControlButton>
-          <MapControlButton
-            tone="light"
-            divider
-            label="Recenter emergency pin"
-            onClick={() => mapRef.current?.setView(incident, 18, { animate: true })}
-          >
-            <MapPinIcon className="size-5" strokeWidth={1.9} />
+            <LocateFixedIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
           <MapControlButton
             tone="light"
@@ -807,16 +679,31 @@ export function IncidentMap({
               <NavigationIcon className="size-5" strokeWidth={1.9} />
             )}
           </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label={fullView ? "Exit full map view" : "View full map"}
+            active={fullView}
+            onClick={toggleFullscreen}
+          >
+            {fullView ? (
+              <Minimize2Icon className="size-5" strokeWidth={1.9} />
+            ) : (
+              <Maximize2Icon className="size-5" strokeWidth={1.9} />
+            )}
+          </MapControlButton>
         </MapControlStack>
       </div>
-      {(routeHint || primaryAssignment) ? (
-        <div className="absolute bottom-3 left-3 z-10 max-w-[min(18rem,calc(100%-5rem))] rounded-xl border border-white/70 bg-white/95 px-3 py-2 shadow-md backdrop-blur-sm">
-          <p className="text-[11px] font-semibold text-brand-navy">
-            {routeHint ? "Route to emergency" : "Responder route"}
-          </p>
-          <p className="mt-0.5 text-[12px] text-neutral-600">
-            {routeHint || routeLabel(alert)}
-          </p>
+      {pillEta ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center px-4">
+          <div className="flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]">
+            <span className="text-[16px] leading-none font-semibold text-neutral-900">
+              {`${formatEta(pillEta.eta)} · ${formatDistance(pillEta.distance)}`}
+            </span>
+            <span className="mt-1.5 text-[14px] leading-snug font-medium text-neutral-500">
+              On the way
+            </span>
+          </div>
         </div>
       ) : null}
       {streetView ? (
@@ -846,13 +733,11 @@ export function IncidentMap({
         .eboses-emergency-map .eboses-pin__disc {
           background: color-mix(in srgb, var(--pin) 16%, white) !important;
           color: var(--pin) !important;
-          border: 2px solid #fff !important;
           box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15) !important;
         }
         .eboses-emergency-map .eboses-pin--glyph.is-settled .eboses-pin__disc {
           background: #eef1f4 !important;
           color: #6b7280 !important;
-          border-color: #fff !important;
           box-shadow: 0 2px 7px rgba(71, 85, 105, 0.14) !important;
         }
         .eboses-emergency-map .eboses-pin__disc svg {
@@ -860,29 +745,6 @@ export function IncidentMap({
         }
         .eboses-emergency-map .eboses-pin__core {
           border: none !important;
-        }
-        .eboses-emergency-map .eboses-live-route {
-          animation: eboses-live-route-dash 1.1s linear infinite;
-        }
-        .eboses-emergency-map .eboses-official-eta-tip {
-          background: #111111;
-          color: #ffffff;
-          border: none;
-          border-radius: 999px;
-          font-size: 12px;
-          font-weight: 700;
-          padding: 6px 10px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-          white-space: nowrap;
-        }
-        .eboses-emergency-map .eboses-official-eta-tip::before {
-          display: none;
-        }
-        @keyframes eboses-live-route-dash {
-          to { stroke-dashoffset: -20; }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .eboses-emergency-map .eboses-live-route { animation: none; }
         }
       `}</style>
     </div>
@@ -985,6 +847,7 @@ function ResponseBand({
           {roster.map((assignment) => {
             const ack = assignment.acknowledged_at
             const arrived = assignment.arrived_at
+            const etaRoute = assignment.route
             return (
               <li
                 key={assignment.id}
@@ -997,6 +860,11 @@ function ResponseBand({
                 <span className="text-sm font-semibold text-foreground">
                   {responderName(assignment.responder)}
                 </span>
+                {etaRoute?.geometry ? (
+                  <span className="rounded-full bg-neutral-900 px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-white">
+                    {`${formatDistance(etaRoute.distance_meters)} · ${formatEta(etaRoute.eta_seconds)}`}
+                  </span>
+                ) : null}
                 <span className="text-[12px] text-muted-foreground">
                   {unitLabel(assignment.responder.responder_unit)}
                   {}
@@ -1111,13 +979,14 @@ function EmergencyMediaGrid({
     index: number
   } | null>(null)
   const media = alertMedia ?? []
-  const items: MediaPreviewItem[] = media.map((item) =>
-    toMediaPreviewItem(
+  const items: MediaPreviewItem[] = media.map((item) => ({
+    ...toMediaPreviewItem(
       mediaDisplaySource(item),
       item.original_filename,
       item.mime_type
-    )
-  )
+    ),
+    badge: "Reported issue",
+  }))
 
   if (!media.length) {
     return (
@@ -1128,29 +997,28 @@ function EmergencyMediaGrid({
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {media.map((item, index) =>
-        item.mime_type.startsWith("image/") ? (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setLightbox({ items, index })}
-            className="overflow-hidden rounded-control border border-card-line bg-canvas text-left transition hover:border-brand-orange"
-          >
-            <AuthenticatedMediaImage
-              src={item.preview_url}
-              alt={`${item.original_filename} evidence photo`}
-              className="h-28 w-full object-cover"
-            />
-          </button>
+    <>
+      {(() => {
+        const imageIndex = media.findIndex((item) =>
+          item.mime_type.startsWith("image/")
+        )
+        const displayIndex = imageIndex >= 0 ? imageIndex : 0
+        const display = media[displayIndex]
+        if (!display) return null
+        const openAt = () => setLightbox({ items, index: displayIndex })
+        return display.mime_type.startsWith("image/") ? (
+          <ReportPhotoPreview
+            originalSrc={mediaDisplaySource(display)}
+            alt={`${display.original_filename} evidence photo`}
+            onOpen={openAt}
+          />
         ) : (
           <button
-            key={item.id}
             type="button"
-            onClick={() => setLightbox({ items, index })}
-            className="flex h-28 items-center justify-center gap-2 rounded-control border border-card-line bg-canvas px-3 text-center text-[12px] font-semibold text-muted-foreground transition-colors hover:border-brand-orange hover:text-foreground"
+            onClick={openAt}
+            className="flex h-24 w-full items-center justify-center gap-2 rounded-2xl border border-neutral-200 bg-white px-3 text-center text-[12px] font-semibold text-neutral-700"
           >
-            {item.mime_type.startsWith("video/") ? (
+            {display.mime_type.startsWith("video/") ? (
               <>
                 <PlayIcon className="size-5" /> Preview video
               </>
@@ -1161,15 +1029,16 @@ function EmergencyMediaGrid({
             )}
           </button>
         )
-      )}
+      })()}
       {lightbox ? (
         <MediaLightbox
           items={lightbox.items}
           index={lightbox.index}
+          simpleCounter
           onClose={() => setLightbox(null)}
         />
       ) : null}
-    </div>
+    </>
   )
 }
 

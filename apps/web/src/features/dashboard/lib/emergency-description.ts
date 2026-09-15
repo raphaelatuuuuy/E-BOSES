@@ -1,6 +1,39 @@
 import type { EmergencyAlert } from "@/features/dashboard/emergency-api"
+import { streetSegment } from "@/features/dashboard/lib/location-text"
 
 const LEGACY_LABELS = /\b(?:detail|injuries|people affected)\s*:/i
+const MACHINE_TITLES = /\b(?:e-?boses status|reply (?:safe|cancel)|loc\s*:)/i
+
+const TYPE_LABELS: Record<string, string> = {
+  medical: "Medical",
+  fire: "Fire",
+  crime: "Crime",
+  disaster: "Disaster",
+  child_protection: "Child Protection",
+  domestic_violence: "Domestic Violence",
+}
+
+export function emergencyTypeLabel(type?: string | null): string {
+  const code = (type || "").trim().toLowerCase()
+  return TYPE_LABELS[code] || "Emergency"
+}
+
+/**
+ * The headline shown for an emergency row: the LLM-generated incident title
+ * when the backend produced one, otherwise the type/street label.
+ */
+export function emergencyTitleText(alert: EmergencyAlert): string {
+  const stored = alert.display_title?.trim() || ""
+  if (stored && !LEGACY_LABELS.test(stored) && !MACHINE_TITLES.test(stored)) {
+    return stored
+  }
+  const typeLabel = emergencyTypeLabel(alert.type)
+  const location = streetSegment(
+    alert.resolved_location || alert.address || alert.reported_area || alert.display_location
+  )
+  if (location) return `${typeLabel} around ${location}`
+  return typeLabel === "Emergency" ? "Emergency report" : `${typeLabel} emergency`
+}
 
 export function emergencyDescription(alert: EmergencyAlert): string {
   const stored = alert.display_description?.trim() || ""

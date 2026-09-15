@@ -40,6 +40,7 @@ import {
 import { CameraCaptureDialog } from "@/features/dashboard/components/camera-capture-dialog"
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
 import { ReportDetailsDialog } from "@/features/dashboard/components/report-details-dialog"
+import { isPhotoVerdictRejected } from "@/features/dashboard/components/create-report-dialog-photo"
 import { ApiError } from "@/lib/api"
 import { lookupRegistrationPinAddress } from "@/features/auth/api"
 import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
@@ -55,11 +56,11 @@ const MAX_FILES = 3
 const descriptionMin = 40
 const descriptionMax = 1500
 const PHOTO_MISMATCH_MESSAGE =
-  "The photo does not show the issue described in the report. Please submit a photo that clearly shows the reported issue."
+  "Please submit a photo that clearly shows the reported issue."
 const PHOTO_MISMATCH_FRIENDLY_MESSAGE =
   "Please remove photos that don't show the reported issue and upload clear ones."
 const STREET_IMAGERY_FEEDBACK =
-  "Please pin the exact area where the issue is found and upload a matching photo."
+  "Please pin the exact area where the issue is found."
 
 type FooterErrorTone = "error" | "info"
 
@@ -119,7 +120,7 @@ const FRIENDLY_ERROR_TEXT: Record<string, string> = {
   "This report does not describe a valid community issue.":
     "This doesn't look like a community issue we handle.",
   "Add a clearer description of the issue.":
-    "Tell us a little more — what is the issue, and where exactly is it?",
+    "Please describe one concern clearly and include only relevant details about the issue.",
   "We could not determine the type of concern. Add a little more detail and try again.":
     "We couldn't tell what kind of issue this is. Add a little more detail and try again.",
   "A similar report already exists near this location.":
@@ -524,7 +525,7 @@ export function CreateReportDialog({
           setAwaitingValidation(false)
           setFieldErrors((previous) => ({
             ...previous,
-            description: validationFeedbackFor(latest),
+          description: validationFeedbackFor(latest),
           }))
           setSubmittedReport(null)
           setOpen(true)
@@ -1260,12 +1261,6 @@ export function CreateReportDialog({
           setFieldErrors((current) => ({ ...current, ...nextErrors }))
           return
         }
-        if (invalidPhotoVerdicts.length > 0) {
-          setAwaitingValidation(false)
-          setSubmittedReport(null)
-          setOpen(true)
-          return
-        }
       }
       if (isAutomatedPhotoMismatchError(submitError)) {
         showPhotoMismatchError()
@@ -1575,11 +1570,11 @@ export function CreateReportDialog({
                         setDescription(e.target.value)
                         setPhotoVerdicts([])
                         setPrivacyPreview(null)
-                        if (fieldErrors.description)
-                          setFieldErrors((prev) => ({
-                            ...prev,
-                            description: "",
-                          }))
+                        setFieldErrors((prev) => ({
+                          ...prev,
+                          description: "",
+                          media: "",
+                        }))
                         const el = e.currentTarget
                         el.style.height = "auto"
                         el.style.height = `${Math.min(el.scrollHeight, 220)}px`
@@ -1627,11 +1622,10 @@ export function CreateReportDialog({
                         <div className="flex flex-wrap gap-2.5">
                           {mediaFiles.map((file, index) => {
                             const url = previewUrls[index]
-                            const rejected = Boolean(
-                              photoVerdicts.find(
-                                (verdict) => verdict.index === index
-                              )?.message
+                            const verdict = photoVerdicts.find(
+                              (item) => item.index === index
                             )
+                            const rejected = isPhotoVerdictRejected(verdict)
                             return (
                               <div
                                 key={`${file.name}-${file.lastModified}`}

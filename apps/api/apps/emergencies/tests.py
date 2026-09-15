@@ -121,6 +121,18 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(active_response.data["status"], EmergencyAlert.Status.SUBMITTED)
         self.assertTrue(alert.status_events.filter(status=EmergencyAlert.Status.SUBMITTED).exists())
 
+    def test_created_emergency_exposes_sos_tracking_id(self):
+        alert = self.create_alert()
+
+        response = self.client.get(f"/api/emergencies/{alert.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertRegex(response.data["tracking_id"], r"^SOS-\d{4}-\d{6}$")
+        self.assertEqual(
+            response.data["tracking_id"],
+            f"SOS-{alert.created_at.year}-{alert.pk:06d}",
+        )
+
     def test_non_resident_roles_cannot_create_emergency(self):
         User = get_user_model()
         for role in [User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER]:

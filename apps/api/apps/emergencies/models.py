@@ -549,6 +549,11 @@ class EmergencyAlert(models.Model):
             models.Index(fields=["latitude", "longitude"], name="emerg_alert_coords"),
         ]
 
+    @property
+    def tracking_id(self):
+        year = self.created_at.year if self.created_at else 0
+        return f"SOS-{year}-{self.pk:06d}"
+
 
 class EmergencyMedia(models.Model):
     alert = models.ForeignKey(EmergencyAlert, on_delete=models.CASCADE, related_name="media")

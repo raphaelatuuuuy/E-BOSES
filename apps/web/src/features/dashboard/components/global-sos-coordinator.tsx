@@ -14,6 +14,9 @@ export function GlobalSosCoordinator() {
   const [hiding, setHiding] = useState(false)
   const [wasReconnected, setWasReconnected] = useState(false)
   const wasOfflineRef = useRef(!online)
+  const [initialOnline] = useState(() => online)
+  const [wasEverOnline, setWasEverOnline] = useState(() => online)
+  if (online && !wasEverOnline) setWasEverOnline(true)
   const hideTimerRef = useRef<number | undefined>(undefined)
   const reconnectTimerRef = useRef<number | undefined>(undefined)
 
@@ -59,16 +62,78 @@ export function GlobalSosCoordinator() {
 
   useEffect(() => { void probeApiReachability() }, [])
 
+  const reconnected = showReconnected || (hiding && wasReconnected)
+  const isColdStart =
+    !online && !reconnected && !initialOnline && !wasEverOnline
+
   return (
     <>
       <SOSButton />
       {mounted ? (
-        <OfflineSheetContent
-          reconnected={showReconnected || (hiding && wasReconnected)}
-          hiding={hiding}
-        />
+        isColdStart ? (
+          <OfflineColdStartPage hiding={hiding} />
+        ) : (
+          <OfflineSheetContent reconnected={reconnected} hiding={hiding} />
+        )
       ) : null}
     </>
+  )
+}
+
+function OfflineColdStartPage({ hiding }: { hiding: boolean }) {
+  return (
+    <div
+      role="alert"
+      aria-label="Offline emergency access"
+      aria-hidden={hiding ? true : undefined}
+      className={`fixed inset-0 z-[1000] flex items-center justify-center bg-brand-navy px-6 py-10 text-white transition-opacity duration-200 ${hiding ? "pointer-events-none opacity-0" : "opacity-100"}`}
+    >
+      <div className="motion-safe:animate-in motion-safe:zoom-in-95 w-full max-w-sm text-center motion-safe:duration-200">
+        <span className="mx-auto flex size-20 items-center justify-center rounded-full bg-white/10">
+          <WifiOffIcon
+            className="size-10 text-sos"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+        </span>
+        <p className="mt-6 text-[28px] font-bold tracking-tight">
+          You&rsquo;re Offline
+        </p>
+        <p className="mt-2 text-[15px] leading-6 text-white/70">
+          No internet connection. You can still get help &mdash; Emergency SOS
+          works offline via SMS.
+        </p>
+        <button
+          type="button"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("eboses:open-sos"))
+          }
+          className="mt-6 inline-flex min-h-[54px] w-full items-center justify-center gap-2 rounded-full bg-sos px-4 text-[16px] font-bold text-white focus-visible:ring-2 focus-visible:ring-sos focus-visible:ring-offset-2 focus-visible:outline-none"
+        >
+          Open SOS
+          <ArrowRightIcon
+            className="size-5"
+            strokeWidth={2.25}
+            aria-hidden="true"
+          />
+        </button>
+        <p className="mt-4 flex items-center justify-center gap-1.5 text-[13px] leading-5 text-white/60">
+          <InfoIcon
+            className="size-3.5 shrink-0"
+            strokeWidth={2}
+            aria-hidden="true"
+          />
+          Use your phone&rsquo;s SMS app to get help.
+        </p>
+        <button
+          type="button"
+          onClick={() => void probeApiReachability()}
+          className="mt-2 inline-flex min-h-[44px] w-full items-center justify-center rounded-full border border-white/20 px-4 text-[14px] font-semibold text-white/80 transition-colors hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:outline-none"
+        >
+          Try Again
+        </button>
+      </div>
+    </div>
   )
 }
 

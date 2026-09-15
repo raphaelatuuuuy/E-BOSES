@@ -63,8 +63,9 @@ export function StaffMobileHeader({
   const official = isOfficialUser(user)
   const { selectedUnitId } = useOfficialUnitScope(official ? user : null)
   const { badges, criticalReport, communityCenter } = useOfficialBadges(
-    official,
+    official || responder,
     selectedUnitId,
+    responder ? "responder" : "official",
   )
   const activeAlertCount =
     (badges.emergencies ?? 0) + (criticalReport ? 1 : 0)

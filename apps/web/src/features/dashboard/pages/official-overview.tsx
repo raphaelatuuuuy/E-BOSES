@@ -29,10 +29,10 @@ import { WeekChart } from "@/features/dashboard/components/resident-overview/wee
 import { OfficialOverviewReports } from "@/features/dashboard/components/official-overview/report-rows"
 import { OverviewReportsSheet } from "@/features/dashboard/components/resident-overview/reports-sheet"
 import { OverviewReportDetailSheet } from "@/features/dashboard/components/resident-overview/report-detail-sheet"
-import { EmergencyTrackingSheet } from "@/features/dashboard/components/emergency-tracking-sheet"
+import { MobileEmergencyReportDetailPage } from "@/features/dashboard/components/concerns/mobile-report-detail"
 import { useOfficialUnitScope } from "@/features/dashboard/hooks/use-official-unit"
 import { formatCount } from "@/features/dashboard/lib/overview-chart"
-import { emergencyDescription } from "@/features/dashboard/lib/emergency-description"
+import { emergencyTitleText } from "@/features/dashboard/lib/emergency-description"
 import { usePageTitle } from "@/hooks/use-page-title"
 
 const unitTileCopy = {
@@ -49,6 +49,41 @@ const unitTileCopy = {
     caption: "Marked as closed",
   },
 } as const
+
+function emergencyToOverviewReport(
+  alert: EmergencyAlert
+): OfficialOverviewReport {
+  const status = ["resolved", "closed"].includes(alert.status)
+    ? "resolved"
+    : ["cancelled", "false_alarm", "invalid"].includes(alert.status)
+      ? "rejected"
+      : "in_progress"
+  const address =
+    alert.display_location ||
+    alert.resolved_location ||
+    alert.address ||
+    alert.reported_area ||
+    alert.barangay
+
+  return {
+    id: alert.id,
+    record_type: "emergency",
+    emergency_id: alert.id,
+    public_id: alert.public_id,
+    tracking_id: alert.tracking_id || alert.public_id,
+    title: emergencyTitleText(alert),
+    official_title: emergencyTitleText(alert),
+    summary: "",
+    category: "public_safety",
+    category_ref: null,
+    status,
+    severity: "critical",
+    address,
+    barangay: alert.barangay,
+    assigned_department: alert.responding_unit,
+    created_at: alert.created_at,
+  }
+}
 
 function buildResponderAnalytics(
   concerns: Concern[],
@@ -161,40 +196,8 @@ function buildResponderAnalytics(
         short_name: assignedUnit.short_name,
       }
     : null
-  const emergencyReports: OfficialOverviewReport[] = assignedEmergencies.map(
-    (alert) => {
-      const status = ["resolved", "closed"].includes(alert.status)
-        ? "resolved"
-        : ["cancelled", "false_alarm", "invalid"].includes(alert.status)
-          ? "rejected"
-          : "in_progress"
-      const address =
-        alert.display_location ||
-        alert.resolved_location ||
-        alert.address ||
-        alert.reported_area ||
-        alert.barangay
-
-      return {
-        id: alert.id,
-        record_type: "emergency",
-        emergency_id: alert.id,
-        public_id: alert.public_id,
-        tracking_id: alert.public_id,
-        title: "Responder is assigned to your location",
-        official_title: "Responder is assigned to your location",
-        summary: alert.display_description || emergencyDescription(alert),
-        category: "public_safety",
-        category_ref: null,
-        status,
-        severity: "critical",
-        address,
-        barangay: alert.barangay,
-        assigned_department: alert.responding_unit,
-        created_at: alert.created_at,
-      }
-    }
-  )
+  const emergencyReports: OfficialOverviewReport[] =
+    assignedEmergencies.map(emergencyToOverviewReport)
   const latestReports = [
     ...(dashboard?.recent_reports ?? [...reports, ...emergencyReports]),
   ]
@@ -447,6 +450,14 @@ export default function OfficialOverviewPage({
     },
     [navigate]
   )
+  const loadUnitEmergencies = useCallback(async () => {
+    try {
+      const alerts = await listAssignedEmergencies()
+      return alerts.map(emergencyToOverviewReport)
+    } catch {
+      return []
+    }
+  }, [])
   const responderUnit = analytics?.unit ?? selectedUnit
   const unitOptions = isResponder
     ? responderUnit
@@ -545,6 +556,11 @@ export default function OfficialOverviewPage({
           setReportsOpen(false)
           setDetailPost(post)
         }}
+        loadEmergencies={loadUnitEmergencies}
+        onOpenEmergency={(report) => {
+          setReportsOpen(false)
+          openOfficialReport(report)
+        }}
         loadReports={loadUnitReports}
         title={
           isResponder
@@ -567,14 +583,19 @@ export default function OfficialOverviewPage({
         onClose={closeReportDetail}
         onUpdated={(next) => setDetailPost(next)}
       />
-      <EmergencyTrackingSheet
-        initialAlert={detailAlert}
-        open={Boolean(detailAlert)}
-        onOpenChange={(open) => {
-          if (!open) closeAlertDetail()
-        }}
-        onAlertChange={setDetailAlert}
-      />
+      {detailAlert ? (
+        <MobileEmergencyReportDetailPage
+          alert={detailAlert}
+          onBack={closeAlertDetail}
+          onRefresh={async () => {
+            const next = await getEmergency(detailAlert.id)
+            setDetailAlert(next)
+          }}
+          audience={isResponder ? "responder" : "official"}
+          viewerId={user?.id ?? null}
+          onChanged={(next) => setDetailAlert(next)}
+        />
+      ) : null}
     </div>
   )
 }

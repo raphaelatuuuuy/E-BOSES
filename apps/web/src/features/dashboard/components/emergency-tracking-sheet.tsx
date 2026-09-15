@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   ArrowLeftIcon,
+  CircleCheck,
   FootprintsIcon,
   InfoIcon,
+  LoaderCircleIcon,
   LocateFixedIcon,
   MapPinIcon,
+  Maximize2Icon,
   MessageCircleIcon,
+  Minimize2Icon,
+  NavigationIcon,
   PhoneIcon,
   PlayIcon,
+  ScaleIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useAuthSession } from "@/features/auth/auth-session"
 
-import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import { drawCoverage } from "@/features/dashboard/components/map/coverage-layer"
@@ -20,8 +26,25 @@ import {
   GLYPHS,
   MAP_COLORS,
   glyphPinHtml,
+  reportDotHtml,
 } from "@/features/dashboard/components/map/markers"
 import { apiRequest, websocketTicket, websocketUrl } from "@/lib/api"
+import { useApiReachability } from "@/lib/api-reachability"
+import {
+  canUseSmsInbox,
+  requestSmsUpdate,
+} from "@/lib/native-sms-inbox"
+import {
+  isGatewaySender,
+  parseSmsUpdate,
+  type SmsUpdateStage,
+} from "@/features/dashboard/lib/sms-update-parser"
+import {
+  listSmsUpdates,
+  saveSmsUpdate,
+  type StoredSmsUpdate,
+} from "@/features/dashboard/lib/sms-updates-store"
+import { SOS_SMS_NUMBER } from "@/features/dashboard/components/sos/offline-sos-config"
 import {
   bindHoverCard,
   closeHoverCardsOnLeave,
@@ -29,36 +52,41 @@ import {
 import {
   createEmergencyAppeal,
   getEmergency,
+  getEmergencyRoute,
   isNewerEmergencyAlert,
   normalizeEmergencyAlert,
   revealResponderContact,
   type EmergencyAlert,
   type EmergencyChatMessage,
+  type EmergencyRoute,
 } from "@/features/dashboard/emergency-api"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import { buildEmergencyTimeline } from "@/features/dashboard/components/emergencies/emergency-timeline-lib"
 import { ConcernTimeline } from "@/features/dashboard/components/concerns/concern-timeline"
+import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
 import type { ConcernTimelineEntry } from "@/features/dashboard/components/concerns/concern-timeline-lib"
 import {
   drawRoute,
   routeRenderGeometry,
+  routeStartPoint,
   type RouteLayers,
 } from "@/features/dashboard/lib/route-line"
-import {
-  AuthenticatedMediaImage,
-  MediaLightbox,
-} from "@/features/dashboard/components/authenticated-media"
+import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 import {
   toMediaPreviewItem,
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
 import { isEmergencyActive } from "@/features/dashboard/components/record/status"
-import { formatClock } from "@/features/dashboard/lib/responder-format"
+import {
+  formatClock,
+  formatResolvedOn,
+} from "@/features/dashboard/lib/responder-format"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
   MapControlButton,
   MapControlStack,
 } from "@/features/dashboard/components/map/map-chrome"
+import { useMapFullscreen } from "@/features/dashboard/components/map/use-map-fullscreen"
 import {
   StreetViewModal,
   type StreetViewCoord,
@@ -77,18 +105,6 @@ const ACTIVE_ASSIGNMENT_STATUSES = new Set([
   "arrived",
   "assisting",
 ])
-
-const ASSIGNMENT_STATUS_LABELS: Record<string, string> = {
-  assigned: "Assigned",
-  acknowledged: "Preparing",
-  en_route: "On the way",
-  nearby: "Nearby",
-  arrived: "On scene",
-  assisting: "Assisting",
-  cancelled: "Cancelled",
-  declined: "Reassigned",
-  resolved: "Completed",
-}
 
 const RESPONDER_STATUS_HEADLINES: Record<string, string> = {
   assigned: "Responder is assigned to your location",
@@ -230,30 +246,14 @@ function pinIcon(L: typeof leaflet, color: string = MAP_COLORS.you, size = 32) {
   })
 }
 
-function responderIcon(L: typeof leaflet, size = 30) {
-  return L.divIcon({
-    className: "",
-    html: glyphPinHtml({
-      paths: GLYPHS.userResponder,
-      color: MAP_COLORS.responder,
-      size,
-      tone: "light",
-      tint: true,
-    }),
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
+function readResidentPosition() {
+  return new Promise<GeolocationPosition>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 12000,
+    })
   })
-}
-
-function tipDistanceLabel(meters: number | null | undefined) {
-  if (meters == null) return "Route unavailable"
-  if (meters < 1000) return `${Math.round(meters)} m`
-  return `${(meters / 1000).toFixed(1)} km`
-}
-
-function tipEtaLabel(seconds: number | null | undefined) {
-  if (seconds == null) return "ETA unavailable"
-  return `ETA ${Math.max(1, Math.round(seconds / 60))} min`
 }
 
 function EmergencyTrackingMap({
@@ -261,22 +261,42 @@ function EmergencyTrackingMap({
   wide,
   onBack,
   className,
+  onFullscreenChange,
 }: {
   alert: EmergencyAlert
   wide: boolean
   onBack: () => void
   className?: string
+  onFullscreenChange?: (full: boolean) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<leaflet.Map | null>(null)
   const leafletRef = useRef<typeof leaflet | null>(null)
+  const { wrapRef, fullView, toggleFullscreen, expandStyle } =
+    useMapFullscreen(
+      () => mapRef.current?.invalidateSize(),
+      onFullscreenChange
+    )
   const responderMarkerRefs = useRef<Map<number, leaflet.Marker>>(new Map())
-  const responderTipRefs = useRef<Map<number, leaflet.Tooltip>>(new Map())
   const focusResponderRef = useRef<((id: number) => void) | null>(null)
+  const navLayersRef = useRef<RouteLayers | null>(null)
+  const navMarkerRef = useRef<leaflet.Marker | null>(null)
+  const navPosRef = useRef<leaflet.LatLngTuple | null>(null)
+  const lastNavRouteRef = useRef<EmergencyRoute | null>(null)
+  const navWatchIdRef = useRef<number | null>(null)
+  const lastNavFetchRef = useRef(0)
+  const navigatingRef = useRef(false)
+  const [navigating, setNavigating] = useState(false)
+  const [navBusy, setNavBusy] = useState(false)
+  const [centerEta, setCenterEta] = useState<{
+    distance: number | null
+    eta: number | null
+  } | null>(null)
   const routeRef = useRef<RouteLayers | null>(null)
   const routeSigRef = useRef("")
   const fittedRef = useRef(false)
   const recenterRef = useRef<(() => void) | null>(null)
+  const frameViewRef = useRef<(() => void) | null>(null)
   const [mapReady, setMapReady] = useState(0)
   const [streetView, setStreetView] = useState<StreetViewCoord | null>(null)
   const [streetViewBottom, setStreetViewBottom] = useState<number | null>(null)
@@ -355,11 +375,19 @@ function EmergencyTrackingMap({
         )
       }
       recenterRef.current = centerView
+      frameViewRef.current = centerView
       routeSigRef.current = ""
       fittedRef.current = false
       setMapReady((value) => value + 1)
-      requestAnimationFrame(() => map?.invalidateSize())
-      window.setTimeout(() => map?.invalidateSize(), 400)
+      requestAnimationFrame(() => {
+        map?.invalidateSize()
+        frameViewRef.current?.()
+      })
+      window.setTimeout(() => {
+        if (!mapRef.current) return
+        mapRef.current.invalidateSize()
+        frameViewRef.current?.()
+      }, 400)
     }
 
     const responderMarkers = responderMarkerRefs.current
@@ -371,11 +399,19 @@ function EmergencyTrackingMap({
       mapRef.current = null
       leafletRef.current = null
       recenterRef.current = null
+      frameViewRef.current = null
       focusResponderRef.current = null
+      if (navWatchIdRef.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(navWatchIdRef.current)
+      }
+      navWatchIdRef.current = null
+      navigatingRef.current = false
+      navLayersRef.current?.remove()
+      navLayersRef.current = null
+      navMarkerRef.current?.remove()
+      navMarkerRef.current = null
       responderMarkers.forEach((marker) => marker.remove())
       responderMarkers.clear()
-      responderTipRefs.current.forEach((tip) => tip.remove())
-      responderTipRefs.current.clear()
       routeRef.current?.remove()
       routeRef.current = null
     }
@@ -390,8 +426,14 @@ function EmergencyTrackingMap({
   ])
 
   useEffect(() => {
-    mapRef.current?.invalidateSize()
-    window.setTimeout(() => mapRef.current?.invalidateSize(), 200)
+    if (!mapRef.current) return
+    mapRef.current.invalidateSize()
+    frameViewRef.current?.()
+    window.setTimeout(() => {
+      if (!mapRef.current) return
+      mapRef.current.invalidateSize()
+      frameViewRef.current?.()
+    }, 200)
   }, [wide])
 
   useEffect(() => {
@@ -442,6 +484,161 @@ function EmergencyTrackingMap({
       window.removeEventListener("eboses:focus-responder", onFocusResponder)
   }, [])
 
+  const drawResidentPreview = (
+    pos: leaflet.LatLngTuple,
+    route: EmergencyRoute | null | undefined,
+    fit = true
+  ) => {
+    const map = mapRef.current
+    const L = leafletRef.current
+    if (!map || !L) return
+    const destination: leaflet.LatLngTuple = [
+      Number(incidentLatitude),
+      Number(incidentLongitude),
+    ]
+    navPosRef.current = pos
+    lastNavRouteRef.current = route ?? null
+    const size = 26
+    const icon = L.divIcon({
+      className: "eboses-emergency-pin",
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      html: glyphPinHtml({
+        paths: GLYPHS.userResident,
+        color: MAP_COLORS.you,
+        size,
+        label: "You",
+      }),
+    })
+    if (navMarkerRef.current) {
+      navMarkerRef.current.setLatLng(pos)
+      navMarkerRef.current.setIcon(icon)
+    } else {
+      navMarkerRef.current = L.marker(pos, {
+        icon,
+        zIndexOffset: 1100,
+      }).addTo(map)
+    }
+    navLayersRef.current?.remove()
+    navLayersRef.current = null
+    if (route?.geometry) {
+      const geometry = routeRenderGeometry(route, {
+        origin: pos,
+        destination,
+      })
+      navLayersRef.current = drawRoute(L, map, {
+        ...geometry,
+        live: isLive,
+      })
+      setCenterEta({
+        distance: route.distance_meters,
+        eta: route.eta_seconds,
+      })
+    } else {
+      setCenterEta(null)
+    }
+    if (fit) {
+      map.fitBounds(L.latLngBounds([pos, destination]), {
+        padding: [28, 28],
+        maxZoom: 17,
+        animate: true,
+      })
+    }
+  }
+
+  const stopResidentNav = () => {
+    navigatingRef.current = false
+    if (navWatchIdRef.current != null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(navWatchIdRef.current)
+    }
+    navWatchIdRef.current = null
+    navLayersRef.current?.remove()
+    navLayersRef.current = null
+    navMarkerRef.current?.remove()
+    navMarkerRef.current = null
+    navPosRef.current = null
+    lastNavRouteRef.current = null
+    setCenterEta(null)
+    setNavigating(false)
+    setNavBusy(false)
+  }
+
+  const toggleResidentNav = () => {
+    if (navigatingRef.current) {
+      stopResidentNav()
+      return
+    }
+    if (!navigator.geolocation) {
+      toast.error("Location is unavailable on this device.")
+      return
+    }
+    navigatingRef.current = true
+    setNavigating(true)
+    setNavBusy(true)
+    void (async () => {
+      let position: GeolocationPosition
+      try {
+        position = await readResidentPosition()
+      } catch {
+        navigatingRef.current = false
+        setNavigating(false)
+        setNavBusy(false)
+        toast.error("Allow location access to navigate to your pin.")
+        return
+      }
+        if (!navigatingRef.current) return
+        const pos: leaflet.LatLngTuple = [
+          position.coords.latitude,
+          position.coords.longitude,
+        ]
+        let route: EmergencyRoute | null = null
+        try {
+          route =
+            (await getEmergencyRoute(alert.id, {
+              origin: { latitude: pos[0], longitude: pos[1] },
+            })) ?? null
+        } catch {
+          route = null
+        }
+        if (!navigatingRef.current) return
+        drawResidentPreview(pos, route)
+        if (!route?.geometry) {
+          toast.error("Currently experiencing issue, try again.")
+        }
+        setNavBusy(false)
+        lastNavFetchRef.current = Date.now()
+        navWatchIdRef.current = navigator.geolocation.watchPosition(
+          (fix) => {
+            if (!navigatingRef.current) return
+            const next: leaflet.LatLngTuple = [
+              fix.coords.latitude,
+              fix.coords.longitude,
+            ]
+            navPosRef.current = next
+            navMarkerRef.current?.setLatLng(next)
+            if (Date.now() - lastNavFetchRef.current > 12000) {
+              lastNavFetchRef.current = Date.now()
+              void (async () => {
+                try {
+                  const fresh = await getEmergencyRoute(alert.id, {
+                    origin: { latitude: next[0], longitude: next[1] },
+                  })
+                  if (navigatingRef.current)
+                    drawResidentPreview(next, fresh ?? null, false)
+                } catch {
+                  if (navigatingRef.current)
+                    drawResidentPreview(next, lastNavRouteRef.current, false)
+                }
+              })()
+            }
+          },
+          () => {},
+          { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+        )
+        setNavBusy(false)
+    })()
+  }
+
   useEffect(() => {
     const map = mapRef.current
     const L = leafletRef.current
@@ -467,66 +664,41 @@ function EmergencyTrackingMap({
 
     for (const assignment of activeAssignments) {
       const lastLocation = assignment.last_location
-      if (!lastLocation) continue
-      const responderLatLng: leaflet.LatLngTuple = [
-        Number(lastLocation.latitude),
-        Number(lastLocation.longitude),
-      ]
-      const tipRoute =
-        assignment.route ??
-        (assignment.id === activeAssignments[0]?.id ? alert.route : null)
-      const tipLabel = tipRoute?.geometry
-        ? `${tipDistanceLabel(tipRoute.distance_meters)} · ${tipEtaLabel(tipRoute.eta_seconds)}`
-        : (ASSIGNMENT_STATUS_LABELS[assignment.status] ??
-          assignment.status.replace(/_/g, " "))
+      const liveLat = Number(lastLocation?.latitude)
+      const liveLng = Number(lastLocation?.longitude)
+      const responderLatLng: leaflet.LatLngTuple | null =
+        lastLocation && Number.isFinite(liveLat) && Number.isFinite(liveLng)
+          ? [liveLat, liveLng]
+          : routeStartPoint(
+              assignment.route ??
+                (assignment.id === activeAssignments[0]?.id
+                  ? alert.route
+                  : null)
+            )
+      if (!responderLatLng) continue
       const existingMarker = responderMarkerRefs.current.get(assignment.id)
       if (existingMarker) existingMarker.setLatLng(responderLatLng)
       else {
         const marker = L.marker(responderLatLng, {
-          icon: responderIcon(L),
+          icon: L.divIcon({
+            className: "",
+            iconSize: [12, 12],
+            iconAnchor: [6, 6],
+            html: reportDotHtml(MAP_COLORS.responder, 12),
+          }),
+          keyboard: false,
           zIndexOffset: 1000,
         }).addTo(map)
         marker.on("click", () => {
           map.flyTo(marker.getLatLng(), 17, { animate: true })
         })
-        bindHoverCard(
-          L,
-          map,
-          marker,
-          {
-            title: assignment.responder.full_name,
-            meta: assignment.assigned_unit?.name || "Responder",
-            excerpt:
-              ASSIGNMENT_STATUS_LABELS[assignment.status] ??
-              assignment.status.replace(/_/g, " "),
-            date: assignment.assigned_at,
-          },
-          30
-        )
         responderMarkerRefs.current.set(assignment.id, marker)
       }
-      const existingTip = responderTipRefs.current.get(assignment.id)
-      if (existingTip) {
-        existingTip.setLatLng(responderLatLng)
-        existingTip.setContent(tipLabel)
-      } else {
-        const tip = L.tooltip({
-          permanent: true,
-          direction: "top",
-          offset: [0, -18],
-          className: "eboses-responder-eta-tip",
-          interactive: false,
-        })
-          .setLatLng(responderLatLng)
-          .setContent(tipLabel)
-          .addTo(map)
-        responderTipRefs.current.set(assignment.id, tip)
-      }
     }
-    for (const [id, tip] of responderTipRefs.current) {
+    for (const [id, marker] of responderMarkerRefs.current) {
       if (!activeAssignments.some((item) => item.id === id)) {
-        tip.remove()
-        responderTipRefs.current.delete(id)
+        marker.remove()
+        responderMarkerRefs.current.delete(id)
       }
     }
     focusResponderRef.current = (id: number) => {
@@ -551,9 +723,15 @@ function EmergencyTrackingMap({
     ]
     const focusMapAboveSheet = () => {
       if (!mapRef.current) return
-      map.invalidateSize({ pan: false })
+      map.invalidateSize()
+      map.setView(destination, 17, { animate: false })
       const offset = Math.min(280, Math.round(map.getSize().y * 0.36))
       if (offset > 0) map.panBy([0, offset], { animate: false })
+    }
+    frameViewRef.current = () => {
+      if (!mapRef.current) return
+      map.setView(destination, 17, { animate: false })
+      requestAnimationFrame(focusMapAboveSheet)
     }
     const primary =
       activeAssignments.find((item) => item.last_location)?.last_location ??
@@ -586,9 +764,22 @@ function EmergencyTrackingMap({
     mapReady,
   ])
 
+  const pillAssignment =
+    alert.current_assignment ?? (alert.assignments ?? [])[0] ?? null
+  const pillRoute = pillAssignment?.route ?? alert.route
+  const pillEta =
+    centerEta ??
+    (fullView && pillRoute?.geometry
+      ? { distance: pillRoute.distance_meters, eta: pillRoute.eta_seconds }
+      : null)
+
   return (
     <>
-      <div className={cn("relative h-full w-full", className)}>
+      <div
+        ref={wrapRef}
+        style={expandStyle}
+        className={cn("relative h-full w-full", className)}
+      >
       <div ref={containerRef} className="h-full w-full bg-tint" />
       <button
         type="button"
@@ -621,8 +812,49 @@ function EmergencyTrackingMap({
           >
             <FootprintsIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label={
+              navigating ? "Stop navigation to pin" : "Navigate to pin"
+            }
+            active={navigating}
+            onClick={toggleResidentNav}
+            loading={navBusy}
+          >
+            {navBusy ? (
+              <LoaderCircleIcon className="size-4 animate-spin" />
+            ) : (
+              <NavigationIcon className="size-5" strokeWidth={1.9} />
+            )}
+          </MapControlButton>
+          <MapControlButton
+            tone="light"
+            divider
+            label={fullView ? "Exit full map view" : "View full map"}
+            active={fullView}
+            onClick={toggleFullscreen}
+          >
+            {fullView ? (
+              <Minimize2Icon className="size-5" strokeWidth={1.9} />
+            ) : (
+              <Maximize2Icon className="size-5" strokeWidth={1.9} />
+            )}
+          </MapControlButton>
         </MapControlStack>
       </div>
+      {pillEta ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center px-4">
+          <div className="flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]">
+            <span className="text-[16px] leading-none font-semibold text-neutral-900">
+              {`${pillEta.eta == null ? "ETA unavailable" : `ETA ${Math.max(1, Math.round(pillEta.eta / 60))} min`} · ${pillEta.distance == null ? "" : pillEta.distance < 1000 ? `${Math.round(pillEta.distance)} m` : `${(pillEta.distance / 1000).toFixed(1)} km`}`}
+            </span>
+            <span className="mt-1.5 text-[14px] leading-snug font-medium text-neutral-500">
+              Help is on the way
+            </span>
+          </div>
+        </div>
+      ) : null}
       {streetView ? (
         <div
           className="pointer-events-auto absolute inset-x-0 top-0 z-[1000]"
@@ -636,22 +868,6 @@ function EmergencyTrackingMap({
         </div>
       ) : null}
       </div>
-      <style>{`
-        .eboses-responder-eta-tip {
-          background: #111111;
-          color: #ffffff;
-          border: none;
-          border-radius: 999px;
-          font-size: 12px;
-          font-weight: 700;
-          padding: 6px 10px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-          white-space: nowrap;
-        }
-        .eboses-responder-eta-tip::before {
-          display: none;
-        }
-      `}</style>
     </>
   )
 }
@@ -676,11 +892,13 @@ function Section({
   className?: string
 }) {
   return (
-    <section className={cn("mt-6 flex flex-col first-of-type:mt-0", className)}>
+    <section className={cn("flex flex-col", className)}>
       {label ? (
-        <p className="text-[12px] font-semibold text-neutral-500">{label}</p>
+        <p className="text-[10px] font-bold tracking-[0.06em] text-neutral-600 uppercase">
+          {label}
+        </p>
       ) : null}
-      <div className={cn("flex min-h-0 flex-col", label ? "mt-3" : undefined)}>
+      <div className={cn("flex min-h-0 flex-col", label ? "mt-2" : undefined)}>
         {children}
       </div>
     </section>
@@ -717,108 +935,356 @@ function StatusTimeline({ alert }: { alert: EmergencyAlert }) {
   return (
     <div>
       <h3 className="sr-only">Updates</h3>
-      <ConcernTimeline items={items} collapsibleHistory large />
+      <ConcernTimeline
+        items={items}
+        collapsibleHistory
+        large
+        trackingId={alert.tracking_id || alert.public_id}
+      />
+    </div>
+  )
+}
+
+const SMS_STAGE_META: Record<
+  SmsUpdateStage,
+  { badge: string; accent: "info" | "warning" | "brand" | "success"; icon: "inbox" | "clock" | "hardhat" | "check" }
+> = {
+  received: { badge: "Received", accent: "info", icon: "inbox" },
+  en_route: { badge: "Responder en route", accent: "warning", icon: "clock" },
+  nearby: { badge: "Responder nearby", accent: "warning", icon: "clock" },
+  arrived: { badge: "Responder arrived", accent: "brand", icon: "hardhat" },
+  resolved: { badge: "Resolved", accent: "success", icon: "check" },
+}
+
+const SERVER_STATUS_TO_STAGE: Record<string, SmsUpdateStage> = {
+  submitted: "received",
+  routing: "received",
+  routed: "received",
+  awaiting_acknowledgment: "received",
+  acknowledged: "received",
+  en_route: "en_route",
+  nearby: "nearby",
+  arrived: "arrived",
+  in_progress: "arrived",
+  resolved: "resolved",
+  closed: "resolved",
+}
+
+function smsEntryToTimelineItem(
+  entry: StoredSmsUpdate
+): ConcernTimelineEntry {
+  const meta = SMS_STAGE_META[entry.stage]
+  return {
+    id: `sms-${entry.stage}-${entry.receivedAt}`,
+    badge: meta.badge,
+    time: entry.receivedAt,
+    state: "done",
+    accent: meta.accent,
+    icon: meta.icon,
+    actor: "via SMS",
+    actorUser: null,
+    content: null,
+  }
+}
+
+function SmsBackedStatusTimeline({ alert }: { alert: EmergencyAlert }) {
+  const { user } = useAuthSession()
+  return (
+    <SmsTimelineBody
+      key={`${user?.id ?? "guest"}:${alert.id}`}
+      alert={alert}
+      userId={user?.id}
+    />
+  )
+}
+
+function SmsTimelineBody({
+  alert,
+  userId,
+}: {
+  alert: EmergencyAlert
+  userId: number | undefined
+}) {
+  const apiOnline = useApiReachability()
+  const [smsEntries, setSmsEntries] = useState<StoredSmsUpdate[]>(() =>
+    listSmsUpdates(userId, alert.id)
+  )
+  const [checking, setChecking] = useState(false)
+  const autoChecked = useRef(false)
+
+  const checkMessages = useCallback(async () => {
+    if (checking || !canUseSmsInbox()) return
+    setChecking(true)
+    try {
+      const message = await requestSmsUpdate(SOS_SMS_NUMBER)
+      if (
+        message &&
+        isGatewaySender(message.sender, SOS_SMS_NUMBER)
+      ) {
+        const stage = parseSmsUpdate(message.body)
+        if (stage) {
+          setSmsEntries(
+            saveSmsUpdate(userId, alert.id, {
+              stage,
+              body: message.body.trim(),
+              receivedAt: new Date().toISOString(),
+            })
+          )
+        }
+      }
+    } finally {
+      setChecking(false)
+    }
+  }, [alert.id, checking, userId])
+
+  useEffect(() => {
+    if (
+      !autoChecked.current &&
+      !apiOnline &&
+      canUseSmsInbox() &&
+      isEmergencyActive(alert.status)
+    ) {
+      autoChecked.current = true
+      void checkMessages()
+    }
+  }, [apiOnline, alert.status, checkMessages])
+
+  if (!smsEntries.length) return <StatusTimeline alert={alert} />
+
+  const covered = new Set(
+    (alert.status_events ?? []).map(
+      (event) => SERVER_STATUS_TO_STAGE[event.status] ?? event.status
+    )
+  )
+  const extra = smsEntries.filter((entry) => !covered.has(entry.stage))
+  const showSmsButton =
+    canUseSmsInbox() && isEmergencyActive(alert.status)
+  if (!extra.length) {
+    return (
+      <div>
+        <StatusTimeline alert={alert} />
+        {showSmsButton ? (
+          <button
+            type="button"
+            onClick={() => void checkMessages()}
+            disabled={checking}
+            className="mt-2 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-[11.5px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-50 disabled:opacity-60"
+          >
+            {checking ? "Waiting for message…" : "Check Messages for updates"}
+          </button>
+        ) : null}
+      </div>
+    )
+  }
+
+  const serverItems: ConcernTimelineEntry[] =
+    alert.status_events?.length
+      ? buildEmergencyTimeline(alert).map((item) => ({
+          id: item.id,
+          badge: item.badge,
+          time: item.time,
+          content: item.content ?? null,
+          state: item.state as ConcernTimelineEntry["state"],
+          accent: item.accent as ConcernTimelineEntry["accent"],
+          icon: item.icon as ConcernTimelineEntry["icon"],
+          actor: item.actor,
+          actorUser: item.actorUser,
+        }))
+      : []
+  const merged = [...serverItems, ...extra.map(smsEntryToTimelineItem)]
+    .sort(
+      (a, b) =>
+        new Date(a.time ?? 0).getTime() - new Date(b.time ?? 0).getTime()
+    )
+    .map((item, index, list) => ({
+      ...item,
+      state: (index === list.length - 1
+        ? "current"
+        : "done") as ConcernTimelineEntry["state"],
+    }))
+
+  return (
+    <div>
+      <h3 className="sr-only">Updates</h3>
+      <ConcernTimeline
+        items={merged}
+        collapsibleHistory
+        large
+        trackingId={alert.tracking_id || alert.public_id}
+      />
+      {canUseSmsInbox() && isEmergencyActive(alert.status) ? (
+        <button
+          type="button"
+          onClick={() => void checkMessages()}
+          disabled={checking}
+          className="mt-2 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-[11.5px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-50 disabled:opacity-60"
+        >
+          {checking ? "Waiting for message…" : "Check Messages for updates"}
+        </button>
+      ) : null}
     </div>
   )
 }
 
 function DetailsColumn({
   alert,
-  canAppeal,
-  appealReason,
-  setAppealReason,
-  appealBusy,
-  submitAppeal,
+  showAppealHistory,
   appealHistory,
 }: {
   alert: EmergencyAlert
-  canAppeal: boolean
-  appealReason: string
-  setAppealReason: (v: string) => void
-  appealBusy: boolean
-  submitAppeal: () => void
+  showAppealHistory: boolean
   appealHistory: EmergencyAlert["appeals"]
 }) {
   const live = isEmergencyActive(alert.status)
-  const description =
-    alert.display_description?.trim() || alert.note?.trim() || statusText(alert)
+  const resolved = alert.status === "resolved"
+  const displayText =
+    alert.display_description?.trim() ||
+    alert.note?.trim() ||
+    statusText(alert)
+  const rawNote = alert.note?.trim() || ""
+  const showRawNote = Boolean(rawNote && rawNote !== displayText)
   const [lightbox, setLightbox] = useState<{
     items: MediaPreviewItem[]
     index: number
   } | null>(null)
-  const mediaItems: MediaPreviewItem[] = (alert.media ?? []).map((media) =>
-    toMediaPreviewItem(media.raw_url, media.original_filename, media.mime_type)
-  )
+  const submittedMedia = (alert.media ?? []).map((media) => ({
+    key: `submitted-${media.id}`,
+    preview: media.preview_url,
+    raw: media.raw_url,
+    filename: media.original_filename,
+    mime: media.mime_type,
+  }))
+  const resolvedMedia = (alert.resolution_evidence ?? []).map((item) => ({
+    key: `resolved-${item.id}`,
+    preview: item.preview_url || item.raw_url,
+    raw: item.raw_url || item.preview_url,
+    filename: item.original_filename,
+    mime: item.mime_type,
+  }))
+  const submittedItems = submittedMedia.map((media) => ({
+    ...toMediaPreviewItem(media.raw, media.filename, media.mime),
+    badge: "Reported issue",
+  }))
+  const resolvedItems = resolvedMedia.map((media) => ({
+    ...toMediaPreviewItem(media.raw, media.filename, media.mime),
+    badge: "Resolved case",
+  }))
+  const allItems = [...submittedItems, ...resolvedItems]
+  const renderMediaGrid = (
+    items: { key: string; preview: string; filename: string; mime: string }[],
+    offset: number
+  ) => {
+    const imageIndex = items.findIndex((media) =>
+      media.mime.startsWith("image/")
+    )
+    const displayIndex = imageIndex >= 0 ? imageIndex : 0
+    const display = items[displayIndex]
+    if (!display) return null
+    if (display.mime.startsWith("image/")) {
+      return (
+        <ReportPhotoPreview
+          originalSrc={display.preview}
+          alt={display.filename}
+          onOpen={() =>
+            setLightbox({ items: allItems, index: offset + displayIndex })
+          }
+        />
+      )
+    }
+    return (
+      <button
+        type="button"
+        className="flex h-24 w-full items-center justify-center gap-2 rounded-2xl border border-neutral-200 bg-white text-[12px] font-semibold text-neutral-700"
+        onClick={() =>
+          setLightbox({ items: allItems, index: offset + displayIndex })
+        }
+      >
+        <PlayIcon className="size-4" />
+        Video evidence
+      </button>
+    )
+  }
 
   return (
-    <div className="flex flex-col pb-0">
+    <div className="flex flex-col space-y-5 pb-4">
       <div
         className={cn(
           "flex w-full flex-col gap-3 rounded-2xl px-3.5 py-3 text-[15px] leading-relaxed",
           live
             ? "bg-severity-critical-surface text-sos"
-            : "bg-neutral-100 text-neutral-700"
+            : resolved
+              ? "bg-emerald-50 text-emerald-900"
+              : "bg-neutral-100 text-neutral-700"
         )}
       >
         <div className="flex w-full items-start gap-2">
-          <TriangleAlertIcon
-            className={cn(
-              "mt-[2px] size-5 shrink-0",
-              live ? "text-sos" : "text-neutral-600"
-            )}
-            strokeWidth={1.9}
-            aria-hidden
-          />
-          <p className="min-w-0 flex-1 text-[15px] leading-relaxed font-normal break-words whitespace-pre-wrap">
-            {description}
-          </p>
-        </div>
-        {(alert.media ?? []).length > 0 ? (
-          <div className="w-full border-t border-neutral-200 pt-3">
-            <div className="grid grid-cols-2 gap-2">
-              {(alert.media ?? []).map((media, mediaIndex) =>
-                media.mime_type.startsWith("image/") ? (
-                  <button
-                    key={media.id}
-                    type="button"
-                    className="overflow-hidden rounded-xl border border-neutral-200 text-left"
-                    onClick={() =>
-                      setLightbox({ items: mediaItems, index: mediaIndex })
-                    }
-                  >
-                    <AuthenticatedMediaImage
-                      src={media.preview_url}
-                      alt={media.original_filename}
-                      className="h-24 w-full object-cover"
-                    />
-                  </button>
-                ) : (
-                  <button
-                    key={media.id}
-                    type="button"
-                    className="flex h-24 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-[12px] font-semibold text-neutral-700"
-                    onClick={() =>
-                      setLightbox({ items: mediaItems, index: mediaIndex })
-                    }
-                  >
-                    <PlayIcon className="size-4" />
-                    Video evidence
-                  </button>
-                )
+          {resolved ? (
+            <CircleCheck
+              className="mt-[2px] size-5 shrink-0 text-emerald-600"
+              strokeWidth={2.2}
+              aria-hidden
+            />
+          ) : (
+            <TriangleAlertIcon
+              className={cn(
+                "mt-[2px] size-5 shrink-0",
+                live ? "text-sos" : "text-neutral-600"
               )}
-            </div>
+              strokeWidth={1.9}
+              aria-hidden
+            />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-[15px] leading-relaxed font-normal break-words whitespace-pre-wrap">
+              {displayText}
+            </p>
+            {showRawNote ? (
+              <p className="mt-2 border-l-2 border-current/20 py-1 pl-3 text-[14px] leading-relaxed break-words whitespace-pre-wrap">
+                {rawNote}
+              </p>
+            ) : null}
+            {submittedMedia.length || resolvedMedia.length ? (
+              <div className="mt-2 space-y-3 border-l-2 border-current/20 py-1 pl-3">
+                {submittedMedia.length ? (
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-semibold opacity-70">
+                      Submitted photos
+                    </p>
+                    {renderMediaGrid(submittedMedia, 0)}
+                  </div>
+                ) : null}
+                {resolvedMedia.length ? (
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-semibold opacity-70">
+                      Resolved photos
+                    </p>
+                    {renderMediaGrid(resolvedMedia, submittedItems.length)}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {resolved && alert.resolved_at ? (
+              <p className="mt-2 text-[12px] font-normal">
+                This issue was resolved on {formatResolvedOn(alert.resolved_at)}.
+              </p>
+            ) : null}
           </div>
-        ) : null}
+        </div>
       </div>
 
-      <section className="mt-5">
-        <p className="mb-2 text-[15px] font-bold tracking-tight text-neutral-900">
-          Status
-        </p>
-        <StatusTimeline alert={alert} />
+      <section>
+        <div className="mb-2 flex items-baseline justify-between gap-2">
+          <p className="text-[17px] font-bold tracking-tight text-neutral-900">
+            Status
+          </p>
+          <p className="text-[12px] font-normal text-neutral-500">
+            Track the process
+          </p>
+        </div>
+        <SmsBackedStatusTimeline alert={alert} />
       </section>
 
-      {appealHistory?.length ? (
+      {showAppealHistory && appealHistory?.length ? (
         <Section label="Review history">
           <div className="space-y-3">
             {appealHistory.map((appeal) => (
@@ -838,35 +1304,48 @@ function DetailsColumn({
         </Section>
       ) : null}
 
-      {canAppeal ? (
-        <Section label="Request a review">
-          <p className="text-[12px] leading-5 text-neutral-500">
-            Use only if this emergency was resolved or recorded incorrectly.
-          </p>
-          <textarea
-            value={appealReason}
-            onChange={(e) => setAppealReason(e.target.value)}
-            placeholder="Explain what should be reviewed"
-            className="mt-3 min-h-20 w-full resize-none rounded-[18px] border-[1.5px] border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-400"
-          />
-          <Button
-            type="button"
-            disabled={appealBusy || !appealReason.trim()}
-            onClick={() => void submitAppeal()}
-            className="mt-3 h-11 w-full rounded-full bg-brand-orange text-white hover:bg-brand-orange-strong"
-          >
-            {appealBusy ? "Submitting" : "Submit review request"}
-          </Button>
-        </Section>
-      ) : null}
-
       {lightbox ? (
         <MediaLightbox
           items={lightbox.items}
           index={lightbox.index}
+          simpleCounter
           onClose={() => setLightbox(null)}
         />
       ) : null}
+    </div>
+  )
+}
+
+function AppealForm({
+  appealReason,
+  setAppealReason,
+  appealBusy,
+  submitAppeal,
+}: {
+  appealReason: string
+  setAppealReason: (v: string) => void
+  appealBusy: boolean
+  submitAppeal: () => void
+}) {
+  return (
+    <div className="flex flex-col pb-0">
+      <p className="text-[12px] leading-5 text-neutral-500">
+        Use only if this emergency was resolved or recorded incorrectly.
+      </p>
+      <textarea
+        value={appealReason}
+        onChange={(e) => setAppealReason(e.target.value)}
+        placeholder="Explain what should be reviewed"
+        className="mt-3 min-h-20 w-full resize-none rounded-[18px] border-[1.5px] border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-400"
+      />
+      <button
+        type="button"
+        disabled={appealBusy || !appealReason.trim()}
+        onClick={() => void submitAppeal()}
+        className="mt-3 h-11 w-full rounded-full bg-brand-orange text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-60"
+      >
+        {appealBusy ? "Submitting" : "Submit review request"}
+      </button>
     </div>
   )
 }
@@ -885,6 +1364,7 @@ export function EmergencyTrackingSheet({
   const [wide, setWide] = useState(
     () => typeof window !== "undefined" && window.innerWidth >= 1024
   )
+  const [mapFull, setMapFull] = useState(false)
   const [alert, setAlert] = useState<EmergencyAlert | null>(initialAlert)
   const alertRef = useRef<EmergencyAlert | null>(initialAlert)
   const [appealReason, setAppealReason] = useState("")
@@ -900,6 +1380,8 @@ export function EmergencyTrackingSheet({
     null
   )
   const [chatView, setChatView] = useState(false)
+  const [appealView, setAppealView] = useState(false)
+  const { user: sessionUser } = useAuthSession()
   const [callingResponder, setCallingResponder] = useState(false)
   const [responderContact, setResponderContact] = useState<{
     key: string
@@ -927,6 +1409,7 @@ export function EmergencyTrackingSheet({
     setPrevInitialAlert(initialAlert)
     setAlert(initialAlert)
     if (switchedAlert) setChatView(false)
+    if (switchedAlert) setAppealView(false)
   }
 
   const [prevOpen, setPrevOpen] = useState(open)
@@ -935,6 +1418,7 @@ export function EmergencyTrackingSheet({
     if (!open) {
       setChatMessage(null)
       setChatView(false)
+      setAppealView(false)
     } else if (typeof window !== "undefined") {
       setWide(window.innerWidth >= 1024)
     }
@@ -1106,10 +1590,13 @@ export function EmergencyTrackingSheet({
 
   if (!open || !alert || typeof document === "undefined") return null
 
+  const isReporter = Boolean(
+    sessionUser && alert.reporter && sessionUser.id === alert.reporter.id
+  )
   const isLive = isEmergencyActive(alert.status)
   const pendingAppeal = alert.appeals?.find((a) => a.status === "submitted")
   const canAppeal = Boolean(
-    alert && !isEmergencyActive(alert.status) && !pendingAppeal
+    alert && !isEmergencyActive(alert.status) && !pendingAppeal && isReporter
   )
   const appealHistory = alert.appeals ?? []
   const responderPhone =
@@ -1131,6 +1618,7 @@ export function EmergencyTrackingSheet({
       const nextAlert = await getEmergency(alert.id)
       adoptAlert(nextAlert)
       setAppealReason("")
+      setAppealView(false)
       toast.success("Review request submitted")
     } catch (error) {
       toast.error(
@@ -1171,12 +1659,17 @@ export function EmergencyTrackingSheet({
   const details = (
     <DetailsColumn
       alert={alert}
-      canAppeal={canAppeal}
+      showAppealHistory={isReporter}
+      appealHistory={appealHistory}
+    />
+  )
+
+  const appealPanel = (
+    <AppealForm
       appealReason={appealReason}
       setAppealReason={setAppealReason}
       appealBusy={appealBusy}
       submitAppeal={() => void submitAppeal()}
-      appealHistory={appealHistory}
     />
   )
 
@@ -1195,6 +1688,14 @@ export function EmergencyTrackingSheet({
     />
   )
 
+  const headerRoute = responderAssignment?.route ?? alert.route
+  const headerEta =
+    headerRoute?.geometry && isLive
+      ? `${headerRoute.distance_meters == null ? "" : `${headerRoute.distance_meters < 1000 ? `${Math.round(headerRoute.distance_meters)} m` : `${(headerRoute.distance_meters / 1000).toFixed(1)} km`} `}${headerRoute.eta_seconds == null ? "ETA unavailable" : `ETA ${Math.max(1, Math.round(headerRoute.eta_seconds / 60))} min`}`
+      : null
+  const sheetHeadline =
+    chatView || appealView ? null : responderStatusHeadline(alert)
+
   return (
     <SheetDialog
       open={open}
@@ -1202,12 +1703,25 @@ export function EmergencyTrackingSheet({
       title={
         chatView
           ? "Chat"
-          : isLive
-            ? responderStatusHeadline(alert) ?? "Live alert"
-            : "Emergency alert"
+          : appealView
+            ? "Request a review"
+            : isLive
+              ? sheetHeadline ? (
+                  <span>
+                    {sheetHeadline}{" "}
+                    {headerEta ? (
+                      <span className="text-[14px] font-normal text-neutral-500">
+                        {headerEta}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : (
+                  "Live alert"
+                )
+              : "Emergency alert"
       }
       titleClassName={
-        !chatView && isLive && responderStatusHeadline(alert)
+        !chatView && !appealView && isLive && sheetHeadline
           ? "text-center text-[18px] font-medium leading-snug"
           : undefined
       }
@@ -1226,9 +1740,12 @@ export function EmergencyTrackingSheet({
         <EmergencyTrackingMap
           alert={alert}
           wide={wide}
-          onBack={() =>
-            chatView ? setChatView(false) : onOpenChange(false)
-          }
+          onFullscreenChange={setMapFull}
+          onBack={() => {
+            if (chatView) setChatView(false)
+            else if (appealView) setAppealView(false)
+            else onOpenChange(false)
+          }}
         />
       }
       backdropScrim={false}
@@ -1236,13 +1753,14 @@ export function EmergencyTrackingSheet({
       showClose={false}
       className={cn(
         "bg-white text-neutral-900",
-        chatView
+        mapFull && "hidden",
+        chatView || appealView
           ? "h-[min(760px,72dvh)] max-h-[min(760px,72dvh)] sm:h-[min(760px,82vh)] sm:max-h-[min(760px,82vh)]"
           : "h-auto max-h-[min(760px,72dvh)] sm:max-h-[min(760px,82vh)]"
       )}
       bodyClassName={cn(
         "min-h-0 flex flex-col px-5",
-        chatView ? "flex-1 pb-5" : "flex-1 pb-0"
+        chatView || appealView ? "flex-1 pb-5" : "flex-1 pb-0"
       )}
       actions={
         chatView ? (
@@ -1252,10 +1770,24 @@ export function EmergencyTrackingSheet({
           >
             <InfoIcon className="size-[22px]" strokeWidth={2} />
           </SheetIconButton>
+        ) : appealView ? (
+          <SheetIconButton
+            label="Show emergency details"
+            onClick={() => setAppealView(false)}
+          >
+            <InfoIcon className="size-[22px]" strokeWidth={2} />
+          </SheetIconButton>
+        ) : canAppeal ? (
+          <SheetIconButton
+            label="Request a review"
+            onClick={() => setAppealView(true)}
+          >
+            <ScaleIcon className="size-[22px]" strokeWidth={2} />
+          </SheetIconButton>
         ) : undefined
       }
       footer={
-        !chatView && isLive ? (
+        !chatView && !appealView && isLive ? (
           <div className="space-y-3">
             {responderAssignment ? (
               <div className="flex items-center gap-3 border-b border-neutral-100 pb-3">
@@ -1309,7 +1841,7 @@ export function EmergencyTrackingSheet({
             ) : null}
             <p className="text-center text-[11px] text-neutral-400">
               {hasActiveResponder(alert)
-                ? "In case of changes or new details, contact the response team in chat."
+                ? "In case of changes or new details, contact the barangay in chat."
                 : hadResponderAssignment(alert)
                   ? "In case of changes, keep this page open while a new responder is assigned."
                   : "In case of changes or new details, keep this page open for updates."
@@ -1319,7 +1851,11 @@ export function EmergencyTrackingSheet({
         ) : undefined
       }
     >
-      {chatView && chatAvailable ? chatPanel : details}
+      {chatView && chatAvailable
+        ? chatPanel
+        : appealView && canAppeal
+          ? appealPanel
+          : details}
     </SheetDialog>
   )
 }

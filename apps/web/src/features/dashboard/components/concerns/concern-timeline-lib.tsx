@@ -8,7 +8,7 @@ import type {
   ConcernTimelineRecord,
   PublicUser,
 } from "@/features/dashboard/api"
-import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
 import {
   formatDate,
   formatTime,
@@ -207,22 +207,12 @@ function resolvedNoteBlock({
         <span className="min-w-0 flex-1">{text}</span>
       </div>
       {proof.length ? (
-        <div className="mt-1.5 grid grid-cols-2 gap-2">
-          {proof.map((item, proofIndex) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onOpenProof?.(proofPreview, proofIndex)}
-              className="overflow-hidden rounded-control border border-card-line bg-canvas text-left"
-              title={item.original_filename}
-            >
-              <AuthenticatedMediaImage
-                src={item.preview_url || item.raw_url}
-                alt={item.original_filename}
-                className="h-24 w-full object-cover"
-              />
-            </button>
-          ))}
+        <div className="mt-1.5">
+          <ReportPhotoPreview
+            resolutionSrc={proof[0].preview_url || proof[0].raw_url}
+            alt={proof[0].original_filename}
+            onOpen={() => onOpenProof?.(proofPreview, 0)}
+          />
         </div>
       ) : null}
     </div>

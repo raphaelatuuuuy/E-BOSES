@@ -14,6 +14,7 @@ import { usePageTitle } from "@/hooks/use-page-title"
 import {
   ConfigBreadcrumb,
   ConfigHeroAction,
+  ConfigShell,
 } from "@/features/dashboard/components/config/config-shell"
 import {
   SheetDialog,
@@ -28,7 +29,7 @@ interface Stat {
   alarm?: boolean
 }
 
-export default function OfficialCommunityContentPage() {
+export default function OfficialCommunityContentPage({ embedded = false }: { embedded?: boolean }) {
   usePageTitle("Community Announcements")
 
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
@@ -88,6 +89,12 @@ export default function OfficialCommunityContentPage() {
     setComposerOpen(true)
   }
 
+  useEffect(() => {
+    if (!embedded) return
+    window.addEventListener("configuration-primary-action", openNew)
+    return () => window.removeEventListener("configuration-primary-action", openNew)
+  })
+
   function openEdit(id: number) {
     const target = announcements.find((item) => item.id === id)
     if (target) {
@@ -118,74 +125,26 @@ export default function OfficialCommunityContentPage() {
     }
   }
 
-  return (
-    <div className="min-h-full bg-white">
-      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28">
-        <ConfigBreadcrumb
-          trail={[
-            { label: "Concerns", to: "/dashboard/reports" },
-            { label: "Community Announcements" },
-          ]}
-        />
+  function handleDelete(id: number) {
+    const target = announcements.find((item) => item.id === id)
+    if (target) setDeleteTarget(target)
+  }
 
-        <header className="mt-8 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
-          <div className="flex min-w-0 items-start gap-6 sm:flex-1">
-            <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
-              <MegaphoneIcon className="size-7" strokeWidth={1.7} aria-hidden />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-page-title text-balance text-brand-navy">
-                Community Announcements
-              </h1>
-              <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
-                Create and manage advisories, schedules, affected areas, and
-                resident-facing updates.
-              </p>
-            </div>
-          </div>
+  const listBody = loading ? (
+    <p className="py-14 text-center text-read text-neutral-400">
+      Reading announcements…
+    </p>
+  ) : (
+    <ContentList
+      items={items}
+      areaContext={areaContext}
+      onEdit={openEdit}
+      onDelete={handleDelete}
+    />
+  )
 
-          <div className="shrink-0 [&>*]:w-full sm:[&>*]:w-auto">
-            <ConfigHeroAction icon={PlusIcon} onClick={openNew}>
-              New announcement
-            </ConfigHeroAction>
-          </div>
-        </header>
-
-        <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-6">
-          {stats.map((stat) => (
-            <div key={stat.label} className="min-w-0">
-              <dd
-                className={cn(
-                  "text-[1.75rem] leading-none tabular-nums font-light tracking-tight",
-                  stat.alarm ? "text-sos" : "text-brand-navy",
-                )}
-              >
-                {stat.value}
-              </dd>
-              <dt className="mt-2 text-meta text-neutral-500">{stat.label}</dt>
-            </div>
-          ))}
-        </dl>
-
-        {loading ? (
-          <p className="mt-12 py-14 text-center text-read text-neutral-400">
-            Reading announcements…
-          </p>
-        ) : (
-          <div className="mt-12">
-            <ContentList
-              items={items}
-              areaContext={areaContext}
-              onEdit={openEdit}
-              onDelete={(id) => {
-                const target = announcements.find((item) => item.id === id)
-                if (target) setDeleteTarget(target)
-              }}
-            />
-          </div>
-        )}
-      </div>
-
+  const overlays = (
+    <>
       {composerOpen ? (
         <SheetDialog
           open
@@ -279,6 +238,85 @@ export default function OfficialCommunityContentPage() {
           </div>
         }
       />
+    </>
+  )
+
+  if (embedded) {
+    return (
+      <ConfigShell
+        embedded
+        hideEmbeddedAction
+        icon={MegaphoneIcon}
+        eyebrow="Operations"
+        title="Community Announcements"
+        description="Create and manage advisories, schedules, affected areas, and resident-facing updates."
+        action={<ConfigHeroAction icon={PlusIcon} onClick={openNew}>New announcement</ConfigHeroAction>}
+      >
+        {listBody}
+        {overlays}
+      </ConfigShell>
+    )
+  }
+
+  return (
+    <div className="min-h-full bg-white">
+      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28">
+        <ConfigBreadcrumb
+          trail={[
+            { label: "Concerns", to: "/dashboard/reports" },
+            { label: "Community Announcements" },
+          ]}
+        />
+
+        <header className="mt-8 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
+          <div className="flex min-w-0 items-start gap-6 sm:flex-1">
+            <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
+              <MegaphoneIcon className="size-7" strokeWidth={1.7} aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <h1 className="text-page-title text-balance text-brand-navy">
+                Community Announcements
+              </h1>
+              <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
+                Create and manage advisories, schedules, affected areas, and
+                resident-facing updates.
+              </p>
+            </div>
+          </div>
+
+          <div className="shrink-0 [&>*]:w-full sm:[&>*]:w-auto">
+            <ConfigHeroAction icon={PlusIcon} onClick={openNew}>
+              New announcement
+            </ConfigHeroAction>
+          </div>
+        </header>
+
+        <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-6">
+          {stats.map((stat) => (
+            <div key={stat.label} className="min-w-0">
+              <dd
+                className={cn(
+                  "text-[1.75rem] leading-none tabular-nums font-light tracking-tight",
+                  stat.alarm ? "text-sos" : "text-brand-navy",
+                )}
+              >
+                {stat.value}
+              </dd>
+              <dt className="mt-2 text-meta text-neutral-500">{stat.label}</dt>
+            </div>
+          ))}
+        </dl>
+
+        {loading ? (
+          <p className="mt-12 py-14 text-center text-read text-neutral-400">
+            Reading announcements…
+          </p>
+        ) : (
+          <div className="mt-12">{listBody}</div>
+        )}
+      </div>
+
+      {overlays}
     </div>
   )
 }

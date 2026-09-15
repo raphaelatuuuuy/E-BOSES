@@ -21,9 +21,9 @@ from rest_framework.test import APITestCase
 
 from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.duplicate_detector import report_fingerprints
-from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, parse_gemma_result, payload_from_result
+from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, low_information_reason, parse_gemma_result, payload_from_result
 from apps.concerns.ai_fixtures import gemma_result
-from apps.concerns.classification_api import _assigned_unit_for_category, _photo_verdict_payload
+from apps.concerns.classification_api import _assigned_unit_for_category, _photo_verdict_payload, _resident_feedback
 from apps.concerns.models import Concern, ConcernAiAssessment, ConcernCategory, ConcernClassificationConfiguration, ConcernMedia, ContentFlag, Department, Designation, LlmDecisionLog, Position
 from apps.concerns.test_helpers import ensure_test_profile, grant_position
 
@@ -201,9 +201,7 @@ class ConcernClassificationApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["can_submit"])
-        # Precheck validates photos locally but never uploads them to the
-        # model — the resident is waiting on the response.
-        self.assertIsNone(classify.call_args.kwargs["images"])
+        self.assertEqual(len(classify.call_args.kwargs["images"]), 1)
         self.assertTrue(classify.call_args.kwargs["image_uploaded"])
 
     def test_resident_precheck_blocks_low_information_text(self):
@@ -221,7 +219,10 @@ class ConcernClassificationApiTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data["can_submit"])
-        self.assertEqual(response.data["field_errors"]["description"], "Add a clearer description of the issue.")
+        self.assertEqual(
+            response.data["field_errors"]["description"],
+            "Please describe one concern clearly and include only relevant details about the issue.",
+        )
 
     @override_settings(OLLAMA_API_KEY="test-key")
     @patch("apps.concerns.ai.classification.GemmaAnalyzer")
@@ -718,6 +719,27 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
 
     @override_settings(OLLAMA_API_KEY="test-key")
+    def test_unclear_description_is_rejected_before_uncertain_pipeline_hold(self):
+        concern = self._make_concern()
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                relevance="UNCLEAR",
+                issue_count=0,
+                ai_result_uncertain=True,
+                low_information=True,
+            )
+            process_concern_ai(concern.id)
+
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
+        self.assertEqual(concern.rejection_code, "automated_unclear_description")
+        self.assertEqual(
+            concern.validation_summary,
+            "Please describe one concern clearly and include only relevant details about the issue.",
+        )
+
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_suspicious_flag_fires_from_the_result_flag(self):
         concern = self._make_concern()
 
@@ -952,6 +974,53 @@ class GemmaParserTests(TestCase):
 
         self.assertEqual(result.category, "vehicle")
         self.assertEqual(client.return_value.chat.call_args.kwargs["format"], "json")
+
+    def test_parser_requires_one_issue_per_report(self):
+        result = parse_gemma_result(
+            '{"relevance":"VALID","issue_count":2,"primary_category":"vehicle",'
+            '"recommended_action":"accept","evidence_relationship":"image_unavailable"}',
+            model_version="gemma4:cloud",
+            selected_category="vehicle",
+        )
+
+        self.assertEqual(result.details["issue_count"], 2)
+        self.assertEqual(result.details["recommended_action"], "request_more_information")
+        feedback = _resident_feedback(
+            {"outcome": "related", "details": result.details},
+            image_uploaded=False,
+        )
+        self.assertEqual(
+            feedback["field_errors"]["description"],
+            "Please report one issue at a time only",
+        )
+
+    def test_low_information_keeps_related_issue_details(self):
+        self.assertEqual(
+            low_information_reason(
+                "Maraming basura sa gilid ng kalsada at kailangan itong makolekta agad."
+            ),
+            "",
+        )
+
+    def test_parser_rejects_mixed_unrelated_description(self):
+        result = parse_gemma_result(
+            '{"relevance":"VALID","issue_count":0,"primary_category":"vehicle",'
+            '"recommended_action":"accept","evidence_relationship":"image_unavailable"}',
+            model_version="gemma4:cloud",
+            selected_category="vehicle",
+        )
+
+        self.assertEqual(result.details["issue_count"], 0)
+        self.assertEqual(result.details["relevance"], "UNCLEAR")
+        self.assertEqual(result.details["primary_category"], "")
+        feedback = _resident_feedback(
+            {"outcome": "needs_review", "details": result.details},
+            image_uploaded=False,
+        )
+        self.assertEqual(
+            feedback["field_errors"]["description"],
+            "Please describe one concern clearly and include only relevant details about the issue.",
+        )
 
     def test_parser_accepts_markdown_wrapped_json(self):
         result = parse_gemma_result(

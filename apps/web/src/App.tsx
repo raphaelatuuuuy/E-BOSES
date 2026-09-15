@@ -576,6 +576,14 @@ function AppRoutes() {
           }
         />
         <Route
+          path="configuration/announcements"
+          element={
+            <OfficialRoute>
+              <OfficialConfigurationHubPage initialSectionKey="announcements" />
+            </OfficialRoute>
+          }
+        />
+        <Route
           path="configuration/audit-log"
           element={
             <OfficialRoute>

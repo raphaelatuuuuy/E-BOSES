@@ -93,7 +93,7 @@ from .models import (
 from .announcement_services import dispatch_due_announcements, mark_announcement_published
 from .announcement_summary import refresh_announcement_summary
 from .severity import priority_score as compute_priority_score, severity_label, severity_level
-from .units import assigned_unit_for
+from .units import assigned_unit_for, department_for_responder_unit
 
 from .serializers import (
     ActiveResponderSerializer,
@@ -239,16 +239,31 @@ def _validate_concern_before_commit(concern):
         or "This report could not be accepted. Please check the details and try again."
     )
     rejection_code = concern.rejection_code
-    photo_verdicts = _validation_photo_verdicts(concern)
+    description_failed = rejection_code in {
+        "automated_multiple_issues",
+        "automated_unclear_description",
+    }
+    photo_verdicts = [] if description_failed else _validation_photo_verdicts(concern)
+    duplicate = (concern.ai_assessment.raw_result or {}).get("duplicate") or {}
+    visual_check = duplicate.get("visual_check") or {}
+    existing_match = visual_check.get("match")
     _discard_unaccepted_concern(concern)
-    return Response(
-        {
-            "code": rejection_code or "automated_validation_rejected",
-            "description": [message],
-            "photo_verdicts": photo_verdicts,
-        },
-        status=status.HTTP_400_BAD_REQUEST,
-    )
+    photo_failed = rejection_code in {
+        "automated_photo_mismatch",
+        "automated_photo_unsupported",
+    } or any(item.get("state") != "relevant" for item in photo_verdicts)
+    payload = {
+        "code": rejection_code or "automated_validation_rejected",
+        "photo_verdicts": photo_verdicts,
+        "media" if photo_failed else "description": [
+            "Please remove photos that don't show the reported issue and upload clear ones."
+            if photo_failed
+            else message
+        ],
+    }
+    if existing_match:
+        payload["existing_match"] = existing_match
+    return Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
 
 def create_timeline_entry(*, concern, event_type, message, actor=None, status="", visible_to_resident=True, is_custom=False, metadata=None):
@@ -1082,7 +1097,16 @@ class GuestConcernCreateView(APIView):
             .select_related("department")
             .order_by("community_id", "name")
         )
-        category_ref = next(
+        requested_category = str(request.data.get("category", "")).strip()
+        requested_category_ref = next(
+            (
+                row
+                for row in category_queryset
+                if row.code == requested_category and row.code in enabled_categories
+            ),
+            None,
+        )
+        category_ref = requested_category_ref or next(
             (
                 row
                 for row in category_queryset
@@ -1116,7 +1140,7 @@ class GuestConcernCreateView(APIView):
             )
         if low_information_reason(description):
             return Response(
-                {"description": ["Add a clearer description of the issue."]},
+                {"description": ["Please describe one concern clearly and include only relevant details about the issue."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1379,7 +1403,7 @@ class ConcernListCreateView(APIView):
             return Response({"description": ["Describe the issue in at least 20 characters."]}, status=status.HTTP_400_BAD_REQUEST)
         if low_information_reason(description):
             return Response(
-                {"description": ["Add a clearer description of the issue."]},
+                {"description": ["Please describe one concern clearly and include only relevant details about the issue."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if category_ref and category_ref.location_required:
@@ -1633,6 +1657,15 @@ class AssignedConcernListView(APIView):
                 else None
             )
             if unit is None:
+                legacy_unit = department_for_responder_unit(
+                    getattr(request.user, "responder_unit", "")
+                )
+                unit = (
+                    legacy_unit
+                    if legacy_unit and legacy_unit.is_active
+                    else None
+                )
+            if unit is None:
                 queryset = Concern.objects.none()
             else:
                 queryset = Concern.objects.filter(
@@ -1880,7 +1913,8 @@ class ConcernFeedView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
-        from apps.community_scope import community_ids_for_user
+        from apps.community_scope import community_ids_for_user, department_ids_for_user
+        User = get_user_model()
         queryset = Concern.objects.filter(
             visibility=Concern.Visibility.COMMUNITY,
             validation_status=Concern.ValidationStatus.ACCEPTED,
@@ -1894,6 +1928,12 @@ class ConcernFeedView(APIView):
             queryset = queryset.exclude(community_id__in=home_ids)
         elif scope != "all":
             return Response({"scope": ["Use home, other, or all."]}, status=status.HTTP_400_BAD_REQUEST)
+        if not request.user.is_superuser and request.user.role in {User.Role.BARANGAY_OFFICIAL, User.Role.FIRST_RESPONDER}:
+            department_ids = department_ids_for_user(request.user)
+            queryset = queryset.filter(
+                Q(assigned_department_id__in=department_ids)
+                | Q(assigned_department__isnull=True, category_ref__department_id__in=department_ids)
+            )
         category = request.query_params.get("category")
         if category and category != "all":
             queryset = queryset.filter(category=category)

@@ -22,6 +22,7 @@ def alert_templates(alert):
         "unit_dispatch": templates.responder_dispatch(alert, recipient_name="Latoy", unit_name="BDRRMC", reporter_name="Rosario Katigbak", contact="[resident phone]"),
         "resident_confirmation": templates.emergency_ack(alert, unit_name="BDRRMC"),
         "resident_en_route": templates.resident_progress(alert, "en_route", unit_name="BDRRMC"),
+        "resident_nearby": templates.resident_progress(alert, "nearby", unit_name="BDRRMC"),
         "resident_arrived": templates.resident_progress(alert, "arrived", unit_name="BDRRMC"),
         "resident_resolved": templates.resident_progress(alert, "resolved", unit_name="BDRRMC"),
         "resident_exception": templates.pending_response(alert),

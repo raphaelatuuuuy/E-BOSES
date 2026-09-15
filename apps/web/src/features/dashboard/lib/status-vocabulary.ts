@@ -71,6 +71,7 @@ export const SETTLED_EMERGENCY_STATUSES: ReadonlySet<string> = new Set([
   "cancelled",
   "false_alarm",
   "invalid",
+  "rejected",
 ])
 
 function humanise(key: string): string {
