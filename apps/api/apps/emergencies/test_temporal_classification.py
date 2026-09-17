@@ -47,7 +47,6 @@ class TemporalClassificationTests(TestCase):
         result = self._result("There was a fire yesterday. It was extinguished and is over.")
 
         self.assertEqual(result.details["incident_timing"], "ended")
-        self.assertFalse(result.details["urgent_attention"])
         self.assertFalse(result.details["current_danger"])
         self.assertEqual(result.details["matched_emergency_type"], "")
         self.assertEqual(result.details["recommended_action"], "accept")
@@ -56,7 +55,6 @@ class TemporalClassificationTests(TestCase):
         result = self._result("The fire started yesterday. Smoke is coming out now and a person is still trapped.")
 
         self.assertEqual(result.details["incident_timing"], "ongoing")
-        self.assertTrue(result.details["urgent_attention"])
         self.assertEqual(result.details["matched_emergency_type"], "fire")
         self.assertEqual(result.details["recommended_action"], "escalate_as_emergency")
 

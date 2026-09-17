@@ -410,10 +410,6 @@ export function ConcernQueueItem({
     ? modelReason ||
       priorityReasons({
         severity,
-        urgentAttention:
-          concern.urgent_attention ??
-          concern.ai_assessment?.urgent_attention ??
-          false,
         linkedReports: (concern.also_reported_count ?? 0) + 1,
         voteCount: concern.vote_count,
         categoryLabel:

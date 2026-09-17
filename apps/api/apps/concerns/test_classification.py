@@ -23,9 +23,13 @@ from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.duplicate_detector import report_fingerprints
 from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, low_information_reason, parse_gemma_result, payload_from_result
 from apps.concerns.ai_fixtures import gemma_result
+from apps.concerns.ai.image_prep import PreparedImage
+from apps.concerns.ai.pipeline import _visual_duplicate_check
 from apps.concerns.classification_api import _assigned_unit_for_category, _photo_verdict_payload, _resident_feedback
+from apps.concerns.test_helpers import active_test_community
 from apps.concerns.models import Concern, ConcernAiAssessment, ConcernCategory, ConcernClassificationConfiguration, ConcernMedia, ContentFlag, Department, Designation, LlmDecisionLog, Position
 from apps.concerns.test_helpers import ensure_test_profile, grant_position
+from apps.media_utils import phash_blocks_file, phash_file, sha256_file
 
 
 def png_upload(name="safe.png"):
@@ -221,7 +225,7 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertFalse(response.data["can_submit"])
         self.assertEqual(
             response.data["field_errors"]["description"],
-            "Please describe one concern clearly and include only relevant details about the issue.",
+            "Please include only relevant details about the issue.",
         )
 
     @override_settings(OLLAMA_API_KEY="test-key")
@@ -284,7 +288,7 @@ class ConcernClassificationApiTests(APITestCase):
             response.data["field_errors"]["media"],
             "The photo contradicts the issue described. Upload a matching photo.",
         )
-        self.assertIsNone(classify.call_args.kwargs["images"])
+        self.assertEqual(len(classify.call_args.kwargs["images"]), 2)
         self.assertTrue(classify.call_args.kwargs["image_uploaded"])
         verdicts = response.data["photo_verdicts"]
         self.assertEqual([item["state"] for item in verdicts], ["relevant", "unrelated"])
@@ -457,7 +461,49 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(duplicate["tracking_id"], existing.tracking_id)
         self.assertEqual(duplicate["reporter_count"], 1)
 
-    def test_create_honors_duplicate_of_and_recurrence_of(self):
+    def test_media_duplicate_feedback_includes_the_existing_concern(self):
+        community = active_test_community()
+        existing = Concern.objects.create(
+            reporter=self.resident,
+            community=community,
+            title="Existing photo report",
+            description="A previously filed concern with this photo.",
+            category=Concern.Category.INFRASTRUCTURE,
+        )
+        original = png_upload("existing.png")
+        content = original.read()
+        existing_media = ConcernMedia.objects.create(
+            concern=existing,
+            file=SimpleUploadedFile("existing.png", content, content_type="image/png"),
+            original_filename="existing.png",
+            mime_type="image/png",
+            file_size=len(content),
+            sha256_hash=sha256_file(SimpleUploadedFile("hash.png", content, content_type="image/png")),
+            phash=phash_file(content),
+            phash_blocks=phash_blocks_file(content),
+        )
+        self.client.force_authenticate(self.resident)
+
+        response = self.client.post(
+            "/api/concerns/media/check/",
+            {"forensics_only": "true", "media": SimpleUploadedFile("retry.png", content, content_type="image/png")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        result = response.data["files"][0]
+        self.assertEqual(result["message"], "This photo was already used in another report. Please use a different photo.")
+        self.assertEqual(result["existing_match"]["concern_id"], existing.pk)
+        self.assertEqual(result["existing_match"]["public_id"], str(existing.public_id))
+        self.assertEqual(existing_media.concern_id, existing.pk)
+
+    @patch("apps.concerns.ai.pipeline.GemmaAnalyzer")
+    def test_create_honors_duplicate_of_and_recurrence_of(self, analyzer_cls):
+        analyzer_cls.return_value.analyze.return_value = gemma_result(
+            category="infrastructure",
+            evidence_relationship="supports_report",
+            recommended_action="accept",
+        )
         self.client.force_authenticate(self.resident)
         original = Concern.objects.create(
             reporter=self.resident,
@@ -719,6 +765,146 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertEqual(concern.validation_status, Concern.ValidationStatus.PENDING)
 
     @override_settings(OLLAMA_API_KEY="test-key")
+    @patch("apps.concerns.ai.pipeline._visual_duplicate_check")
+    @patch("apps.concerns.ai.pipeline._street_imagery_check")
+    def test_visual_duplicate_runs_after_area_match_and_rejects_same_issue(self, street_check, visual_duplicate):
+        concern = self._make_concern(latitude="14.6500000", longitude="121.1100000")
+        media = png_upload("new-report.png")
+        ConcernMedia.objects.create(
+            concern=concern,
+            file=media,
+            original_filename=media.name,
+            mime_type="image/png",
+            file_size=media.size,
+        )
+        existing = self._make_concern(
+            title="Existing blocked drain",
+            latitude="14.6500400",
+            longitude="121.1100400",
+        )
+        order = []
+        street_check.side_effect = lambda *args, **kwargs: order.append("area") or {
+            "status": "checked",
+            "verdict": "area_matches",
+            "explanation": "The pinned surroundings match.",
+        }
+        visual_duplicate.side_effect = lambda *args, **kwargs: order.append("photo") or {
+            "checked": True,
+            "candidate_count": 1,
+            "comparisons": [{
+                "concern_id": existing.pk,
+                "tracking_id": existing.tracking_id,
+                "verdict": "same_issue",
+                "reason": "The same blocked drain is visible.",
+            }],
+            "match": {
+                "concern_id": existing.pk,
+                "tracking_id": existing.tracking_id,
+                "public_id": str(existing.public_id),
+                "status": existing.status,
+            },
+        }
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+                evidence_relationship="supports_report",
+                image_review_succeeded=True,
+                photo_verdicts=[{"relevance": "supports_report"}],
+            )
+            assessment = process_concern_ai(concern.pk)
+
+        concern.refresh_from_db()
+        self.assertEqual(order, ["area", "photo"])
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
+        self.assertEqual(concern.rejection_code, "automated_photo_duplicate")
+        self.assertEqual(
+            concern.validation_summary,
+            "Please use a different photo, this issue was already reported.",
+        )
+        self.assertEqual(
+            assessment.raw_result["duplicate"]["visual_check"]["match"]["concern_id"],
+            existing.pk,
+        )
+
+    @override_settings(OLLAMA_API_KEY="test-key")
+    @patch("apps.concerns.ai.pipeline._visual_duplicate_check")
+    @patch("apps.concerns.ai.pipeline._street_imagery_check")
+    def test_visual_duplicate_is_skipped_when_area_check_does_not_pass(self, street_check, visual_duplicate):
+        concern = self._make_concern(latitude="14.6500000", longitude="121.1100000")
+        visual_duplicate.return_value = None
+        street_check.return_value = {
+            "status": "checked",
+            "verdict": "area_mismatch",
+            "explanation": "The pinned surroundings do not match.",
+        }
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+                evidence_relationship="supports_report",
+                image_review_succeeded=True,
+            )
+            process_concern_ai(concern.pk)
+
+        visual_duplicate.assert_not_called()
+
+    @override_settings(OLLAMA_API_KEY="test-key")
+    @patch("apps.concerns.ai.pipeline.compare_photo_duplicates")
+    @patch("apps.concerns.ai.pipeline.prepare_image_for_gemma")
+    def test_visual_duplicate_candidates_are_limited_to_same_address(self, prepare_image, compare):
+        community = active_test_community()
+        concern = self._make_concern(
+            community=community,
+            latitude="14.6500000",
+            longitude="121.1100000",
+            address="123 Main Street, Marikina Heights",
+        )
+        same_address = self._make_concern(
+            community=community,
+            title="Nearby existing concern",
+            latitude="14.6500400",
+            longitude="121.1100400",
+            address="123 Main Street, Marikina Heights",
+        )
+        different_address = self._make_concern(
+            community=community,
+            title="Outside existing concern",
+            latitude="14.6502000",
+            longitude="121.1102000",
+            address="456 Oak Avenue, Marikina Heights",
+        )
+        for candidate in (same_address, different_address):
+            media = png_upload(f"{candidate.pk}.png")
+            ConcernMedia.objects.create(
+                concern=candidate,
+                file=media,
+                original_filename=media.name,
+                mime_type="image/png",
+                file_size=media.size,
+            )
+        prepared = PreparedImage(data="encoded", mime_type="image/png", telemetry={})
+        prepare_image.return_value = prepared
+        compare.return_value = [{
+            "concern_id": same_address.pk,
+            "tracking_id": same_address.tracking_id,
+            "image": 2,
+            "verdict": "same_issue",
+            "reason": "The same physical issue is visible.",
+        }]
+
+        result = _visual_duplicate_check(
+            ConcernClassificationConfiguration.current(community),
+            concern=concern,
+            prepared_images=[prepared],
+        )
+
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["match"]["concern_id"], same_address.pk)
+        compared_candidates = compare.call_args.kwargs["candidates"]
+        self.assertEqual([candidate["concern_id"] for candidate in compared_candidates], [same_address.pk])
+
+    @override_settings(OLLAMA_API_KEY="test-key")
     def test_unclear_description_is_rejected_before_uncertain_pipeline_hold(self):
         concern = self._make_concern()
 
@@ -736,7 +922,42 @@ class ConcernAiTextProviderPipelineTests(TestCase):
         self.assertEqual(concern.rejection_code, "automated_unclear_description")
         self.assertEqual(
             concern.validation_summary,
-            "Please describe one concern clearly and include only relevant details about the issue.",
+            "Please include only relevant details about the issue.",
+        )
+
+    @override_settings(OLLAMA_API_KEY="test-key")
+    def test_unclear_description_is_rejected_before_photo_mismatch(self):
+        concern = self._make_concern()
+        media = png_upload("wrong-evidence.png")
+        ConcernMedia.objects.create(
+            concern=concern,
+            file=media,
+            original_filename=media.name,
+            mime_type="image/png",
+            file_size=media.size,
+        )
+
+        with patch("apps.concerns.ai.pipeline.GemmaAnalyzer") as classifier:
+            classifier.return_value.analyze.return_value = gemma_result(
+                category=Concern.Category.INFRASTRUCTURE,
+                issue_count=0,
+                evidence_relationship="contradicts_report",
+                image_review_succeeded=True,
+                photo_verdicts=[{
+                    "index": 0,
+                    "relevance": "contradicts_report",
+                    "note": "The photo shows a different issue.",
+                }],
+                recommended_action="request_more_information",
+            )
+            process_concern_ai(concern.id)
+
+        concern.refresh_from_db()
+        self.assertEqual(concern.validation_status, Concern.ValidationStatus.REJECTED)
+        self.assertEqual(concern.rejection_code, "automated_unclear_description")
+        self.assertEqual(
+            concern.validation_summary,
+            "Please include only relevant details about the issue.",
         )
 
     @override_settings(OLLAMA_API_KEY="test-key")
@@ -994,6 +1215,18 @@ class GemmaParserTests(TestCase):
             "Please report one issue at a time only",
         )
 
+    def test_parser_keeps_direct_critical_severity(self):
+        result = parse_gemma_result(
+            '{"relevance":"VALID","issue_count":1,"primary_category":"vehicle",'
+            '"severity":"critical","recommended_action":"accept",'
+            '"evidence_relationship":"image_unavailable"}',
+            model_version="gemma4:cloud",
+            selected_category="vehicle",
+        )
+
+        self.assertEqual(result.severity, "critical")
+        self.assertEqual(result.details["severity"], "critical")
+
     def test_low_information_keeps_related_issue_details(self):
         self.assertEqual(
             low_information_reason(
@@ -1019,7 +1252,44 @@ class GemmaParserTests(TestCase):
         )
         self.assertEqual(
             feedback["field_errors"]["description"],
-            "Please describe one concern clearly and include only relevant details about the issue.",
+            "Please include only relevant details about the issue.",
+        )
+
+    def test_unclear_description_feedback_beats_invalid_photo_feedback(self):
+        result = parse_gemma_result(
+            '{"relevance":"VALID","issue_count":0,"primary_category":"vehicle",'
+            '"recommended_action":"request_more_information",'
+            '"evidence_relationship":"contradicts_report",'
+            '"photo_verdicts":[{"index":0,"relevance":"contradicts_report","note":"The photo shows a different issue."}]}',
+            model_version="gemma4:cloud",
+            selected_category="vehicle",
+            image_attached=True,
+            image_review_succeeded=True,
+            photo_count=1,
+        )
+
+        feedback = _resident_feedback(
+            {"outcome": "needs_review", "details": result.details},
+            image_uploaded=True,
+            photo_count=1,
+            prepared_indices=[0],
+        )
+
+        self.assertEqual(
+            feedback["field_errors"],
+            {
+                "description": "Please include only relevant details about the issue."
+            },
+        )
+        self.assertEqual(
+            feedback["photo_verdicts"],
+            [
+                {
+                    "index": 0,
+                    "state": "unrelated",
+                    "message": "The photo shows a different issue.",
+                }
+            ],
         )
 
     def test_parser_accepts_markdown_wrapped_json(self):

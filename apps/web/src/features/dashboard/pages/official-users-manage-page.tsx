@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { CircleCheck, CircleX, PencilIcon, PlusIcon, TriangleAlert, UserCogIcon } from "lucide-react"
+import { CircleCheck, PencilIcon, PlusIcon, UserCogIcon, UserIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
@@ -8,7 +8,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { SheetActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
-import { ConfigurationTable, ConfigurationTableEmpty, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
+import { ConfigurationInfoRow, ConfigurationTable, ConfigurationTableEmpty } from "@/features/dashboard/components/config/configuration-table"
 
 type ManagedRole = "resident" | "barangay_official" | "first_responder"
 
@@ -79,6 +79,11 @@ const ROLE_LABEL: Record<string, string> = {
   resident: "Resident",
   barangay_official: "Official",
   first_responder: "Responder",
+}
+
+function unitLabel(user: StaffUser) {
+  const unit = user.units?.[0]
+  return unit ? unit.short_name || unit.name : "Unassigned"
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -268,40 +273,22 @@ export default function OfficialUsersManagePage({ embedded = false }: { embedded
         onFilter={(value) => { setRoleFilter(value); setOffset(0) }}
       />
 
-      <ConfigurationTable label="Users">
+      <ConfigurationTable label="Users" hideHeader>
         {page.map((user) => (
-          <ConfigurationTableRow
+          <ConfigurationInfoRow
             key={user.id}
+            icon={UserIcon}
+            title={user.full_name || user.email}
+            subtext={unitLabel(user)}
+            badge={user.status === "verified" ? null : (
+              <span className={cn("rounded-full px-2 py-0.5 text-meta font-medium", user.status.startsWith("pending") ? "bg-amber-50 text-amber-600" : "bg-red-50 text-red-600")}>
+                {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
+              </span>
+            )}
             actions={<SheetIconButton label={`Manage ${user.full_name || user.email}`} onClick={() => { setSelected(user); setEditOpen(true) }}>
               <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
             </SheetIconButton>}
-          >
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-3">
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[15px] font-bold text-navy-muted">
-                  {(user.full_name || user.email).charAt(0).toUpperCase()}
-                </span>
-                <span className="text-row text-brand-navy">{user.full_name || user.email}</span>
-                {user.status === "verified" ? (
-                  <span className="inline-flex items-center gap-1 text-meta text-green-600">
-                    <CircleCheck className="size-3.5" strokeWidth={2} />
-                    Verified
-                  </span>
-                ) : user.status.startsWith("pending") ? (
-                  <span className="inline-flex items-center gap-1 text-meta text-amber-600">
-                    <TriangleAlert className="size-3.5" strokeWidth={2} />
-                    {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-meta text-red-600">
-                    <CircleX className="size-3.5" strokeWidth={2} />
-                  {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
-                </span>
-                )}
-              </div>
-              <p className="mt-1 truncate text-meta text-neutral-500">{user.email}</p>
-            </div>
-          </ConfigurationTableRow>
+          />
         ))}
         {page.length === 0 && !loading ? <ConfigurationTableEmpty>No users found.</ConfigurationTableEmpty> : null}
       </ConfigurationTable>

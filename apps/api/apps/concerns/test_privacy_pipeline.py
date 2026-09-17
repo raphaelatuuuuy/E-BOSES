@@ -59,8 +59,17 @@ class Sam3GateTests(TestCase):
         self.assertTrue(should_run_sam3(image_uploaded=True, gemma_image_review_succeeded=True, gemma_result=details))
 
     def test_a_plate_suspicion_requests_a_plate_scan(self):
+        from apps.concerns.ai.pipeline import privacy_classes_for
+
         details = privacy_scan_result(classes=["license plate"]).details
-        self.assertEqual(sam3_classes_for(details), ["license plate"])
+        self.assertEqual(
+            privacy_classes_for(
+                details,
+                image_uploaded=True,
+                gemma_image_review_succeeded=True,
+            ),
+            ["face", "license plate"],
+        )
 
     def test_multiple_suspicions_request_all_of_them(self):
         details = privacy_scan_result(classes=["face", "license plate"]).details

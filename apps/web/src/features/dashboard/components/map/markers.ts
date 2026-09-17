@@ -171,6 +171,7 @@ export function glyphPinHtml({
   const neutralClass = idleNeutral && !selected ? " is-idle-neutral" : ""
   const hoverGrowClass = hoverGrow ? " is-hover-grow" : ""
   const tintClass = tint ? " is-tint" : ""
+  const alertClass = color === MAP_COLORS.emergency ? " is-alert" : ""
   const flatClass = flat ? " is-flat" : ""
   const extraClass = className ? ` ${className}` : ""
   const labelMarkup = label
@@ -178,7 +179,7 @@ export function glyphPinHtml({
     : (content ?? svg(paths, strokeWidth, box))
   return `<span class="eboses-pin eboses-pin--glyph${live ? " is-live" : ""}${
     selected ? " is-selected" : ""
-  }${tone === "dark" ? " is-dark" : ""}${tintClass}${neutralClass}${hoverGrowClass}${flatClass}${extraClass}" style="--pin:${color};--size:${box}px;--ring:${ring}px">${
+  }${tone === "dark" ? " is-dark" : ""}${tintClass}${alertClass}${neutralClass}${hoverGrowClass}${flatClass}${extraClass}" style="--pin:${color};--size:${box}px;--ring:${ring}px">${
     live ? '<span class="eboses-pin__halo"></span>' : ""
   }<span class="eboses-pin__disc${label ? " eboses-pin__disc--labeled" : ""}">${labelMarkup}</span></span>`
 }
@@ -238,6 +239,6 @@ export function personDotHtml(
   return dotPinHtml({ color, size: focused ? 13 : 10, live: focused, tone })
 }
 
-export function reportDotHtml(color: string, size = 12) {
-  return `<span class="eboses-report-dot" style="--pin:${color};--size:${size}px"><span class="eboses-report-dot__pulse"></span><span class="eboses-report-dot__core"></span></span>`
+export function reportDotHtml(color: string, size = 12, live = true) {
+  return `<span class="eboses-report-dot" style="--pin:${color};--size:${size}px">${live ? '<span class="eboses-report-dot__pulse"></span>' : ""}<span class="eboses-report-dot__core"${live ? "" : ' style="box-shadow:0 0 0 2px #fff,0 1px 4px rgba(0,0,0,0.35)"'}></span></span>`
 }

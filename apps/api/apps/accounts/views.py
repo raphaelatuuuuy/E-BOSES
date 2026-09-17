@@ -1535,7 +1535,7 @@ class AccountNameChangeConfirmView(APIView):
         if not first_ok or not last_ok:
             return Response(
                 {
-                    "detail": "The name on your document does not match the name you entered. Please correct the name or resubmit a clearer ID.",
+                    "detail": "Please check your details, your name does not match the name on your document.",
                     "code": "ocr_name_mismatch",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1546,7 +1546,7 @@ class AccountNameChangeConfirmView(APIView):
             if req_middle != ocr_middle and req_middle not in ocr_middle and ocr_middle not in req_middle:
                 return Response(
                     {
-                        "detail": "The middle name on your document does not match. Please correct it or resubmit.",
+                        "detail": "Please check your details, your middle name does not match the one on your document.",
                         "code": "ocr_name_mismatch",
                     },
                     status=status.HTTP_400_BAD_REQUEST,

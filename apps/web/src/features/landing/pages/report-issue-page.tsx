@@ -11,11 +11,10 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import {
   Check,
   ChevronLeftIcon,
-  CircleAlertIcon,
   CloudSunIcon,
   LeafIcon,
   LogInIcon,
@@ -75,7 +74,6 @@ import {
 import { streetSegment } from "@/features/dashboard/lib/location-text"
 import { usePageTitle } from "@/hooks/use-page-title"
 
-import { LandingPageShell } from "../components/landing-page-shell"
 import { SuccessAssignedDialog } from "@/features/dashboard/components/success-assigned-dialog"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 
@@ -128,6 +126,88 @@ type PublicPanelProps = {
   panelRef?: RefObject<HTMLElement | null>
   panelStyle?: CSSProperties
   onResizeStart?: (event: ReactPointerEvent<HTMLDivElement>) => void
+}
+
+function useDragDismiss(onDismiss: () => void) {
+  const [dragY, setDragY] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const sheetRef = useRef<HTMLElement | null>(null)
+  const startY = useRef(0)
+  const lastY = useRef(0)
+  const lastT = useRef(0)
+  const flickV = useRef(0)
+
+  useEffect(() => {
+    if (!dragging) return
+    function move(event: PointerEvent) {
+      onMove(event as unknown as ReactPointerEvent<HTMLDivElement>)
+    }
+    function up(event: PointerEvent) {
+      onUp(event as unknown as ReactPointerEvent<HTMLDivElement>)
+    }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up)
+    window.addEventListener("pointercancel", up)
+    return () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+      window.removeEventListener("pointercancel", up)
+    }
+  })
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onDismiss()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [onDismiss])
+
+  function begin(clientY: number) {
+    startY.current = clientY
+    lastY.current = clientY
+    lastT.current = performance.now()
+    flickV.current = 0
+    setDragging(true)
+  }
+
+  function onDown(event: ReactPointerEvent<HTMLDivElement>) {
+    begin(event.clientY)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function onHeaderDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest("button,input,textarea,a"))
+      return
+    begin(event.clientY)
+  }
+
+  function onMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragging) return
+    const now = performance.now()
+    const dt = Math.max(now - lastT.current, 1)
+    flickV.current = (event.clientY - lastY.current) / dt
+    lastY.current = event.clientY
+    lastT.current = now
+    setDragY(Math.max(event.clientY - startY.current, 0))
+  }
+
+  function onUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragging) return
+    setDragging(false)
+    const dy = event.clientY - startY.current
+    const fresh = performance.now() - lastT.current < 120
+    const velocity = fresh ? flickV.current : 0
+    const height = sheetRef.current?.offsetHeight ?? 600
+    if (dy > Math.min(140, height * 0.25) || (velocity > 0.6 && dy > 40)) {
+      setDragY(0)
+      onDismiss()
+    } else {
+      setDragY(0)
+    }
+  }
+
+  return { dragY, dragging, sheetRef, onDown, onHeaderDown }
 }
 
 function announcementPinPosition(alert: PublicReportMapAnnouncement) {
@@ -264,7 +344,6 @@ function publicConcernAsFeedPost(
     comments: alert.comments,
     vote_count: 0,
     comment_count: alert.comment_count,
-    priority_score: 0,
     severity: alert.severity,
     severity_assessed: alert.severity_assessed,
     user_vote: 0,
@@ -336,26 +415,35 @@ function PublicAlertPanel({
     snippetLabel: null,
     actionLabel: null,
   }
+  const sheetDrag = useDragDismiss(onClose)
 
   return (
     <aside
-      ref={panelRef}
-      style={panelStyle}
-      className="absolute top-3 right-3 left-3 z-[600] flex max-h-[min(72svh,620px)] max-w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] sm:top-4 sm:right-auto sm:left-4 sm:w-[min(100%,380px)] sm:max-w-none"
+      ref={(node) => {
+        if (panelRef) panelRef.current = node
+        sheetDrag.sheetRef.current = node
+      }}
+      style={{
+        ...(panelStyle ?? {}),
+        ...(sheetDrag.dragY !== 0
+          ? { transform: `translateY(${sheetDrag.dragY}px)` }
+          : null),
+      }}
+      className={`absolute inset-x-0 bottom-0 z-[600] flex max-h-[min(75svh,620px)] min-w-0 flex-col overflow-hidden rounded-t-2xl border border-b-0 border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] sm:inset-x-auto sm:bottom-auto sm:top-4 sm:left-4 sm:w-[min(100%,380px)] sm:rounded-2xl sm:border ${sheetDrag.dragging ? "" : "transition-transform duration-200 ease-out"}`}
     >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-100 px-3">
-        <CircleAlertIcon
-          className="size-5 shrink-0 text-neutral-800"
-          strokeWidth={2.25}
-        />
+      <div
+        onPointerDown={sheetDrag.onDown}
+        className="flex shrink-0 cursor-grab touch-none items-center justify-center py-2.5 select-none active:cursor-grabbing"
+      >
+        <span className="h-1 w-10 rounded-full bg-neutral-300" />
+      </div>
+      <div className="hidden shrink-0 items-center justify-end px-3 pb-1 sm:flex">
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
-          aria-label="Close alert details"
-          title="Close alert details"
+          className="rounded-full px-3 py-1.5 text-[13px] font-semibold text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
         >
-          <ChevronLeftIcon className="size-4" strokeWidth={2.25} />
+          Back
         </button>
       </div>
       {isConcern ? (
@@ -416,6 +504,19 @@ function PublicAlertPanel({
         </div>
       ) : isAnnouncement ? (
         <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white px-4 pb-6 text-neutral-900">
+          <div className="flex shrink-0 items-center gap-1 pt-3 pb-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-700 hover:bg-neutral-100"
+              aria-label="Back to list"
+            >
+              <ChevronLeftIcon className="size-5" strokeWidth={2.25} />
+            </button>
+            <p className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold text-neutral-600">
+              Advisory
+            </p>
+          </div>
           <div className="mt-4 flex items-start gap-3">
             <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-severity-low-surface text-severity-low">
               {TagIcon ? (
@@ -451,8 +552,16 @@ function PublicAlertPanel({
       ) : (
         <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white px-4 pb-6 text-neutral-900">
           <div className="flex shrink-0 items-center gap-1 pt-3 pb-1">
-            <p className="text-[15px] font-semibold text-neutral-600">
-              Emergency
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-700 hover:bg-neutral-100"
+              aria-label="Back to list"
+            >
+              <ChevronLeftIcon className="size-5" strokeWidth={2.25} />
+            </button>
+            <p className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold text-neutral-600">
+              Report
             </p>
           </div>
           <div className="mt-2 flex items-start gap-3">
@@ -548,26 +657,35 @@ function PublicAlertsPanel({
       </span>
     </button>
   )
+  const sheetDrag = useDragDismiss(onCollapse)
 
   return (
     <aside
-      ref={panelRef}
-      style={panelStyle}
-      className="absolute top-3 right-3 left-3 z-[600] flex max-h-[min(72svh,620px)] max-w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] sm:top-4 sm:right-auto sm:left-4 sm:w-[min(100%,380px)] sm:max-w-none"
+      ref={(node) => {
+        if (panelRef) panelRef.current = node
+        sheetDrag.sheetRef.current = node
+      }}
+      style={{
+        ...(panelStyle ?? {}),
+        ...(sheetDrag.dragY !== 0
+          ? { transform: `translateY(${sheetDrag.dragY}px)` }
+          : null),
+      }}
+      className={`absolute inset-x-0 bottom-0 z-[600] flex max-h-[min(75svh,620px)] min-w-0 flex-col overflow-hidden rounded-t-2xl border border-b-0 border-neutral-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] sm:inset-x-auto sm:bottom-auto sm:top-4 sm:left-4 sm:w-[min(100%,380px)] sm:rounded-2xl sm:border ${sheetDrag.dragging ? "" : "transition-transform duration-200 ease-out"}`}
     >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-100 px-3">
-        <CircleAlertIcon
-          className="size-5 shrink-0 text-neutral-800"
-          strokeWidth={2.25}
-        />
+      <div
+        onPointerDown={sheetDrag.onDown}
+        className="flex shrink-0 cursor-grab touch-none items-center justify-center py-2.5 select-none active:cursor-grabbing"
+      >
+        <span className="h-1 w-10 rounded-full bg-neutral-300" />
+      </div>
+      <div className="hidden shrink-0 items-center justify-end px-3 pb-1 sm:flex">
         <button
           type="button"
           onClick={onCollapse}
-          className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
-          aria-label="Collapse alerts"
-          title="Collapse alerts"
+          className="rounded-full px-3 py-1.5 text-[13px] font-semibold text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
         >
-          <ChevronLeftIcon className="size-4" strokeWidth={2.25} />
+          Close
         </button>
       </div>
       <AlertsFeed
@@ -672,6 +790,7 @@ function IdentityDialog({
 export default function ReportIssuePage() {
   usePageTitle("Report an Issue")
   const navigate = useNavigate()
+  const location = useLocation()
   const { user } = useAuthSession()
   const [snapshot, setSnapshot] = useState<PublicReportMapSnapshot | null>(null)
   const [selected, setSelected] = useState<SelectedAlert | null>(null)
@@ -698,17 +817,38 @@ export default function ReportIssuePage() {
     h: number
   } | null>(null)
 
-  // Map container height — null until the visitor drags the (invisible)
-  // bottom-right handle, then it overrides the CSS default below.
   const mapSectionRef = useRef<HTMLDivElement>(null)
-  const [mapHeight, setMapHeight] = useState<number | null>(null)
-  const [mapResizing, setMapResizing] = useState(false)
-  const mapResizeStartRef = useRef<{ y: number; h: number } | null>(null)
 
   const refreshPublicReports = useCallback(async () => {
     const data = await getPublicReportMap()
     setSnapshot(data)
   }, [])
+
+  const stateHighlightId = (
+    location.state as { highlightConcernId?: unknown } | null
+  )?.highlightConcernId
+  const queryHighlightId = new URLSearchParams(location.search).get(
+    "highlightConcernId"
+  )
+  const parsedHighlightId = Number(queryHighlightId ?? stateHighlightId)
+  const highlightId = Number.isInteger(parsedHighlightId)
+    ? parsedHighlightId
+    : null
+  const highlightConsumedRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (highlightId == null || !snapshot) return
+    if (highlightConsumedRef.current === highlightId) return
+    highlightConsumedRef.current = highlightId
+    const found = (snapshot.concerns ?? []).some(
+      (item) => item.id === highlightId
+    )
+    if (!found) return
+    // Syncing external navigation state into the map selection.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelected({ kind: "concern", id: highlightId })
+    setAlertsPanelOpen(true)
+  }, [highlightId, snapshot])
 
   useEffect(() => {
     let cancelled = false
@@ -810,51 +950,6 @@ export default function ReportIssuePage() {
       h: rect.height,
     }
     setAlertsPanelResizing(true)
-  }
-
-  // Map container height resize — no visible indicator, just an invisible
-  // hit area in the bottom-right corner.
-  useEffect(() => {
-    if (!mapResizing) return
-    function onMove(event: PointerEvent) {
-      const start = mapResizeStartRef.current
-      if (!start) return
-      const max = Math.min(window.innerHeight - 120, 960)
-      const nextHeight = Math.min(
-        max,
-        Math.max(460, start.h + event.clientY - start.y)
-      )
-      setMapHeight(nextHeight)
-      // Keep the alerts panel inside the map when the map shrinks.
-      setAlertsPanelSize((prev) =>
-        prev
-          ? {
-              ...prev,
-              height: Math.max(220, Math.min(prev.height, nextHeight - 24)),
-            }
-          : prev
-      )
-    }
-    function onUp() {
-      setMapResizing(false)
-      mapResizeStartRef.current = null
-    }
-    window.addEventListener("pointermove", onMove)
-    window.addEventListener("pointerup", onUp)
-    window.addEventListener("pointercancel", onUp)
-    return () => {
-      window.removeEventListener("pointermove", onMove)
-      window.removeEventListener("pointerup", onUp)
-      window.removeEventListener("pointercancel", onUp)
-    }
-  }, [mapResizing])
-
-  function onMapResizeStart(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault()
-    const rect = mapSectionRef.current?.getBoundingClientRect()
-    if (!rect) return
-    mapResizeStartRef.current = { y: event.clientY, h: rect.height }
-    setMapResizing(true)
   }
 
   const allAlerts = useMemo<PublicAlert[]>(
@@ -1021,11 +1116,9 @@ export default function ReportIssuePage() {
               : alert.display_description ||
                 `${alert.type_label} emergency reported.`,
           snippetLabel: null,
-          actionLabel: isConcern
-            ? "View the concern"
-            : isAnnouncement
-              ? "View the advisory"
-              : "View the emergency",
+          actionLabel: isAnnouncement
+            ? "View the advisory"
+            : "View the concern",
         },
         onAction: () => {
           setSelected({ kind: alert.kind, id: alert.id })
@@ -1133,24 +1226,11 @@ export default function ReportIssuePage() {
   }
 
   return (
-    <LandingPageShell>
-      <section className="px-5 pt-10 pb-16 md:px-10 md:pt-14 md:pb-24 lg:px-16">
-        <div className="mx-auto max-w-7xl">
-          <div className="max-w-3xl">
-            <h1 className="max-w-2xl text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">
-              See what’s happening in your community.
-            </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-white/55">
-              Browse active community alerts, or start a concern report and
-              provide its location in the reporting form.
-            </p>
-          </div>
-
-          <div
-            ref={mapSectionRef}
-            style={mapHeight ? { height: mapHeight } : undefined}
-            className="relative isolate z-0 mt-8 h-[min(84svh,860px)] min-h-[560px] overflow-hidden rounded-2xl border border-white/10 bg-neutral-100 shadow-2xl sm:mt-10"
-          >
+    <div className="fixed inset-0 z-[200] bg-neutral-100">
+      <div
+        ref={mapSectionRef}
+        className="relative isolate z-0 h-full w-full overflow-hidden bg-neutral-100"
+      >
             <div className="absolute inset-0 z-0">
               <Suspense
                 fallback={
@@ -1173,15 +1253,15 @@ export default function ReportIssuePage() {
                   onClose={() => undefined}
                   onConfirm={() => undefined}
                   onReportRequest={openIdentity}
+                  onBackRequest={() => {
+                    if (window.history.length > 1) navigate(-1)
+                    else navigate("/")
+                  }}
+                  onAlertsRequest={() => setAlertsPanelOpen(true)}
+                  showAlertsButton={!alertsPanelOpen}
                 />
               </Suspense>
             </div>
-            {/* Invisible map resize hit area — height only, no indicator */}
-            <div
-              onPointerDown={onMapResizeStart}
-              className="absolute right-0 bottom-0 z-40 hidden size-5 cursor-ns-resize touch-none sm:block"
-              aria-hidden
-            />
             {alertsPanelOpen ? (
               selectedAlert ? (
                 <PublicAlertPanel
@@ -1234,23 +1314,8 @@ export default function ReportIssuePage() {
                   onResizeStart={onAlertsPanelResizeStart}
                 />
               )
-            ) : (
-              <button
-                type="button"
-                onClick={() => setAlertsPanelOpen(true)}
-                aria-label="Open alerts"
-                title="Open alerts"
-                className="absolute top-3 left-3 z-[600] flex size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md sm:top-4 sm:left-4"
-              >
-                <CircleAlertIcon
-                  className="size-5 shrink-0 text-neutral-800"
-                  strokeWidth={2.25}
-                />
-              </button>
-            )}
+            ) : null}
           </div>
-        </div>
-      </section>
 
       <IdentityDialog
         open={identityOpen}
@@ -1280,6 +1345,6 @@ export default function ReportIssuePage() {
         onOpenChange={setAuthenticatedComposerOpen}
         initialLocation={null}
       />
-    </LandingPageShell>
+    </div>
   )
 }

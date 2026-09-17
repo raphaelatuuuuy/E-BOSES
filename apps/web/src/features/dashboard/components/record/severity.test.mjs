@@ -22,23 +22,30 @@ const CONCERN_CATEGORY_BASELINE = {
   others: 0,
 }
 
+// Mirrors SEVERITY_ESTIMATE_LEVEL in severity.ts and severity.py.
+// critical (3) is now a direct LLM output so the model can set the top band
+// without the activeHighRisk compound condition.
+const SEVERITY_ESTIMATE_LEVEL = { low: 0, medium: 1, high: 2, critical: 3 }
+
 function deriveConcernSeverity(input) {
   const baseline = CONCERN_CATEGORY_BASELINE[input.category ?? "others"] ?? 0
-  const activeHighRisk =
-    input.severityEstimate === "high" &&
-    input.currentDanger === true &&
-    input.incidentTiming === "ongoing"
-  if (input.urgentAttention || activeHighRisk) {
-    return { severity: "critical", assessed: true }
+  const estimate = (input.severityEstimate ?? "").toLowerCase()
+
+  if (!(estimate in SEVERITY_ESTIMATE_LEVEL)) {
+    return { severity: clampToSeverity(baseline), assessed: false }
   }
 
-  const hasScore =
-    typeof input.damageScore === "number" && Number.isFinite(input.damageScore)
-  if (!hasScore) return { severity: clampToSeverity(baseline), assessed: false }
+  const activeHighRisk =
+    estimate === "high" &&
+    input.currentDanger === true &&
+    input.incidentTiming === "ongoing"
 
-  const score = Math.max(0, Math.min(1, input.damageScore))
-  let level = Math.min(3, Math.floor(score * 4))
-  level = Math.max(level, baseline)
+  if (activeHighRisk) {
+    return { severity: clampToSeverity(3), assessed: true }
+  }
+
+  let level = Math.max(SEVERITY_ESTIMATE_LEVEL[estimate], baseline)
+
   const threshold = input.relevanceThreshold ?? 0.65
   if (typeof input.relevance === "number" && input.relevance < threshold)
     level -= 1
@@ -88,37 +95,37 @@ function sortRecords(records) {
 
 // --- Concern severity -----------------------------------------------------
 
-test("concern severity scales with the AI damage score", () => {
-  // Quartile bands, checked at and just inside each boundary.
+test("concern severity maps severityEstimate to the correct band", () => {
   const cases = [
-    [0.0, "low"],
-    [0.24, "low"],
-    [0.25, "moderate"],
-    [0.49, "moderate"],
-    [0.5, "high"],
-    [0.74, "high"],
-    [0.75, "critical"],
-    [1.0, "critical"],
+    ["low", "others", "low"],
+    ["medium", "others", "moderate"],
+    ["high", "others", "high"],
+    ["critical", "others", "critical"],
   ]
-  for (const [score, expected] of cases) {
-    const result = deriveConcernSeverity({
-      category: "others",
-      damageScore: score,
-    })
-    assert.equal(result.severity, expected, `score ${score}`)
+  for (const [estimate, category, expected] of cases) {
+    const result = deriveConcernSeverity({ category, severityEstimate: estimate })
+    assert.equal(result.severity, expected, `estimate ${estimate}`)
     assert.equal(result.assessed, true)
   }
 })
 
-test("category baseline floors severity so public safety is never 'low'", () => {
-  const result = deriveConcernSeverity({
-    category: "public_safety",
-    damageScore: 0,
-  })
+test("category baseline floors severity so public safety is never below 'high' without an estimate", () => {
+  const result = deriveConcernSeverity({ category: "public_safety" })
   assert.equal(result.severity, "high")
+  assert.equal(result.assessed, false, "unassessed — floor is not a measurement")
 })
 
-test("an active high-risk concern reaches critical without SOS escalation", () => {
+test("category baseline is applied when estimate is below the floor", () => {
+  // public_safety baseline = 2 (high); a low LLM estimate is raised to high
+  const result = deriveConcernSeverity({
+    category: "public_safety",
+    severityEstimate: "low",
+  })
+  assert.equal(result.severity, "high")
+  assert.equal(result.assessed, true)
+})
+
+test("an active high-risk concern reaches critical without a direct critical estimate", () => {
   const result = deriveConcernSeverity({
     category: "public_safety",
     severityEstimate: "high",
@@ -126,6 +133,29 @@ test("an active high-risk concern reaches critical without SOS escalation", () =
     incidentTiming: "ongoing",
   })
   assert.equal(result.severity, "critical")
+  assert.equal(result.assessed, true)
+})
+
+test("LLM severity estimate of critical reaches the top band directly", () => {
+  const result = deriveConcernSeverity({
+    category: "others",
+    severityEstimate: "critical",
+  })
+  assert.equal(result.severity, "critical")
+  assert.equal(result.assessed, true)
+})
+
+test("urgentAttention alone does not promote to critical — the LLM severity is authoritative", () => {
+  // Regression: the old mirror escalated to critical on urgentAttention alone.
+  // The backend was corrected so the LLM severity estimate is the authority;
+  // this test prevents the frontend from re-introducing the same escalation.
+  const result = deriveConcernSeverity({
+    category: "public_safety",
+    severityEstimate: "low",
+    urgentAttention: true,
+  })
+  // low estimate is floored to the public_safety baseline (2 = high)
+  assert.equal(result.severity, "high")
   assert.equal(result.assessed, true)
 })
 
@@ -142,16 +172,16 @@ test("missing AI assessment falls back to the baseline and is flagged unassessed
 test("low NLP relevance reduces severity by one band", () => {
   const relevant = deriveConcernSeverity({
     category: "others",
-    damageScore: 0.8,
+    severityEstimate: "high",
     relevance: 0.9,
   })
   const irrelevant = deriveConcernSeverity({
     category: "others",
-    damageScore: 0.8,
+    severityEstimate: "high",
     relevance: 0.2,
   })
-  assert.equal(relevant.severity, "critical")
-  assert.equal(irrelevant.severity, "high")
+  assert.equal(relevant.severity, "high")
+  assert.equal(irrelevant.severity, "moderate")
 })
 
 // --- Emergency severity ---------------------------------------------------
@@ -289,8 +319,10 @@ test("a heavily-supported low-severity concern never tops the queue", () => {
   const queue = [
     {
       id: "popular-but-minor",
-      severity: deriveConcernSeverity({ category: "others", damageScore: 0.1 })
-        .severity,
+      severity: deriveConcernSeverity({
+        category: "others",
+        severityEstimate: "low",
+      }).severity,
       priority: derivePriority({
         severity: "low",
         hoursSinceStatusChange: 72,
@@ -301,7 +333,7 @@ test("a heavily-supported low-severity concern never tops the queue", () => {
       id: "serious-but-quiet",
       severity: deriveConcernSeverity({
         category: "public_safety",
-        damageScore: 0.9,
+        severityEstimate: "high",
       }).severity,
       priority: derivePriority({
         severity: "critical",
@@ -320,7 +352,7 @@ test("unassessed concerns fall back to the category floor, not to zero", () => {
   const pendingSafety = deriveConcernSeverity({ category: "public_safety" })
   const scoredTrivial = deriveConcernSeverity({
     category: "others",
-    damageScore: 0.1,
+    severityEstimate: "low",
   })
 
   assert.equal(pendingSafety.assessed, false)

@@ -212,7 +212,6 @@ export function ListDropdown({
   )
 }
 
-/** Ten rows at a time, with a plain statement of where you are. */
 export function Pager({
   offset,
   total,
@@ -229,46 +228,71 @@ export function Pager({
   className?: string
 }) {
   if (total === 0) return null
-  const maxOffset = Math.floor((total - 1) / pageSize) * pageSize
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const maxOffset = (pageCount - 1) * pageSize
   const safeOffset = Math.min(Math.max(offset, 0), maxOffset)
-  const first = safeOffset + 1
-  const last = Math.min(safeOffset + pageSize, total)
-  const atStart = safeOffset === 0
-  const atEnd = safeOffset + pageSize >= total
+  const currentPage = Math.floor(safeOffset / pageSize) + 1
+  const [pageInput, setPageInput] = useState(String(currentPage))
+  const [prevPage, setPrevPage] = useState(currentPage)
+  if (prevPage !== currentPage) {
+    setPrevPage(currentPage)
+    setPageInput(String(currentPage))
+  }
+
+  function goToPage(value: number) {
+    const next = Math.min(Math.max(value, 1), pageCount)
+    setPageInput(String(next))
+    onChange((next - 1) * pageSize)
+  }
 
   return (
-    <div className={cn("mt-8 flex items-center justify-between gap-4 border-t border-neutral-200 pt-5", className)}>
-      <p className="text-meta text-neutral-500 tabular-nums">
-        {first}–{last} of {total.toLocaleString()} {noun}
-      </p>
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onChange(Math.max(0, safeOffset - pageSize))}
-          disabled={atStart}
-          aria-label="Previous page"
-          className={cn(
-            "flex size-9 items-center justify-center rounded-lg transition-colors",
-            atStart
-              ? "text-neutral-300"
-              : "text-neutral-500 hover:bg-neutral-100 hover:text-brand-navy",
-          )}
-        >
-          <ChevronLeftIcon className="size-5" strokeWidth={1.8} aria-hidden />
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange(Math.min(maxOffset, safeOffset + pageSize))}
-          disabled={atEnd}
-          aria-label="Next page"
-          className={cn(
-            "flex size-9 items-center justify-center rounded-lg transition-colors",
-            atEnd ? "text-neutral-300" : "text-neutral-500 hover:bg-neutral-100 hover:text-brand-navy",
-          )}
-        >
-          <ChevronRightIcon className="size-5" strokeWidth={1.8} aria-hidden />
-        </button>
-      </div>
+    <div className={cn("mt-8 flex items-center justify-between gap-3 border-t border-neutral-200 pt-5", className)}>
+      <button
+        type="button"
+        onClick={() => goToPage(currentPage - 1)}
+        disabled={currentPage === 1}
+        aria-label="Previous page"
+        className="inline-flex h-10 items-center gap-1 rounded-full px-2.5 text-[13px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100 disabled:pointer-events-none disabled:text-neutral-300"
+      >
+        <ChevronLeftIcon className="size-4" aria-hidden="true" />
+        Prev
+      </button>
+      <label className="flex items-center gap-1.5 text-[13px] font-medium text-neutral-500">
+        <input
+          value={pageInput}
+          onChange={(event) => {
+            const value = event.target.value.replace(/[^0-9]/g, "")
+            setPageInput(value)
+            const parsed = Number.parseInt(value, 10)
+            if (Number.isFinite(parsed)) goToPage(parsed)
+          }}
+          onBlur={() => {
+            const parsed = Number.parseInt(pageInput, 10)
+            setPageInput(Number.isFinite(parsed) ? String(Math.min(Math.max(parsed, 1), pageCount)) : String(currentPage))
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              const parsed = Number.parseInt(pageInput, 10)
+              if (Number.isFinite(parsed)) goToPage(parsed)
+              else setPageInput(String(currentPage))
+            }
+          }}
+          inputMode="numeric"
+          aria-label={`Current ${noun} page`}
+          className="h-8 w-10 rounded-lg border border-neutral-200 bg-white text-center text-[13px] font-semibold tabular-nums text-neutral-900 outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-200"
+        />
+        <span>of {pageCount}</span>
+      </label>
+      <button
+        type="button"
+        onClick={() => goToPage(currentPage + 1)}
+        disabled={currentPage === pageCount}
+        aria-label="Next page"
+        className="inline-flex h-10 items-center gap-1 rounded-full px-2.5 text-[13px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100 disabled:pointer-events-none disabled:text-neutral-300"
+      >
+        Next
+        <ChevronRightIcon className="size-4" aria-hidden="true" />
+      </button>
     </div>
   )
 }

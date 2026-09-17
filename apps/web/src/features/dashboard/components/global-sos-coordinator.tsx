@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useLocation } from "react-router-dom"
 import { ArrowRightIcon, CheckIcon, InfoIcon, WifiOffIcon } from "lucide-react"
 
 import { SOSButton } from "@/features/dashboard/components/sos-button"
@@ -7,6 +8,15 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import { probeApiReachability, useApiReachability } from "@/lib/api-reachability"
 
 export function GlobalSosCoordinator() {
+  const { pathname } = useLocation()
+  const hideOfflineUi =
+    pathname === "/" ||
+    pathname.startsWith("/help") ||
+    pathname === "/communities" ||
+    pathname === "/communities/new" ||
+    pathname === "/create-community" ||
+    pathname === "/book-demo" ||
+    pathname === "/report-issue"
   const { refreshUser } = useAuthSession()
   const online = useApiReachability()
   const [showReconnected, setShowReconnected] = useState(false)
@@ -69,7 +79,7 @@ export function GlobalSosCoordinator() {
   return (
     <>
       <SOSButton />
-      {mounted ? (
+      {mounted && !hideOfflineUi ? (
         isColdStart ? (
           <OfflineColdStartPage hiding={hiding} />
         ) : (

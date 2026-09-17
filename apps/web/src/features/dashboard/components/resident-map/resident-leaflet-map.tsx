@@ -251,8 +251,7 @@ export function ResidentLeafletMap({
     for (const post of posts) {
       const pos = validCoord(post.latitude, post.longitude)
       if (!pos) continue
-      const severity =
-        post.severity ?? (post.priority_score >= 3000 ? "critical" : null)
+      const severity = post.severity ?? null
       points.push({
         id: `c${post.id}`,
         lat: pos[0],
@@ -669,8 +668,7 @@ export function ResidentLeafletMap({
     for (const post of posts) {
       const pos = validCoord(post.latitude, post.longitude)
       if (!pos) continue
-      const severity =
-        post.severity ?? (post.priority_score >= 3000 ? "critical" : null)
+      const severity = post.severity ?? null
       const selected = selectedId === post.id
       const pinSize = concernMarkerSize(selected)
       const marker = L.marker(pos, {
@@ -1036,6 +1034,10 @@ export function ResidentLeafletMap({
           background: color-mix(in srgb, var(--pin) 16%, white);
           color: var(--pin);
           transition: background-color 160ms ease, color 160ms ease;
+        }
+        .eboses-alerts-map .eboses-pin--glyph.is-alert .eboses-pin__disc {
+          background: #fef2f2;
+          color: #dc2626;
         }
         .eboses-alerts-map .eboses-pin__disc svg {
           display: block;

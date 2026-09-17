@@ -179,6 +179,8 @@ export default defineConfig(({ mode }) => {
               return "three-vendor"
             }
             if (/[\\/]node_modules[\\/]leaflet[\\/]/.test(id)) return "leaflet"
+            if (/[\\/]node_modules[\\/](maplibre-gl|pmtiles)[\\/]/)
+              return "maplibre"
             if (id.includes("packages/ui")) return "ui-vendor"
             return
           },

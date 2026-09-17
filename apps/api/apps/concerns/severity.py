@@ -13,10 +13,10 @@ It used to come from the YOLOv8 damage score — the mean confidence of the
 objects a detector found in the photo. That was never a measure of how bad
 something was; a crisp photo of a bench scored higher than a blurry photo of a
 collapsed wall. With YOLO gone, severity reads what Gemma actually assessed
-(low / medium / high over the text *and* the image). A completed report can
-also reach the top Concern band when it describes an active, high-risk
-situation. That is still a normal Concern priority; it does not create an
-EmergencyAlert or open SOS tracking.
+(low / medium / high / critical over the text *and* the image). A completed
+report can also reach the top Concern band when it describes an active,
+high-risk situation. That is still a normal Concern priority; it does not create
+an EmergencyAlert or open SOS tracking.
 
 Priority orders records and does include community support, because civic
 engagement here is defined as residents contributing to prioritisation. But
@@ -50,14 +50,15 @@ CATEGORY_BASELINE = {
 AGE_SATURATION_HOURS = 72
 SUPPORT_SATURATION_VOTES = 25
 
-# Gemma reports three levels; the queue shows four. The top Concern band is
-# reserved for an explicit urgent flag or a high-severity situation that is both
-# dangerous and ongoing, rather than simply treating every `high` estimate as
-# critical.
+# Gemma reports four levels: low / medium / high / critical. The top Concern
+# band is reserved for a direct "critical" LLM judgement. Current danger and
+# incident timing remain available to emergency routing, but do not silently
+# promote an ordinary high-severity concern into Critical.
 SEVERITY_ESTIMATE_LEVEL = {
     "low": 0,
     "medium": 1,
     "high": 2,
+    "critical": 3,
 }
 
 # Priority is stored as one integer so existing "sort by priority_score desc"
@@ -67,16 +68,6 @@ SEVERITY_ESTIMATE_LEVEL = {
 # within-band total, which is what makes the guarantee hold arithmetically.
 BAND_WEIGHT = 1000
 WITHIN_BAND_MAX = 100
-
-
-def _active_high_risk(assessment) -> bool:
-    """Return whether a normal concern describes an active high-risk event."""
-    review = (getattr(assessment, "raw_result", None) or {}).get("review") or {}
-    return (
-        str(getattr(assessment, "severity_estimate", "") or "").lower() == "high"
-        and review.get("current_danger") is True
-        and review.get("incident_timing") == "ongoing"
-    )
 
 
 def severity_level(concern) -> tuple[int, bool]:
@@ -93,9 +84,6 @@ def severity_level(concern) -> tuple[int, bool]:
 
     if estimate not in SEVERITY_ESTIMATE_LEVEL:
         return baseline, False
-
-    if getattr(assessment, "urgent_attention", False) or _active_high_risk(assessment):
-        return 3, True
 
     level = SEVERITY_ESTIMATE_LEVEL[estimate]
 

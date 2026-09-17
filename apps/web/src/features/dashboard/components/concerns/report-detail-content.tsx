@@ -6,6 +6,10 @@ import {
   MessageCircleIcon,
   PhoneIcon,
   PlayIcon,
+  SignalHighIcon,
+  SignalIcon,
+  SignalLowIcon,
+  SignalMediumIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 
@@ -14,6 +18,10 @@ import type { Concern } from "@/features/dashboard/api"
 import { formatResolvedOn } from "@/features/dashboard/lib/responder-format"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { isCriticalConcern } from "@/features/dashboard/lib/critical-concern"
+import {
+  SEVERITY_LABEL,
+  type Severity,
+} from "@/features/dashboard/components/record/severity"
 import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
@@ -31,11 +39,60 @@ function tidySentence(value: string) {
   return lowered.replace(/[.!?]+$/, "")
 }
 
+function sameText(a: string, b: string) {
+  const norm = (v: string) =>
+    v.trim().toLowerCase().replace(/[.!?]+$/, "").replace(/\s+/g, " ")
+  return norm(a) === norm(b)
+}
+
 function reportSentence(report: Concern) {
-  const source = tidySentence(
-    report.summary?.trim() || report.title?.trim() || report.description?.trim()
+  const raw = (
+    report.summary?.trim() ||
+    report.title?.trim() ||
+    report.description?.trim() ||
+    ""
+  ).trim()
+  if (!raw) return "The resident submitted this report."
+  if (/^(the resident|the report|this report|a report)\b/i.test(raw)) {
+    const sentence = `${raw.charAt(0).toUpperCase()}${raw.slice(1)}`
+    return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`
+  }
+  const source = tidySentence(raw)
+  return `The resident reports ${source}.`
+}
+
+const PRIORITY_META: Record<
+  Severity,
+  { icon: typeof SignalIcon; tone: string }
+> = {
+  critical: { icon: SignalIcon, tone: "text-severity-critical-map-ink" },
+  high: { icon: SignalHighIcon, tone: "text-[#cf4a40]" },
+  moderate: { icon: SignalMediumIcon, tone: "text-severity-moderate" },
+  low: { icon: SignalLowIcon, tone: "text-neutral-600" },
+}
+
+export function ReportPriorityIndicator({
+  severity,
+  className,
+}: {
+  severity: Severity
+  className?: string
+}) {
+  const meta = PRIORITY_META[severity]
+  const Icon = meta.icon
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 text-[11px] font-medium leading-none",
+        meta.tone,
+        className
+      )}
+      aria-label={SEVERITY_LABEL[severity]}
+    >
+      <Icon className="size-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
+      <span>{SEVERITY_LABEL[severity]}</span>
+    </span>
   )
-  return source ? `The resident reports ${source}.` : "The resident submitted this report."
 }
 
 export function ReportDescriptionCard({
@@ -46,8 +103,14 @@ export function ReportDescriptionCard({
   onMediaPreview?: (items: MediaPreviewItem[], index: number) => void
 }) {
   const media = report.media ?? []
-  const description = report.description?.trim()
-  const readableDescription = report.summary?.trim() || description
+  const description = report.description?.trim() || ""
+  const summaryText = report.summary?.trim() || ""
+  const titleText = report.title?.trim() || ""
+  const headlineSource = summaryText || titleText || description
+  const readableDescription =
+    description && headlineSource && !sameText(description, headlineSource)
+      ? description
+      : ""
   const critical = isCriticalConcern(report)
   const resolved = report.status === "resolved"
   const resolvedEvents = (report.status_events ?? []).filter(

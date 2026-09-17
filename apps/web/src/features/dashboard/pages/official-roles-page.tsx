@@ -6,7 +6,7 @@ import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { CAPABILITY_LABEL } from "@/features/dashboard/lib/capabilities"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
-import { ConfigurationTable, ConfigurationTableEmpty, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
+import { ConfigurationInfoRow, ConfigurationTable, ConfigurationTableEmpty } from "@/features/dashboard/components/config/configuration-table"
 import { SheetActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 import {
   ConfigHeroAction,
@@ -266,10 +266,18 @@ export default function OfficialRolesPage({ embedded = false }: { embedded?: boo
         onFilter={(value) => { setUnitKey(value); setOffset(0) }}
       />
 
-      <ConfigurationTable label="Permissions">
+      <ConfigurationTable label="Permissions" hideHeader>
         {page.map((position) => (
-          <ConfigurationTableRow
+          <ConfigurationInfoRow
             key={position.id}
+            icon={ShieldCheckIcon}
+            title={position.name}
+            subtext={position.department ? departments.find((d) => d.id === position.department)?.name ?? "Unit" : null}
+            description={
+              position.permissions.length === 0
+                ? "No permissions assigned"
+                : `${position.permissions.length} permission${position.permissions.length === 1 ? "" : "s"}`
+            }
             actions={<>
               <SheetIconButton label={`Edit ${position.name}`} onClick={() => { setDraft(position); setOriginalDraft(positionSnapshot(position)); setEditOpen(true) }}>
                 <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
@@ -278,36 +286,7 @@ export default function OfficialRolesPage({ embedded = false }: { embedded?: boo
                 <Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden />
               </SheetIconButton>
             </>}
-          >
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-3">
-                <span className="text-row text-brand-navy">{position.name}</span>
-                {position.department && (
-                  <span className="text-meta text-neutral-400">
-                    {departments.find((d) => d.id === position.department)?.name ?? "Unit"}
-                  </span>
-                )}
-              </div>
-              <dl className="mt-2 flex flex-wrap gap-x-8 gap-y-2">
-                <div>
-                  <dt className="text-meta text-neutral-400">Permissions</dt>
-                  <dd className="mt-0.5 text-meta text-brand-navy">
-                    {position.permissions.length === 0 ? (
-                      <span className="italic text-neutral-400">None assigned</span>
-                    ) : (
-                      <>
-                        {position.permissions.slice(0, 5).map((cap) => CAPABILITY_LABEL[cap] ?? cap).join(", ")}
-                        {position.permissions.length > 5 && (
-                          <span className="mt-1 block text-meta text-neutral-400">+{position.permissions.length - 5} more</span>
-                        )}
-                      </>
-                    )}
-                  </dd>
-                </div>
-              </dl>
-            </div>
-
-          </ConfigurationTableRow>
+          />
         ))}
         {page.length === 0 && !loading ? <ConfigurationTableEmpty>No positions found.</ConfigurationTableEmpty> : null}
       </ConfigurationTable>

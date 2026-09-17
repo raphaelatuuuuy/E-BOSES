@@ -7,6 +7,7 @@ into popularity ranking again.
 
 from django.contrib.auth import get_user_model
 from datetime import timedelta
+from types import SimpleNamespace
 
 from django.utils import timezone
 from rest_framework.test import APITestCase
@@ -32,7 +33,6 @@ class ConcernSeverityTests(APITestCase):
         *,
         category="others",
         estimate=None,
-        urgent=False,
         relevance=None,
         current_danger=False,
         incident_timing="unclear",
@@ -49,7 +49,6 @@ class ConcernSeverityTests(APITestCase):
                 concern=concern,
                 status="completed",
                 severity_estimate=estimate,
-                urgent_attention=urgent,
                 nlp_confidence=relevance,
                 raw_result={
                     "review": {
@@ -63,21 +62,34 @@ class ConcernSeverityTests(APITestCase):
         return concern
 
     def test_review_severity_maps_to_bands(self):
-        for estimate, expected in (("low", "low"), ("medium", "moderate"), ("high", "high")):
+        for estimate, expected in (("low", "low"), ("medium", "moderate"), ("high", "high"), ("critical", "critical")):
             concern = self._concern(estimate=estimate)
             self.assertEqual(severity_label(concern), expected, f"severity {estimate}")
 
-    def test_urgent_attention_reaches_the_critical_band(self):
-        concern = self._concern(estimate="low", urgent=True)
-        self.assertEqual(severity_label(concern), "critical")
+    def test_low_severity_without_high_risk_stays_low(self):
+        concern = self._concern(estimate="low")
+        self.assertEqual(severity_label(concern), "low")
 
-    def test_active_high_risk_reaches_critical_without_urgent_emergency_flag(self):
+    def test_current_danger_cannot_override_a_non_high_llm_severity(self):
+        concern = SimpleNamespace(
+            category="infrastructure",
+            ai_assessment=SimpleNamespace(
+                status="completed",
+                severity_estimate="medium",
+                nlp_confidence=None,
+                raw_result={"review": {"current_danger": False, "incident_timing": "ongoing"}},
+            ),
+        )
+
+        self.assertEqual(severity_label(concern), "moderate")
+
+    def test_high_risk_remains_high_without_explicit_critical_severity(self):
         concern = self._concern(
             estimate="high",
             current_danger=True,
             incident_timing="ongoing",
         )
-        self.assertEqual(severity_label(concern), "critical")
+        self.assertEqual(severity_label(concern), "high")
 
     def test_ended_or_non_dangerous_high_risk_stays_high(self):
         ended = self._concern(

@@ -1,6 +1,9 @@
 import { Link, useLocation, useNavigate } from "react-router-dom"
-import { ArrowRightIcon, MenuIcon, MinusIcon } from "lucide-react"
+import { DownloadIcon, MenuIcon, MinusIcon } from "lucide-react"
 import { useEffect, useRef, useState, type MouseEvent } from "react"
+import { createPortal } from "react-dom"
+
+import { APK_DOWNLOAD_URL } from "../constants"
 
 type NavLink = { label: string; href?: string; to?: string }
 
@@ -12,12 +15,10 @@ const NAV_LINKS: NavLink[] = [
   { label: "Help Center", to: "/help" },
 ]
 
-const PANEL_LINKS: NavLink[] = [...NAV_LINKS, { label: "Sign in", to: "/sign-in" }]
-
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-const SOLID_CTA = "min-h-10 items-center gap-2 rounded-none bg-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:px-5"
-const NAV_REPORT_CTA = "min-h-9 items-center rounded-none bg-accent px-4 text-xs font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+const SOLID_CTA = "min-h-10 items-center gap-2 rounded-full bg-accent px-3 text-lg font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:px-5"
+const NAV_REPORT_CTA = "min-h-9 items-center gap-1.5 rounded-full bg-accent px-4 text-xs font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
 
 export function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -107,20 +108,22 @@ export function Navbar() {
   return (
     <header className={`sticky top-0 z-[999] w-full transition-transform duration-200 motion-reduce:transition-none ${hidden && !menuOpen ? "-translate-y-full" : "translate-y-0"}`}>
       <div className={`px-5 transition-colors duration-200 md:px-10 lg:px-16 ${menuOpen || scrolled ? "bg-landing-bg border-b border-white/8" : "bg-transparent"}`}>
-        <div className="mx-auto flex h-20 max-w-7xl items-center gap-3 min-[1600px]:max-w-[92rem] min-[1600px]:gap-8">
+        <div className="mx-auto flex h-20 max-w-7xl items-center gap-3 min-[1600px]:max-w-[92rem] min-[1600px]:gap-8 relative z-10">
           <Link to="/" onClick={closeMenu} className="flex shrink-0 items-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground">
             <img src="/contents/logo.webp" alt="E-Boses" className="h-10 w-auto object-contain" />
             <span className="px-2 text-2xl font-bold text-accent">Boses</span>
           </Link>
 
           <div className="ml-auto flex shrink-0 items-center gap-3">
-            <Link
-              to="/report-issue"
-              onClick={closeMenu}
-              className={`${NAV_REPORT_CTA} ${menuOpen ? "hidden" : "inline-flex"}`}
-            >
-              Report an Issue
-            </Link>
+              <a
+                href={APK_DOWNLOAD_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${NAV_REPORT_CTA} ${menuOpen ? "hidden" : "inline-flex"}`}
+              >
+                <DownloadIcon className="size-3.5" strokeWidth={2} aria-hidden="true" />
+                Download the app
+              </a>
             <button
               ref={menuButtonRef}
               type="button"
@@ -136,21 +139,23 @@ export function Navbar() {
         </div>
       </div>
 
-      <div
-        ref={panelRef}
-        id="primary-menu"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Navigation menu"
-        aria-hidden={!menuOpen}
-        className={`absolute inset-x-0 top-20 grid transition-[grid-template-rows] duration-300 ease-out ${menuOpen ? "grid-rows-[1fr]" : "pointer-events-none grid-rows-[0fr]"}`}
-      >
-        <div className="overflow-hidden bg-landing-bg">
-          <div className="scrollbar-hide max-h-[calc(100dvh-5rem)] overflow-y-auto px-5 pb-8 md:px-10 lg:px-16">
-            <div className="mx-auto max-w-7xl">
-              <nav aria-label="Menu navigation" className="flex flex-col items-start pt-4">
-                {PANEL_LINKS.map((link, index) => {
-                  const className = `min-h-14 py-2 text-left text-2xl font-semibold text-white transition-[opacity,transform] duration-300 ease-out hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground motion-reduce:translate-y-0 sm:text-3xl ${menuOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"}`
+      {typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={panelRef}
+              id="primary-menu"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation menu"
+              aria-hidden={!menuOpen}
+              className={`fixed inset-0 z-[900] grid transition-[grid-template-rows] duration-300 ease-out ${menuOpen ? "grid-rows-[1fr]" : "pointer-events-none grid-rows-[0fr]"}`}
+            >
+        <div className="landing-fonts relative h-full overflow-hidden bg-landing-bg">
+          <div className="scrollbar-hide h-full overflow-y-auto px-5 pt-20 pb-40 md:px-10 lg:px-16">
+            <div className="mx-auto w-full max-w-7xl">
+              <nav aria-label="Menu navigation" className="flex flex-col items-start gap-6 pt-6">
+                {NAV_LINKS.map((link, index) => {
+                  const className = `min-h-16 py-3 text-left text-4xl font-semibold text-white transition-[opacity,transform] duration-300 ease-out hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground motion-reduce:translate-y-0 sm:text-5xl ${menuOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"}`
                   const style = menuOpen ? { transitionDelay: `${60 + index * 40}ms` } : undefined
                   return link.to ? (
                     <Link key={link.label} to={link.to} onClick={closeMenu} style={style} tabIndex={tab} className={className}>
@@ -163,16 +168,28 @@ export function Navbar() {
                   )
                 })}
               </nav>
-
-              <div className="mt-8 flex flex-col gap-3">
-                <Link to="/report-issue" onClick={closeMenu} tabIndex={tab} className={`${SOLID_CTA} flex min-h-12 w-full justify-center`}>
-                  Report an Issue <ArrowRightIcon className="size-4" strokeWidth={2} aria-hidden="true" />
-                </Link>
+            </div>
+          </div>
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-landing-bg via-landing-bg to-transparent px-5 pt-12 pb-[max(1.5rem,env(safe-area-inset-bottom))] md:px-10 lg:px-16">
+            <div className="mx-auto w-full max-w-7xl">
+              <div className="flex flex-col gap-3">
+                <a
+                  href={APK_DOWNLOAD_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  tabIndex={tab}
+                  className={`${SOLID_CTA} flex min-h-14 w-full justify-center py-3`}
+                >
+                  Download the app <DownloadIcon className="size-5" strokeWidth={2} aria-hidden="true" />
+                </a>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </div>,
+            document.body,
+          )
+        : null}
     </header>
   )
 }

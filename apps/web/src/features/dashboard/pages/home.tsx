@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Link, useLocation } from "react-router-dom"
+import { Link, useLocation, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { AlertTriangleIcon, ChevronRightIcon, CheckIcon, SearchIcon, SlidersHorizontalIcon } from "lucide-react"
 
@@ -13,6 +13,7 @@ import { geocodeCommunityStreet } from "@/features/auth/lib/forward-geocode"
 import {
   commentOnConcern,
   deleteConcernComment,
+  getConcern,
   getResidentAlertsMap,
   getResidentDashboardSummary,
   listAnnouncements,
@@ -65,6 +66,7 @@ type FeedTab = (typeof FEED_TABS)[number]["id"]
 export default function HomePage() {
   usePageTitle("Feed")
   const { user, loading: authLoading } = useAuthSession()
+  const navigate = useNavigate()
   const staffFeed = isStaffUser(user)
 
   const [createOpen, setCreateOpen] = useState(false)
@@ -92,9 +94,15 @@ export default function HomePage() {
   const [events, setEvents] = useState<BarangayEvent[]>([])
   const [concerns, setConcerns] = useState<Concern[]>([])
   const location = useLocation()
-  const highlightId =
-    (location.state as { highlightConcernId?: number } | null)
-      ?.highlightConcernId ?? null
+  const stateHighlightId = (location.state as { highlightConcernId?: unknown } | null)
+    ?.highlightConcernId
+  const queryHighlightId = new URLSearchParams(location.search).get(
+    "highlightConcernId"
+  )
+  const parsedHighlightId = Number(queryHighlightId ?? stateHighlightId)
+  const highlightId = Number.isInteger(parsedHighlightId) ? parsedHighlightId : null
+  const activeFeedTab = highlightId != null ? "recent" : feedTab
+  const activeFeedSearch = highlightId != null ? "" : feedSearch
   const [expandedComments, setExpandedComments] = useState<Set<number>>(
     () => new Set(highlightId != null ? [highlightId] : [])
   )
@@ -103,13 +111,62 @@ export default function HomePage() {
   useEffect(() => {
     if (!loaded || highlightId == null) return
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    const timer = window.setTimeout(() => {
-      document
-        .getElementById(`feed-post-${highlightId}`)
-        ?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" })
-    }, 150)
-    return () => window.clearTimeout(timer)
-  }, [loaded, highlightId])
+    let attempts = 0
+    const timer = window.setInterval(() => {
+      const post = document.getElementById(`feed-post-${highlightId}`)
+      attempts += 1
+      if (post) {
+        const main = post.closest("main")
+        if (main && main.scrollHeight > main.clientHeight) {
+          const top = Math.max(
+            0,
+            main.scrollTop +
+              post.getBoundingClientRect().top -
+              main.getBoundingClientRect().top -
+              88
+          )
+          main.scrollTo({
+            top,
+            behavior: reduce ? "auto" : "smooth",
+          })
+        } else {
+          post.scrollIntoView({
+            behavior: reduce ? "auto" : "smooth",
+            block: "start",
+          })
+        }
+        post.focus({ preventScroll: true })
+        window.clearInterval(timer)
+      } else if (attempts >= 20) {
+        window.clearInterval(timer)
+      }
+    }, 100)
+    return () => window.clearInterval(timer)
+  }, [loaded, highlightId, concerns])
+
+  useEffect(() => {
+    if (
+      !loaded ||
+      highlightId == null ||
+      concerns.some((concern) => concern.id === highlightId)
+    ) {
+      return
+    }
+    let cancelled = false
+    void getConcern(highlightId)
+      .then((concern) => {
+        if (cancelled) return
+        setConcerns((current) =>
+          current.some((item) => item.id === concern.id)
+            ? current
+            : [concern, ...current]
+        )
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [loaded, highlightId, concerns])
 
   const displayName = user
     ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
@@ -320,7 +377,7 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    if (feedTab !== "nearby") return
+    if (activeFeedTab !== "nearby") return
     if (origin) return
 
     let cancelled = false
@@ -362,10 +419,10 @@ export default function HomePage() {
     return () => {
       cancelled = true
     }
-  }, [feedTab, origin, streetLabel, communityName])
+  }, [activeFeedTab, origin, streetLabel, communityName])
 
   const sortedConcerns = useMemo(() => {
-    const ranked = rankFeed(concerns, feedTab, origin)
+    const ranked = rankFeed(concerns, activeFeedTab, origin)
     if (highlightId == null) return ranked
     const at = ranked.findIndex((post) => post.id === highlightId)
     if (at <= 0) return ranked
@@ -373,10 +430,10 @@ export default function HomePage() {
     const [hit] = next.splice(at, 1)
     next.unshift(hit)
     return next
-  }, [concerns, feedTab, origin, highlightId])
+  }, [concerns, activeFeedTab, origin, highlightId])
 
   const visibleConcerns = useMemo(() => {
-    const q = feedSearch.trim().toLowerCase()
+    const q = activeFeedSearch.trim().toLowerCase()
     if (!q) return sortedConcerns
     return sortedConcerns.filter((post) =>
       [
@@ -388,7 +445,15 @@ export default function HomePage() {
         post.reporter?.full_name,
       ].some((value) => value?.toLowerCase().includes(q))
     )
-  }, [sortedConcerns, feedSearch])
+  }, [sortedConcerns, activeFeedSearch])
+
+  function clearHighlight() {
+    if (highlightId == null) return
+    navigate(
+      { pathname: location.pathname, search: "" },
+      { replace: true, state: null }
+    )
+  }
 
   if (!loaded) {
     return (
@@ -493,8 +558,11 @@ export default function HomePage() {
                 aria-hidden="true"
               />
               <input
-                value={feedSearch}
-                onChange={(event) => setFeedSearch(event.target.value)}
+                value={activeFeedSearch}
+                onChange={(event) => {
+                  setFeedSearch(event.target.value)
+                  clearHighlight()
+                }}
                 placeholder="Search feed"
                 aria-label="Search feed"
                 className="min-w-0 flex-1 bg-transparent text-[15px] text-neutral-900 outline-none placeholder:text-neutral-400"
@@ -505,12 +573,15 @@ export default function HomePage() {
           {/* Desktop: inline chips only */}
           <div className="mb-3 hidden flex-wrap items-center gap-1.5 lg:flex">
             {FEED_TABS.map((tab) => {
-              const active = feedTab === tab.id
+              const active = activeFeedTab === tab.id
               return (
                 <button
                   key={tab.id}
                   type="button"
-                  onClick={() => setFeedTab(tab.id)}
+                  onClick={() => {
+                    setFeedTab(tab.id)
+                    clearHighlight()
+                  }}
                   className={cn(
                     "h-8 rounded-sm border px-3.5 text-[13px] font-semibold transition-colors outline-none",
                     "border-neutral-300 focus-visible:border-neutral-400 focus-visible:text-brand-navy",
@@ -562,7 +633,20 @@ export default function HomePage() {
             <AnnouncementCarousel announcements={announcements} />
 
             {visibleConcerns.map((post) => (
-              <div key={post.id} id={`feed-post-${post.id}`}>
+              <div
+                key={
+                  highlightId === post.id
+                    ? `${post.id}-${location.key}`
+                    : post.id
+                }
+                id={`feed-post-${post.id}`}
+                tabIndex={highlightId === post.id ? -1 : undefined}
+                className={cn(
+                  "scroll-mt-24 rounded-lg",
+                  highlightId === post.id &&
+                    "eboses-feed-highlight ring-2 ring-primary/50 ring-offset-2"
+                )}
+              >
                 <FeedPostCard
                   post={post}
                   sessionUser={sessionUserAsPublic}
@@ -588,9 +672,9 @@ export default function HomePage() {
             {visibleConcerns.length === 0 && !error && !feedTotallyEmpty ? (
               <div className="rounded-lg border border-neutral-300 bg-white px-5 py-8 text-center">
                 <p className="text-[15px] font-semibold text-neutral-700">
-                  {feedSearch.trim()
+                  {activeFeedSearch.trim()
                     ? "No posts match your search."
-                    : feedTab === "nearby"
+                    : activeFeedTab === "nearby"
                       ? nearbyUnavailable
                         ? "Location unavailable — allow location access to see posts near you."
                         : "Nothing reported within 1.5 km of you."
@@ -660,7 +744,7 @@ export default function HomePage() {
             </h2>
             <ul className="pb-2">
               {FEED_TABS.map((tab) => {
-                const active = feedTab === tab.id
+                const active = activeFeedTab === tab.id
                 return (
                   <li key={tab.id}>
                     <button
@@ -668,6 +752,7 @@ export default function HomePage() {
                       onClick={() => {
                         setFeedTab(tab.id)
                         setFeedFilterOpen(false)
+                        clearHighlight()
                       }}
                       className="flex min-h-12 w-full items-center justify-between px-1 py-3 text-left text-[16px] text-neutral-800 transition-colors hover:bg-neutral-50"
                     >

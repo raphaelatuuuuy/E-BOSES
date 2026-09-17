@@ -398,12 +398,11 @@ function ConcernResult({
     result.severity === "high" &&
     result.current_danger === true &&
     result.incident_timing === "ongoing"
-  const resultPriority =
-    result.urgent_attention || activeHighRisk
-      ? "Critical"
-      : result.severity
-        ? readable(result.severity)
-        : "Review"
+  const resultPriority = activeHighRisk
+    ? "Critical"
+    : result.severity
+      ? readable(result.severity)
+      : "Review"
   const resultPhoto = !result.image_uploaded
     ? "Not submitted"
     : photoUnreviewable
@@ -456,13 +455,6 @@ function ConcernResult({
         text: displayValue(relationship),
       })
     }
-  }
-  if (result.urgent_attention) {
-    findings.push({
-      icon: TriangleAlert,
-      tone: "warn",
-      text: "This may describe immediate danger.",
-    })
   }
   if (result.duplicate) {
     findings.push({

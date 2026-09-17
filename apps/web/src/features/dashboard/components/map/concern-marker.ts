@@ -79,7 +79,7 @@ export function concernMarkerHtml({
     size: BASE_SIZE,
     selected,
     tone,
-    tint: tint ?? (critical || resolved),
+    tint: tint ?? (!critical && resolved),
     idleNeutral: false,
     hoverGrow,
   })

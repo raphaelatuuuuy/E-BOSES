@@ -148,14 +148,51 @@ class OfficialAnalyticsTests(TestCase):
         ConcernAiAssessment.objects.create(
             concern=unit_critical,
             status=ConcernAiAssessment.Status.COMPLETED,
-            severity_estimate="low",
-            urgent_attention=True,
+            severity_estimate="critical",
         )
         self.file(status=Concern.Status.IN_PROGRESS)
 
         payload = self.get()
 
         self.assertEqual(payload["critical_report"]["id"], unit_critical.pk)
+
+    def test_recent_reports_follow_severity_sequence(self):
+        """Overview rows sequence Critical → High → Moderate → Low → Resolved →
+        Rejected regardless of recency: a severe older report must not be
+        crowded out by newer minor ones."""
+        critical = self.file(days_ago=10, assigned_department=self.unit)
+        ConcernAiAssessment.objects.create(
+            concern=critical,
+            status=ConcernAiAssessment.Status.COMPLETED,
+            severity_estimate="critical",
+        )
+        rejected = self.file(
+            days_ago=9,
+            status=Concern.Status.REJECTED,
+            assigned_department=self.unit,
+        )
+        low = self.file(days_ago=8, assigned_department=self.unit)  # unassessed low
+        resolved = self.file(
+            days_ago=7,
+            status=Concern.Status.RESOLVED,
+            assigned_department=self.unit,
+        )
+        moderate = self.file(days_ago=6, assigned_department=self.unit)
+        ConcernAiAssessment.objects.create(
+            concern=moderate,
+            status=ConcernAiAssessment.Status.COMPLETED,
+            severity_estimate="medium",
+        )
+
+        payload = self.get()
+
+        # ids follow creation order: critical=1, rejected=2, low=3,
+        # resolved=4, moderate=5. Open bands outrank settled rows, so the
+        # top-3 are critical → moderate → low; resolved and rejected drop off.
+        self.assertEqual(
+            [report["id"] for report in payload["recent_reports"]],
+            [critical.pk, moderate.pk, low.pk],
+        )
 
     def test_median_resolution_comes_from_status_events(self):
         self.resolve(self.file(days_ago=1), hours_after=2)
@@ -181,6 +218,14 @@ class OfficialAnalyticsTests(TestCase):
 
     def test_reresolved_concern_counts_once_per_day(self):
         concern = self.file(days_ago=1)
+        # `resolve` offsets from `created_at`, which is `now - 1 day`. Past
+        # 9pm local, +3h lands on today and the two events split across days,
+        # so pin the filing to yesterday morning to keep the test off the
+        # clock.
+        pinned = timezone.localtime() - timedelta(days=1)
+        pinned = pinned.replace(hour=8, minute=0, second=0, microsecond=0)
+        Concern.objects.filter(pk=concern.pk).update(created_at=pinned)
+        concern.refresh_from_db()
         self.resolve(concern, hours_after=2)
         self.resolve(concern, hours_after=3)
 
@@ -356,7 +401,7 @@ class ResidentOverviewSummaryTests(TestCase):
         self.assertEqual(len(days), 7)
         self.assertTrue(
             all(
-                set(point) == {"date", "submitted", "resolved", "critical"}
+                set(point) == {"date", "submitted", "resolved", "critical", "sos", "severity"}
                 for point in days
             )
         )
@@ -370,8 +415,7 @@ class ResidentOverviewSummaryTests(TestCase):
         ConcernAiAssessment.objects.create(
             concern=critical,
             status=ConcernAiAssessment.Status.COMPLETED,
-            severity_estimate="low",
-            urgent_attention=True,
+            severity_estimate="critical",
         )
 
         User = get_user_model()

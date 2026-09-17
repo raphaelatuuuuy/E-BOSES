@@ -6,7 +6,7 @@ import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
-import { ConfigurationTable, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
+import { ConfigurationInfoRow, ConfigurationTable } from "@/features/dashboard/components/config/configuration-table"
 import { SheetActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 
 interface Unit {
@@ -428,24 +428,18 @@ export default function OfficialUnitsPage({ embedded = false }: { embedded?: boo
 
         {loading ? <div className="divide-y divide-neutral-200">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="flex items-center gap-4 px-1 py-5"><span className="h-3 w-32 animate-pulse rounded-full bg-neutral-200" /><span className="h-3 w-20 animate-pulse rounded-full bg-neutral-200" /></div>)}</div>
         : page.length === 0 ? <p className="py-16 text-center text-read text-neutral-500">{query ? "No units match your search." : 'No units here yet. Use "New unit" above to create one.'}</p>
-        : <ConfigurationTable label="Units">{page.map((unit) => (
-          <ConfigurationTableRow key={unit.id} actions={<>
-            <SheetIconButton label={`Edit ${unit.name}`} onClick={() => openEdit(unit)}>
-              <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
-            </SheetIconButton>
-            <SheetIconButton label={`Delete ${unit.name}`} onClick={() => { setDeleteTarget(unit); setDeleteOpen(true) }} className="text-neutral-500 hover:text-sos">
-              <Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden />
-            </SheetIconButton>
-          </>}>
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 flex-wrap items-center gap-3">
-                <span className="text-row font-medium text-brand-navy">{unit.name}</span>
-                {unit.short_name && <span className="text-meta text-neutral-400">{unit.short_name}</span>}
-                {!unit.is_active && <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-meta font-medium text-neutral-500">Inactive</span>}
-              </div>
-              <p className="mt-1 text-meta text-neutral-500">{unit.description || unit.code}{unit.member_count > 0 && <> · {unit.member_count} member{unit.member_count === 1 ? "" : "s"}</>}</p>
-            </div>
-          </ConfigurationTableRow>
+        : <ConfigurationTable label="Units" hideHeader>{page.map((unit) => (
+          <ConfigurationInfoRow key={unit.id} icon={UsersIcon} title={unit.name}
+            subtext={unit.short_name}
+            description={unit.member_count > 0 ? `${unit.member_count} member${unit.member_count === 1 ? "" : "s"}` : null}
+            actions={<>
+              <SheetIconButton label={`Edit ${unit.name}`} onClick={() => openEdit(unit)}>
+                <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
+              </SheetIconButton>
+              <SheetIconButton label={`Delete ${unit.name}`} onClick={() => { setDeleteTarget(unit); setDeleteOpen(true) }} className="text-neutral-500 hover:text-sos">
+                <Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden />
+              </SheetIconButton>
+            </>} />
         ))}</ConfigurationTable>}
 
         {!loading && filtered.length > 0 && <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="units" />}

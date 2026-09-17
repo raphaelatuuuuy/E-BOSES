@@ -1,4 +1,5 @@
 import * as React from "react"
+import { Link } from "react-router-dom"
 import {
   ChevronDownIcon,
   InfoIcon,
@@ -227,6 +228,27 @@ export function LoginForm({
           {errors.password ? <FieldError>{errors.password}</FieldError> : null}
         </Field>
 
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <label
+            htmlFor="remember-account"
+            className="flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground"
+          >
+            <Checkbox
+              id="remember-account"
+              checked={rememberAccount}
+              onChange={(event) => setRememberAccount(event.target.checked)}
+            />
+            <span>Remember me</span>
+          </label>
+          <button
+            type="button"
+            onClick={onForgotPassword}
+            className="shrink-0 text-[13px] font-semibold text-foreground transition-colors hover:text-primary"
+          >
+            Forgot password?
+          </button>
+        </div>
+
         <Button
           type="submit"
           disabled={isSubmitting || isRetrieving}
@@ -242,25 +264,21 @@ export function LoginForm({
           )}
         </Button>
 
-        <label
-          htmlFor="remember-account"
-          className="mt-1 flex cursor-pointer items-center justify-center gap-2.5 py-1 text-sm font-semibold text-foreground"
-        >
-          <Checkbox
-            id="remember-account"
-            checked={rememberAccount}
-            onChange={(event) => setRememberAccount(event.target.checked)}
-          />
-          <span>Remember this account on this device</span>
-        </label>
-
         {submitError ? (
           <FieldError className="justify-center text-center">
             {submitError}
           </FieldError>
         ) : null}
 
-        <div className="mt-3 flex items-center gap-3" aria-hidden="true">
+        <Button
+          type="button"
+          onClick={onSignUp}
+          className="mt-1 h-12 w-full rounded-full border-brand-navy bg-brand-navy text-base font-semibold text-white shadow-none transition-colors hover:bg-brand-navy/90"
+        >
+          Create an account
+        </Button>
+
+        <div className="mt-2 flex items-center gap-3" aria-hidden="true">
           <span className="h-px flex-1 bg-border" />
           <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
             or
@@ -268,24 +286,12 @@ export function LoginForm({
           <span className="h-px flex-1 bg-border" />
         </div>
 
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onSignUp}
-          className="mt-3 h-12 w-full rounded-full border-foreground bg-white text-base font-semibold text-foreground transition-colors hover:bg-foreground hover:text-white"
+        <Link
+          to="/report-issue"
+          className="mt-1 flex h-12 w-full items-center justify-center rounded-full border border-foreground bg-white text-base font-semibold text-foreground transition-colors hover:bg-foreground hover:text-white"
         >
-          Create an account
-        </Button>
-
-        <p className="mt-4 text-center">
-          <button
-            type="button"
-            onClick={onForgotPassword}
-            className="text-sm font-semibold text-foreground transition-all hover:text-primary"
-          >
-            Forgot your password?
-          </button>
-        </p>
+          Continue as guest
+        </Link>
       </form>
     </div>
   )

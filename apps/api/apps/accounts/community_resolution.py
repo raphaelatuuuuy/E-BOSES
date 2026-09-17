@@ -3,7 +3,6 @@ from datetime import timedelta
 from django.core import signing
 from django.core.signing import BadSignature, SignatureExpired
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
 from types import SimpleNamespace
@@ -50,15 +49,6 @@ def _candidate_communities(latitude, longitude):
             boundary__isnull=False,
             boundary__is_active=True,
             boundary__kind="boundary",
-        )
-        .filter(
-            Q(bbox_min_latitude__isnull=True)
-            | Q(
-                bbox_min_latitude__lte=latitude,
-                bbox_max_latitude__gte=latitude,
-                bbox_min_longitude__lte=longitude,
-                bbox_max_longitude__gte=longitude,
-            )
         )
         .select_related("boundary")
         .order_by("id")

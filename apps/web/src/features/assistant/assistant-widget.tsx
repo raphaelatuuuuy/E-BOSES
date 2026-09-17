@@ -129,7 +129,7 @@ const MOTION_CSS = `
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 89;
+    z-index: 59;
     border: 0;
     background: rgba(0, 0, 0, 0.4);
   }
@@ -145,10 +145,6 @@ const MOTION_CSS = `
     border-radius: 28px 28px 0 0;
     transform-origin: bottom center;
   }
-  .eb-assistant-sheet-handle { display: block; }
-}
-@media (min-width: 768px) {
-  .eb-assistant-sheet-handle { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .eb-assistant-panel, .eb-assistant-bubble { animation: none; }
@@ -308,7 +304,7 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
           onClick={() => setOpen(true)}
           aria-label="Open the E-Boses Assistant"
           className={cn(
-            "group fixed right-6 bottom-6 z-[90] flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            "group fixed right-6 bottom-6 z-[60] flex h-14 items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             onDark
               ? "bg-white text-brand-navy shadow-[0_8px_28px_rgba(0,0,0,0.5)] hover:bg-neutral-100"
               : "bg-nav-bg text-white shadow-[0_8px_28px_rgba(5,13,51,0.4)] ring-1 ring-white/15 hover:bg-brand-navy",
@@ -340,9 +336,8 @@ export default function AssistantWidget({ onDark = false }: { onDark?: boolean }
         role="dialog"
         aria-modal="true"
         aria-label="E-Boses Assistant"
-        className="eb-assistant-panel fixed right-6 bottom-6 z-[90] flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
+        className="eb-assistant-panel fixed right-6 bottom-6 z-[60] flex h-[min(38rem,calc(100dvh-3rem))] w-[min(25rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-black/5 bg-white shadow-[0_24px_64px_rgba(5,13,51,0.28)]"
       >
-        <div className="eb-assistant-sheet-handle mx-auto mt-2 h-1.5 w-11 shrink-0 rounded-full bg-neutral-300" aria-hidden />
         <header className="flex items-center justify-end gap-2 bg-white px-4 pb-1 pt-3">
           <button
             type="button"

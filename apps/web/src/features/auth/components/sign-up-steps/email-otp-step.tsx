@@ -13,7 +13,6 @@ import { cn } from "@workspace/ui/lib/utils"
 import type { SignUpErrors } from "@/features/auth/schemas/sign-up-schema"
 
 interface EmailOtpStepProps {
-  email: string
   code: string
   errors: SignUpErrors
   isSending: boolean
@@ -34,7 +33,6 @@ const slotClassName =
   "h-14 min-w-0 flex-1 rounded-xl border border-card-line-strong bg-white text-lg font-medium text-foreground shadow-none data-[active=true]:border-[3px] data-[active=true]:border-primary"
 
 export function EmailOtpStep({
-  email,
   code,
   errors,
   isSending,
@@ -49,7 +47,6 @@ export function EmailOtpStep({
   const cooldownActive = cooldownSeconds > 0
   const busy = isSending || isVerifying
   const codeComplete = code.replace(/\D/g, "").length === OTP_LENGTH
-  const displayEmail = email.trim() || "your email"
 
   // Focus the OTP input as soon as this step mounts so the user can type immediately.
   React.useEffect(() => {
@@ -72,7 +69,7 @@ export function EmailOtpStep({
   return (
     <div className="flex flex-1 flex-col pt-2">
       <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-foreground md:text-[1.75rem]">
-        Sent to {displayEmail}! Enter the code you will receive shortly.
+        Enter the code sent to you.
       </h1>
 
       <div className="mt-8" ref={otpContainerRef}>

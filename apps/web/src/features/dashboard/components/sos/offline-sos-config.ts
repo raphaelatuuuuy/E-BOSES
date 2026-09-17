@@ -199,6 +199,37 @@ export function loadOfflineSosConfig(): OfflineSosConfig {
   return BASELINE_OFFLINE_SOS_CONFIG
 }
 
+export function offlineCommunityOutline(
+  community: OfflineSosConfig["community"]
+): GeoJSON.Polygon | GeoJSON.MultiPolygon | null {
+  const boundary = community.boundaryGeometry
+  if (boundary?.type === "Polygon" || boundary?.type === "MultiPolygon")
+    return boundary
+  const geometry = community.acceptance?.geometry
+  if (geometry?.type === "Polygon" || geometry?.type === "MultiPolygon")
+    return geometry
+  const bounds = community.bounds
+  if (
+    !Number.isFinite(bounds.minLatitude) ||
+    !Number.isFinite(bounds.maxLatitude) ||
+    !Number.isFinite(bounds.minLongitude) ||
+    !Number.isFinite(bounds.maxLongitude)
+  )
+    return null
+  return {
+    type: "Polygon",
+    coordinates: [
+      [
+        [bounds.minLongitude, bounds.minLatitude],
+        [bounds.maxLongitude, bounds.minLatitude],
+        [bounds.maxLongitude, bounds.maxLatitude],
+        [bounds.minLongitude, bounds.maxLatitude],
+        [bounds.minLongitude, bounds.minLatitude],
+      ],
+    ],
+  }
+}
+
 export function offlineCategoriesFromConfig(
   config = loadOfflineSosConfig()
 ): EmergencyCategory[] {

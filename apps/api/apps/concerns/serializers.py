@@ -648,7 +648,6 @@ class ConcernAiAssessmentSerializer(serializers.ModelSerializer):
             "evidence_relationship",
             "privacy_scan_required",
             "suspected_sensitive_classes",
-            "urgent_attention",
             "missing_information",
             "recommended_action",
             "recommendation",
@@ -1003,7 +1002,6 @@ class ConcernSerializer(serializers.ModelSerializer):
     vote_count = serializers.IntegerField(read_only=True, default=0)
     comment_count = serializers.IntegerField(read_only=True, default=0)
     upvoters = serializers.SerializerMethodField()
-    priority_score = serializers.IntegerField(read_only=True, default=0)
     # Severity band, derived from the AI assessment. Exposed so clients can
     # show it without recomputing, and so API ordering and UI ordering agree.
     severity = serializers.CharField(read_only=True, default="low")
@@ -1105,7 +1103,6 @@ class ConcernSerializer(serializers.ModelSerializer):
             "vote_count",
             "comment_count",
             "upvoters",
-            "priority_score",
             "severity",
             "user_vote",
             "distance_meters",
@@ -1744,8 +1741,6 @@ class ConcernListSerializer(serializers.ModelSerializer):
     upvoters = serializers.SerializerMethodField()
     severity = serializers.CharField(read_only=True, default="low")
     severity_assessed = serializers.BooleanField(read_only=True, default=False)
-    priority_score = serializers.IntegerField(read_only=True, default=0)
-    urgent_attention = serializers.SerializerMethodField()
     severity_reason = serializers.SerializerMethodField()
     resolution_actor = serializers.SerializerMethodField()
     resolution_photo = serializers.SerializerMethodField()
@@ -1783,8 +1778,6 @@ class ConcernListSerializer(serializers.ModelSerializer):
             "summary",
             "severity",
             "severity_assessed",
-            "priority_score",
-            "urgent_attention",
             "severity_reason",
             "resolution_actor",
             "resolution_photo",
@@ -1801,12 +1794,6 @@ class ConcernListSerializer(serializers.ModelSerializer):
         if not assessment or assessment.status != ConcernAiAssessment.Status.COMPLETED:
             return ""
         return assessment.severity_reason or ""
-
-    def get_urgent_attention(self, obj) -> bool:
-        assessment = getattr(obj, "ai_assessment", None)
-        if not assessment or assessment.status != ConcernAiAssessment.Status.COMPLETED:
-            return False
-        return bool(assessment.urgent_attention)
 
     def get_resolution_actor(self, obj):
         """Expose the staff member who closed a resolved row.

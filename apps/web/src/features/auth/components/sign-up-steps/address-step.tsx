@@ -4,7 +4,6 @@ import { LoaderCircleIcon, ShieldCheckIcon } from "lucide-react"
 import { FieldError } from "@workspace/ui/components/field"
 
 import {
-  StepContinueButton,
   StepTitle,
 } from "@/features/auth/components/sign-up-shell"
 import LocationPickerModal, {
@@ -74,16 +73,16 @@ export function AddressStep({
   const busy = resolving || confirming
 
   return (
-    // Pulls back the wizard shell's top padding: this step is a map, and the
-    // gap that reads as breathing room above a form reads as dead space here.
     <div className="-mt-4 flex flex-1 flex-col md:-mt-6">
-      <StepTitle>Great! Let&apos;s find your neighborhood now.</StepTitle>
+      <StepTitle className="text-center">Great! Let&apos;s find your neighborhood now.</StepTitle>
 
       <div className="relative mt-4 h-[24rem] overflow-hidden rounded-2xl sm:h-[28rem]">
         <LocationPickerModal
           open
           signup
           renderInline
+          recenterOnOpen
+          strictBoundary
           onClose={() => {}}
           onConfirm={() => void confirmAndContinue()}
           onPinStateChange={handlePinState}
@@ -106,13 +105,6 @@ export function AddressStep({
       {error || errors.street ? (
         <FieldError className="mt-2">{error || errors.street}</FieldError>
       ) : null}
-
-      <StepContinueButton
-        disabled={!pin?.ready || busy}
-        onClick={() => void confirmAndContinue()}
-      >
-        Continue
-      </StepContinueButton>
     </div>
   )
 }

@@ -113,13 +113,6 @@ function toE164PhMobile(raw: string): string {
   return digits ? `+63${digits}` : ""
 }
 
-/** `+63 9•• ••• 4821` — enough to recognise, not enough to read over a shoulder. */
-function maskDisplayPhone(e164: string): string {
-  const local = toLocalPhMobile(e164)
-  if (local.length < 4) return "your number"
-  return `+63 9•• ••• ${local.slice(-4)}`
-}
-
 export function PhoneStep({
   values,
   errors,
@@ -140,6 +133,7 @@ export function PhoneStep({
   const phoneValid = isValidPhMobileE164(values.phoneNumber)
   const busy = isSendingPhoneOtp || isVerifyingPhoneOtp
   const onCooldown = phoneOtpCooldownSeconds > 0
+  const cooldownLabel = `${Math.floor(phoneOtpCooldownSeconds / 60)}:${String(phoneOtpCooldownSeconds % 60).padStart(2, "0")}`
   const phoneCodeComplete =
     (values.phoneOtpCode ?? "").replace(/\D/g, "").length === OTP_LENGTH
   const hasLocalValue = localPhone.length > 0
@@ -196,15 +190,9 @@ export function PhoneStep({
   if (phoneOtpSent && !phoneOtpVerified) {
     return (
       <div className="flex flex-1 flex-col pt-2">
-        <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-foreground md:text-[1.75rem]">
-          Phone number verification
+        <h1 className="text-center text-[1.5rem] font-semibold leading-snug tracking-tight text-foreground md:text-[1.75rem]">
+          Enter the code we&apos;ve sent you.
         </h1>
-        <p className="mt-2 text-sm text-neutral-600">
-          We sent a six-digit registration code to{" "}
-          <span className="font-semibold tabular-nums text-neutral-900">
-            {maskDisplayPhone(values.phoneNumber)}
-          </span>
-        </p>
 
         <div className="mt-8" ref={otpContainerRef}>
           <InputOTP
@@ -243,30 +231,30 @@ export function PhoneStep({
           </p>
         ) : null}
 
-        <button
-          type="button"
-          disabled={busy || onCooldown}
-          onClick={onSendOtp}
-          className="mt-2 inline-flex items-center gap-2 self-start text-sm font-medium text-neutral-800 transition-colors hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <RotateCw
-            className={cn("size-4 shrink-0", isSendingPhoneOtp && "animate-spin")}
-            aria-hidden="true"
-          />
-          {onCooldown
-            ? `Resend available in ${phoneOtpCooldownSeconds} seconds`
-            : "Resend code"}
-        </button>
-
-        <div className="mt-10 flex items-center justify-end gap-5">
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            disabled={busy || onCooldown}
+            onClick={onSendOtp}
+            className="inline-flex items-center gap-2 text-sm font-medium text-neutral-800 transition-colors hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RotateCw
+              className={cn("size-4 shrink-0", isSendingPhoneOtp && "animate-spin")}
+              aria-hidden="true"
+            />
+            {onCooldown ? cooldownLabel : "Resend code"}
+          </button>
           <button
             type="button"
             onClick={onEditPhone}
-            disabled={busy}
-            className="inline-flex items-center text-base font-semibold text-neutral-900 transition-colors hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={busy || onCooldown}
+            className="inline-flex shrink-0 items-center text-sm font-medium text-neutral-800 transition-colors hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
           >
             Edit phone number
           </button>
+        </div>
+
+        <div className="mt-10 flex items-center justify-end gap-5">
           <Button
             type="button"
             disabled={busy || !phoneCodeComplete || codeExpired}
@@ -287,7 +275,7 @@ export function PhoneStep({
   // ── Phone entry UI ────────────────────────────────────────────────────────
   return (
     <div className="flex flex-1 flex-col pt-2">
-      <StepTitle>Let&apos;s try texting you a confirmation code.</StepTitle>
+      <StepTitle className="text-center">Let&apos;s try texting you a confirmation code.</StepTitle>
 
       <div className="mt-8 space-y-4">
         <Field>
@@ -349,8 +337,7 @@ export function PhoneStep({
           />
           <span>
             Used for account security and emergency alerts so responders can reach you when it
-            matters. Your number must be verified before you can finish sign-up. It will not be
-            shown publicly to other residents.
+            matters.
           </span>
         </p>
       </div>
@@ -360,7 +347,7 @@ export function PhoneStep({
           type="button"
           onClick={onSendOtp}
           disabled={sendDisabled}
-          className={cn(primaryBtnClass, "w-full sm:w-auto")}
+          className={primaryBtnClass}
         >
           {isSendingPhoneOtp ? (
             <LoaderCircleIcon className="size-5 animate-spin" aria-hidden="true" />

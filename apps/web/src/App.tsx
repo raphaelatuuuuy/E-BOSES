@@ -38,6 +38,7 @@ import {
 } from "@/features/dashboard/components/system-banner"
 import { MaintenancePage } from "@/features/dashboard/pages/maintenance"
 import { GlobalSosCoordinator } from "@/features/dashboard/components/global-sos-coordinator"
+import { useIsDesktop } from "@/features/dashboard/lib/shell"
 
 const AccountInactivePage = lazy(
   () => import("@/features/auth/account-inactive")
@@ -59,15 +60,6 @@ const AlertsMapPage = lazy(
 const ResidentAlertsMapPage = lazy(
   () => import("@/features/dashboard/pages/resident-alerts-map")
 )
-const OnboardingPage = lazy(
-  () => import("@/features/onboarding/onboarding-page")
-)
-const OfficialOnboardingPage = lazy(
-  () => import("@/features/onboarding/official-onboarding-page")
-)
-const ResponderOnboardingPage = lazy(
-  () => import("@/features/onboarding/responder-onboarding-page")
-)
 const HomePage = lazy(() => import("@/features/dashboard/pages/home"))
 const ResidentOverviewPage = lazy(
   () => import("@/features/dashboard/pages/resident-overview")
@@ -86,6 +78,12 @@ const NotificationsPage = lazy(
 const OfficialConfigurationHubPage = lazy(
   () => import("@/features/dashboard/pages/official-configuration-hub")
 )
+const OfficialUnitsPage = lazy(() => import("@/features/dashboard/pages/official-units-page"))
+const OfficialRolesPage = lazy(() => import("@/features/dashboard/pages/official-roles-page"))
+const OfficialUsersManagePage = lazy(() => import("@/features/dashboard/pages/official-users-manage-page"))
+const OfficialCategoriesPage = lazy(() => import("@/features/dashboard/pages/official-categories-page"))
+const OfficialCoverageAreaPage = lazy(() => import("@/features/dashboard/pages/official-coverage-area-page"))
+const OfficialIdProofWorkspacePage = lazy(() => import("@/features/dashboard/pages/official-id-proof-workspace"))
 const NotFoundPage = lazy(() => import("@/features/dashboard/pages/not-found"))
 const OfficialCommunityContentPage = lazy(
   () => import("@/features/dashboard/pages/official-community-content-page")
@@ -129,10 +127,6 @@ function ProtectedDashboard() {
     return <Navigate to={getStatusPath(user.status)} replace />
   }
 
-  if (!user.is_onboarded) {
-    return <Navigate to="/onboarding" replace />
-  }
-
   return <DashboardLayout />
 }
 
@@ -156,15 +150,7 @@ function ProtectedOnboarding() {
     return <Navigate to={getStatusPath(user.status)} replace />
   }
 
-  if (user.is_onboarded) {
-    return <Navigate to="/dashboard" replace />
-  }
-
-  const isResponder = isResponderUser(user)
-  const isOfficial = isOfficialUser(user)
-  if (isResponder) return <ResponderOnboardingPage />
-  if (isOfficial) return <OfficialOnboardingPage />
-  return <OnboardingPage />
+  return <Navigate to="/dashboard" replace />
 }
 
 function DashboardIndex() {
@@ -230,6 +216,25 @@ function ConcernWorkspaceRoute() {
   const { user } = useAuthSession()
   const allowed = Boolean(user) && (isResidentUser(user) || isStaffUser(user))
   return allowed ? <ReportsPage /> : <Navigate to="/dashboard" replace />
+}
+
+function ConcernListRoute() {
+  const { user } = useAuthSession()
+  const isDesktop = useIsDesktop()
+  const allowed = Boolean(user) && (isResidentUser(user) || isStaffUser(user))
+  if (!allowed) return <Navigate to="/dashboard" replace />
+  if (!isDesktop)
+    return (
+      <Navigate
+        to={
+          isResponderUser(user) || isOfficialUser(user)
+            ? "/dashboard/overview"
+            : "/dashboard/home"
+        }
+        replace
+      />
+    )
+  return <ReportsPage />
 }
 
 function AlertsMapRoute() {
@@ -507,7 +512,7 @@ function AppRoutes() {
           path="configuration/units"
           element={
             <OfficialRoute>
-              <OfficialConfigurationHubPage initialSectionKey="units" />
+              <OfficialUnitsPage />
             </OfficialRoute>
           }
         />
@@ -515,7 +520,7 @@ function AppRoutes() {
           path="configuration/roles"
           element={
             <OfficialRoute>
-              <OfficialConfigurationHubPage initialSectionKey="roles" />
+              <OfficialRolesPage />
             </OfficialRoute>
           }
         />
@@ -523,7 +528,7 @@ function AppRoutes() {
           path="configuration/categories"
           element={
             <OfficialRoute>
-              <OfficialConfigurationHubPage initialSectionKey="categories" />
+              <OfficialCategoriesPage />
             </OfficialRoute>
           }
         />
@@ -547,7 +552,7 @@ function AppRoutes() {
           path="configuration/coverage"
           element={
             <OfficialRoute>
-              <OfficialConfigurationHubPage initialSectionKey="coverage" />
+              <OfficialCoverageAreaPage />
             </OfficialRoute>
           }
         />
@@ -555,7 +560,7 @@ function AppRoutes() {
           path="configuration/id-proof-template"
           element={
             <OfficialRoute>
-              <OfficialConfigurationHubPage initialSectionKey="verification" />
+              <OfficialIdProofWorkspacePage />
             </OfficialRoute>
           }
         />
@@ -571,7 +576,7 @@ function AppRoutes() {
           path="configuration/users"
           element={
             <OfficialRoute>
-              <OfficialConfigurationHubPage initialSectionKey="users" />
+              <OfficialUsersManagePage />
             </OfficialRoute>
           }
         />
@@ -579,7 +584,7 @@ function AppRoutes() {
           path="configuration/announcements"
           element={
             <OfficialRoute>
-              <OfficialConfigurationHubPage initialSectionKey="announcements" />
+              <OfficialCommunityContentPage />
             </OfficialRoute>
           }
         />
@@ -643,7 +648,7 @@ function AppRoutes() {
             </ResponderRoute>
           }
         />
-        <Route path="reports" element={<ConcernWorkspaceRoute />} />
+        <Route path="reports" element={<ConcernListRoute />} />
         <Route path="reports/:reportId" element={<ConcernWorkspaceRoute />} />
         <Route
           path="notifications"
@@ -841,33 +846,20 @@ function AppRoutes() {
 }
 
 const ASSISTANT_PATHS = [
-  "/",
   "/sign-in",
   "/sign-up",
   "/sign-up-otp",
   "/forgot-password",
   "/forgot-password-otp",
   "/reset-password",
-  "/communities",
-  "/communities/new",
-  "/book-demo",
-  "/report-issue",
 ]
 
 function AssistantMount() {
   const { pathname } = useLocation()
-  const enabled =
-    ASSISTANT_PATHS.includes(pathname) || pathname.startsWith("/help")
-  if (!enabled) return null
-  const onDark =
-    pathname === "/" ||
-    pathname === "/report-issue" ||
-    pathname === "/book-demo" ||
-    pathname === "/communities" ||
-    pathname === "/communities/new"
+  if (!ASSISTANT_PATHS.includes(pathname)) return null
   return (
     <Suspense fallback={null}>
-      <AssistantWidget onDark={onDark} />
+      <AssistantWidget />
     </Suspense>
   )
 }

@@ -94,7 +94,6 @@ export function CommunityIncidentDetails({
   const hoursWaiting = (now - new Date(report.updated_at).getTime()) / 3_600_000
   const priorityInput = {
     severity,
-    urgentAttention: report.ai_assessment?.urgent_attention ?? false,
     hoursSinceStatusChange: hoursWaiting,
     linkedReports: incident.resident_count,
     voteCount: report.vote_count,

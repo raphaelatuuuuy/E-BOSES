@@ -11,9 +11,7 @@ import {
   weatherLabel,
 } from "@/features/dashboard/components/map-weather"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
-
-const PIN_HOUSE_HTML =
-  '<span class="material-symbols-outlined" style="font-size:44px;color:#07145f;">home_pin</span>'
+import { fetchRegistrationCommunities } from "@/features/auth/api"
 
 interface CommunityPeekStepProps {
   communityName: string
@@ -64,10 +62,6 @@ export function CommunityPeekStep({
           height: 256px !important;
           mix-blend-mode: normal !important;
         }
-        .eboses-peek-pinhouse {
-          display: block;
-          filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.45));
-        }
       `
       document.head.appendChild(styleEl)
 
@@ -88,19 +82,52 @@ export function CommunityPeekStep({
         maxZoom: 19,
       })
 
-      L.marker([latitude, longitude], {
-        icon: L.divIcon({
-          className: "",
-          html: `<span class="eboses-peek-pinhouse">${PIN_HOUSE_HTML}</span>`,
-          iconSize: [44, 44],
-          iconAnchor: [22, 40],
-        }),
-        interactive: false,
-        keyboard: false,
-      }).addTo(map)
+      let areaLayer: leaflet.GeoJSON | null = null
+      try {
+        const areas = await fetchRegistrationCommunities()
+        if (cancelled || !map) return
+        const list = areas.results ?? []
+        const match =
+          list.find(
+            (area) =>
+              area.name.trim().toLowerCase() ===
+              communityName.trim().toLowerCase(),
+          ) ?? list[0]
+        if (match?.boundary) {
+          areaLayer = L.geoJSON(match.boundary as never, {
+            style: {
+              stroke: false,
+              fillColor: "#ff5003",
+              fillOpacity: 0.16,
+              interactive: false,
+            },
+          }).addTo(map)
+        }
+      } catch {
+        /* Keep the default centered view */
+      }
 
       mapRef.current = map
-      requestAnimationFrame(() => map?.invalidateSize())
+      const fitBoundary = () => {
+        if (cancelled || !map) return
+        map.invalidateSize()
+        if (!areaLayer) return
+        try {
+          const bounds = areaLayer.getBounds()
+          const size = map.getSize()
+          if (bounds.isValid() && size.x > 0 && size.y > 0) {
+            map.fitBounds(bounds, { padding: [12, 12] })
+          }
+        } catch {
+          /* Keep the default centered view */
+        }
+      }
+      requestAnimationFrame(() => {
+        fitBoundary()
+        window.setTimeout(() => {
+          if (areaLayer && !cancelled && mapRef.current) fitBoundary()
+        }, 250)
+      })
     })()
 
     return () => {
@@ -117,7 +144,8 @@ export function CommunityPeekStep({
 
   return (
     <div className="flex flex-1 flex-col pt-2">
-      <StepTitle>
+      <style>{`@keyframes peek-rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}.peek-stat{opacity:0;animation:peek-rise .7s cubic-bezier(.22,1,.36,1) forwards}@media (prefers-reduced-motion:reduce){.peek-stat{opacity:1;animation:none}}`}</style>
+      <StepTitle className="text-center">
         You&apos;re verified! Here&apos;s a sneak peek at {communityName}.
       </StepTitle>
 
@@ -130,7 +158,7 @@ export function CommunityPeekStep({
         </div>
 
         <div className="flex w-1/2 flex-col justify-between">
-          <div>
+          <div className="peek-stat" style={{ animationDelay: "0.15s" }}>
             <MapWeatherIcon
               code={weather.code}
               className="size-8 shrink-0 text-neutral-500"
@@ -145,19 +173,19 @@ export function CommunityPeekStep({
             </p>
           </div>
 
-          <div>
-            <p className="text-[64px] leading-none font-bold tracking-tight text-neutral-900 tabular-nums">
+          <div className="peek-stat" style={{ animationDelay: "0.3s" }}>
+            <p className="text-[64px] leading-none font-bold tracking-tight text-accent tabular-nums">
               {neighbors}+
             </p>
             <p className="mt-1.5 text-[14px] font-medium text-neutral-500">
-              verified residents nearby
+              Residents
             </p>
           </div>
         </div>
       </div>
 
       <StepContinueButton onClick={onContinue} fullWidth>
-        Continue
+        Get Started
       </StepContinueButton>
     </div>
   )

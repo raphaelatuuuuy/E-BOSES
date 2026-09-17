@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from "react"
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react"
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import {
   ActivityIcon,
   ArrowLeftIcon,
   BoltIcon,
+  ChevronRightIcon,
   FolderOpenIcon,
   IdCardLanyard,
+  LoaderCircleIcon,
   MapIcon,
   MegaphoneIcon,
   PlusIcon,
@@ -45,12 +47,56 @@ import { useOfficialUnitScope } from "@/features/dashboard/hooks/use-official-un
 import { isEmergencyActive } from "@/features/dashboard/lib/status-vocabulary"
 import { emergencyTitleText } from "@/features/dashboard/lib/emergency-description"
 import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
+import {
+  CONFIGURATION_PAGE_SIZE,
+  ConfigurationListToolbar,
+  ConfigurationPager,
+} from "@/features/dashboard/components/config/configuration-list-controls"
+import { ConfigurationRowContent } from "@/features/dashboard/components/config/configuration-table"
 import { OverviewReportsSheet } from "@/features/dashboard/components/resident-overview/reports-sheet"
 import { OverviewReportDetailSheet } from "@/features/dashboard/components/resident-overview/report-detail-sheet"
 import { MobileEmergencyReportDetailPage } from "@/features/dashboard/components/concerns/mobile-report-detail"
 import {
   OfficialProfileDialog,
 } from "@/features/dashboard/components/official/official-account-dialogs"
+import {
+  ResponderProfileDialog,
+} from "@/features/dashboard/components/responder/account-dialogs"
+
+const CONFIG_SECTION_SHEETS: Record<
+  string,
+  React.LazyExoticComponent<React.ComponentType<{ embedded?: boolean }>>
+> = {
+  categories: lazy(
+    () => import("@/features/dashboard/pages/official-categories-page")
+  ),
+  users: lazy(
+    () => import("@/features/dashboard/pages/official-users-manage-page")
+  ),
+  roles: lazy(
+    () => import("@/features/dashboard/pages/official-roles-page")
+  ),
+  coverage: lazy(
+    () => import("@/features/dashboard/pages/official-coverage-area-page")
+  ),
+  verification: lazy(
+    () => import("@/features/dashboard/pages/official-id-proof-workspace")
+  ),
+  announcements: lazy(
+    () =>
+      import("@/features/dashboard/pages/official-community-content-page")
+  ),
+  units: lazy(
+    () => import("@/features/dashboard/pages/official-units-page")
+  ),
+  monitoring: lazy(() =>
+    import(
+      "@/features/dashboard/components/official/service-status-section"
+    ).then((module) => ({
+      default: () => <module.ServiceStatusSection />,
+    }))
+  ),
+}
 
 const OFFICIAL_CONFIGURATION_CAPABILITIES = [
   CAPABILITIES.manageUnits,
@@ -185,45 +231,100 @@ function toOverviewReport(alert: EmergencyAlert): OfficialOverviewReport {
   }
 }
 
-function StaffConfigSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const navigate = useNavigate()
+function StaffConfigSheet({ open, onClose, onOpenSection }: { open: boolean; onClose: () => void; onOpenSection: (key: string, label: string) => void }) {
   const { user } = useAuthSession()
   const caps = user?.capabilities
-  const rows: { key: string; label: string; hint: string; to: string; icon: LucideIcon; cap?: string }[] = [
-    { key: "units", label: "Units", hint: "Desks and committees", to: "/dashboard/configuration/units", icon: UsersIcon, cap: CAPABILITIES.manageUnits },
-    { key: "roles", label: "Permissions", hint: "What each position can do", to: "/dashboard/configuration/roles", icon: ShieldCheckIcon, cap: CAPABILITIES.manageRoles },
-    { key: "users", label: "Users", hint: "Accounts and status", to: "/dashboard/configuration/users", icon: UserCogIcon, cap: CAPABILITIES.manageUsers },
-    { key: "categories", label: "Report categories", hint: "What residents can report", to: "/dashboard/configuration/categories", icon: FolderOpenIcon, cap: CAPABILITIES.manageCategories },
-    { key: "coverage", label: "Coverage area", hint: "Where reports are accepted", to: "/dashboard/configuration/coverage", icon: MapIcon, cap: CAPABILITIES.configureGeography },
-    { key: "verification", label: "ID Documents", hint: "Proof of residency", to: "/dashboard/configuration/id-proof-template", icon: IdCardLanyard, cap: CAPABILITIES.manageUsers },
-    { key: "announcements", label: "Announcements", hint: "Advisories and updates", to: "/dashboard/configuration/announcements", icon: MegaphoneIcon, cap: CAPABILITIES.publishAnnouncements },
-    { key: "monitoring", label: "Monitoring", hint: "System and audit logs", to: "/dashboard/configuration/audit-log", icon: ActivityIcon },
+
+  type ConfigRow = {
+    key: string
+    label: string
+    hint: string
+    icon: LucideIcon
+    group: "User management" | "Operations" | "Monitoring"
+    cap?: string
+  }
+
+  const rows: ConfigRow[] = [
+    { key: "units", label: "Units", hint: "Desks and committees", icon: UsersIcon, group: "User management", cap: CAPABILITIES.manageUnits },
+    { key: "roles", label: "Permissions", hint: "What each position can do", icon: ShieldCheckIcon, group: "User management", cap: CAPABILITIES.manageRoles },
+    { key: "users", label: "Users", hint: "Accounts and status", icon: UserCogIcon, group: "User management", cap: CAPABILITIES.manageUsers },
+    { key: "categories", label: "Report categories", hint: "What residents can report", icon: FolderOpenIcon, group: "Operations", cap: CAPABILITIES.manageCategories },
+    { key: "coverage", label: "Coverage area", hint: "Where reports are accepted", icon: MapIcon, group: "Operations", cap: CAPABILITIES.configureGeography },
+    { key: "verification", label: "ID Documents", hint: "Proof of residency", icon: IdCardLanyard, group: "Operations", cap: CAPABILITIES.manageUsers },
+    { key: "announcements", label: "Announcements", hint: "Advisories and updates", icon: MegaphoneIcon, group: "Operations", cap: CAPABILITIES.publishAnnouncements },
+    { key: "monitoring", label: "Monitoring", hint: "System and audit logs", icon: ActivityIcon, group: "Monitoring" },
   ]
+
+  const [query, setQuery] = useState("")
+  const [groupFilter, setGroupFilter] = useState("all")
+  const [offset, setOffset] = useState(0)
+
   const visible = rows.filter((row) => hasCapability(caps, row.cap))
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return visible.filter((row) => {
+      if (groupFilter !== "all" && row.group !== groupFilter) return false
+      if (q && !`${row.label} ${row.hint}`.toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [visible, query, groupFilter])
+
+  const page = filtered.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
+
+  const filters = [
+    { key: "all", label: "All sections", count: visible.length },
+    { key: "User management", label: "User management", count: visible.filter((r) => r.group === "User management").length },
+    { key: "Operations", label: "Operations", count: visible.filter((r) => r.group === "Operations").length },
+    { key: "Monitoring", label: "Monitoring", count: visible.filter((r) => r.group === "Monitoring").length },
+  ]
+
+  function openSection(key: string, label: string) {
+    onOpenSection(key, label)
+  }
+
   return (
-    <SheetDialog open={open} onClose={onClose} title="Configuration" description="Set up how your unit routes concerns and updates residents." size="wide" draggable>
-      <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-3">
-        {visible.map((row) => {
-          const Icon = row.icon
-          return (
-            <button
-              key={row.key}
-              type="button"
-              onClick={() => {
-                onClose()
-                navigate(row.to)
-              }}
-              className="flex w-[136px] shrink-0 snap-start flex-col rounded-2xl border border-neutral-200 bg-white p-3 pb-4 text-left transition-colors hover:border-neutral-300 hover:bg-neutral-50"
-            >
-              <span className="flex size-9 items-center justify-center rounded-full bg-brand-navy text-white">
-                <Icon className="size-4" strokeWidth={1.9} aria-hidden />
-              </span>
-              <span className="mt-3 text-[13px] font-bold text-neutral-900">{row.label}</span>
-              <span className="mt-1 text-[11px] leading-snug text-neutral-500">{row.hint}</span>
-            </button>
-          )
-        })}
-      </div>
+    <SheetDialog open={open} onClose={onClose} title={<>Set up your <span className="text-brand-orange">Area</span></>} titleClassName="text-center" description={<span className="block text-center">Route concerns, dispatch responders, verify residents.</span>} size="wide" draggable showClose={false} bodyScrollable={false}>
+      <ConfigurationListToolbar
+        search={query}
+        onSearch={(value) => { setQuery(value); setOffset(0) }}
+        placeholder="Search sections"
+        filters={filters}
+        activeFilter={groupFilter}
+        onFilter={(value) => { setGroupFilter(value); setOffset(0) }}
+      />
+      {page.length === 0 ? (
+        <p className="py-14 text-center text-read text-neutral-500">Nothing matches this view.</p>
+      ) : (
+        <>
+          <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
+            {page.map((row) => {
+              const Icon = row.icon
+              return (
+                <button
+                  key={row.key}
+                  type="button"
+                  onClick={() => openSection(row.key, row.label)}
+                  aria-label={`Open ${row.label}`}
+                  className="flex w-full items-center gap-3 border-b border-neutral-100 px-4 py-4 text-left last:border-b-0"
+                >
+                  <ConfigurationRowContent
+                    className="flex-1"
+                    icon={Icon}
+                    title={row.label}
+                    description={row.hint}
+                  />
+                  <ChevronRightIcon
+                    className="size-5 shrink-0 text-neutral-400"
+                    aria-hidden="true"
+                  />
+                </button>
+              )
+            })}
+          </div>
+          <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="sections" className="py-1" inline />
+        </>
+      )}
     </SheetDialog>
   )
 }
@@ -242,6 +343,8 @@ function StaffBar({ role }: { role: "official" | "responder" }) {
   const capsLoaded = Array.isArray(caps) || Boolean(user?.is_superuser)
   const showConfig = capsLoaded && (caps == null || OFFICIAL_CONFIGURATION_CAPABILITIES.some((cap) => caps?.includes(cap) ?? false))
   const [configOpen, setConfigOpen] = useState(false)
+  const [configSection, setConfigSection] = useState<{ key: string; label: string } | null>(null)
+  const ConfigSectionPage = configSection ? CONFIG_SECTION_SHEETS[configSection.key] : null
   const [profileOpen, setProfileOpen] = useState(false)
   const [reportsOpen, setReportsOpen] = useState(false)
   const [detailPost, setDetailPost] = useState<Concern | null>(null)
@@ -339,16 +442,46 @@ function StaffBar({ role }: { role: "official" | "responder" }) {
               <LabeledMobileTab
                 item={profileItem}
                 active={false}
-                onClick={() => {
-                  if (isResponder) navigate("/dashboard/responders/profile")
-                  else setProfileOpen(true)
-                }}
+                onClick={() => setProfileOpen(true)}
               />
             ) : null}
           </nav>
         </div>
       </div>
-      <StaffConfigSheet open={configOpen} onClose={() => setConfigOpen(false)} />
+      <StaffConfigSheet
+        open={configOpen}
+        onClose={() => setConfigOpen(false)}
+        onOpenSection={(key, label) => {
+          setConfigOpen(false)
+          setConfigSection({ key, label })
+        }}
+      />
+      <SheetDialog
+        open={configSection != null}
+        onClose={() => setConfigSection(null)}
+        onBack={() => {
+          setConfigSection(null)
+          setConfigOpen(true)
+        }}
+        title={configSection?.label ?? ""}
+        titleClassName="text-center"
+        size="wide"
+        draggable
+        showClose={false}
+        bodyScrollable={false}
+        className="h-[min(720px,92dvh)]"
+        bodyClassName="px-5 pb-4 sm:px-7"
+      >
+        <Suspense
+          fallback={
+            <div className="flex justify-center py-10" role="status" aria-label="Loading section">
+              <LoaderCircleIcon className="size-6 animate-spin text-primary" aria-hidden="true" />
+            </div>
+          }
+        >
+          {ConfigSectionPage ? <ConfigSectionPage embedded /> : null}
+        </Suspense>
+      </SheetDialog>
       <OverviewReportsSheet
         open={reportsOpen}
         onClose={() => setReportsOpen(false)}
@@ -362,7 +495,13 @@ function StaffBar({ role }: { role: "official" | "responder" }) {
         }}
         loadReports={loadReports}
         loadEmergencies={loadEmergencies}
-        title={isResponder ? "All reports" : selectedUnitId == null ? "All reports" : `${unitName} reports`}
+        title={
+          isResponder || selectedUnitId == null ? (
+            <>All <span className="text-brand-orange">reports</span></>
+          ) : (
+            <>{unitName} <span className="text-brand-orange">reports</span></>
+          )
+        }
         description={isResponder ? "Every report assigned to your unit." : selectedUnitId == null ? "Every report across your units." : `Every report assigned to ${unitName}.`}
       />
       <OverviewReportDetailSheet
@@ -386,7 +525,9 @@ function StaffBar({ role }: { role: "official" | "responder" }) {
       ) : null}
       {!isResponder ? (
         <OfficialProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
-      ) : null}
+      ) : (
+        <ResponderProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
+      )}
     </>
   )
 }

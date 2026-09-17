@@ -12,7 +12,6 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { resendOtp, verifyOtp, type AuthUser } from "@/features/auth/api"
-import { useAuthSession } from "@/features/auth/auth-session"
 import { AuthPageLogo } from "@/features/auth/components/auth-page-logo"
 import { AuthSidePanel } from "@/features/auth/components/auth-side-panel"
 import { usePageTitle } from "@/hooks/use-page-title"
@@ -35,9 +34,6 @@ export default function AccountOtpVerificationPage({
   onBack,
   onSuccess,
 }: AccountOtpVerificationPageProps) {
-  const { user } = useAuthSession()
-  const email = user?.email?.trim() || "your email"
-
   const [code, setCode] = useState("")
   const [error, setError] = useState("")
   const [submitError, setSubmitError] = useState("")
@@ -119,7 +115,7 @@ export default function AccountOtpVerificationPage({
           <div className="mx-auto w-full max-w-[440px]">
             <AuthPageLogo className="py-0 pb-5" />
             <h1 className="text-[1.5rem] font-semibold leading-snug tracking-tight text-foreground md:text-[1.75rem]">
-              Sent to {email}! Enter the code you will receive shortly.
+              Enter the code sent to you.
             </h1>
 
             <div className="mt-8">

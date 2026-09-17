@@ -188,7 +188,7 @@ class CheckIdIntegrityTests(TestCase):
         self.assertTrue(result["signals"])
         self.assertEqual(
             result["feedback"],
-            "Upload a clear photo of the complete original document.",
+            "Please upload a genuine photo of your ID.",
         )
 
     def test_raw_model_signal_is_never_used_as_resident_feedback(self):
@@ -203,7 +203,7 @@ class CheckIdIntegrityTests(TestCase):
         self.assertTrue(result["flagged"])
         self.assertEqual(
             result["feedback"],
-            "Upload a clear photo of the complete original document.",
+            "Please upload a genuine photo of your ID.",
         )
         self.assertNotIn("fire", result["feedback"].lower())
 

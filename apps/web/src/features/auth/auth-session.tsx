@@ -16,7 +16,7 @@ interface AuthSessionContextValue {
 
 const AuthSessionContext = React.createContext<AuthSessionContextValue | null>(null)
 
-export function getStatusPath(status: UserStatus, options?: { isOnboarded?: boolean }) {
+export function getStatusPath(status: UserStatus, _options?: { isOnboarded?: boolean }) {
   if (status === "pending_otp") return "/sign-up-otp"
   if (status === "pending_profile") return "/sign-up"
   if (status === "rejected") return "/sign-in"
@@ -26,8 +26,6 @@ export function getStatusPath(status: UserStatus, options?: { isOnboarded?: bool
   // until an official decides the case. ProtectedOnboarding/Dashboard only admit
   // verified users, so sending pending_verification there would redirect-loop.
   if (status === "pending_verification") return "/account-pending"
-  // Verified users finish onboarding once, then enter the dashboard.
-  if (status === "verified" && options?.isOnboarded === false) return "/onboarding"
   return "/dashboard"
 }
 

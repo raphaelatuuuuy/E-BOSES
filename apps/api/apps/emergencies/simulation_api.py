@@ -151,9 +151,12 @@ class EmergencySimulationView(APIView):
         details = result.get("details") or {}
         matched_emergency_type = details.get("matched_emergency_type") or ""
         emergency_routing_reason = details.get("emergency_routing_reason") or ""
-        urgent_attention = bool(details.get("urgent_attention"))
+        emergency_signal = bool(matched_emergency_type) and (
+            details.get("incident_timing") == "ongoing" or details.get("current_danger") is True
+        )
         requires_confirmation = bool(details.get("ongoing_emergency_confirmation_required")) or bool(
-            matched_emergency_type and urgent_attention and (details.get("incident_timing") or "unclear") == "unclear"
+            matched_emergency_type and details.get("current_danger") is True
+            and (details.get("incident_timing") or "unclear") == "unclear"
         )
         privacy = _privacy_dry_run(uploaded, details)
 
@@ -185,7 +188,7 @@ class EmergencySimulationView(APIView):
                 ),
                 "location": location_resolution.payload(),
             }
-        elif confirmed_ongoing is False or not (matched_emergency_type and urgent_attention):
+        elif confirmed_ongoing is False or not emergency_signal:
             response_payload = {
                 "requires_confirmation": False,
                 "path": "concern",

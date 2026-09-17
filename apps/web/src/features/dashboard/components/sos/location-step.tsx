@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import LocationPickerModal, {
   type LocationConfirmPayload,
@@ -9,6 +9,7 @@ import LocationPickerModal, {
 import {
   nearestOfflineStreet,
 } from "@/features/dashboard/components/sos/offline-sos-config"
+import { OfflineSosMap } from "@/features/dashboard/components/sos/offline-sos-map"
 import { cn } from "@workspace/ui/lib/utils"
 
 export type SosLocationValue = {
@@ -106,6 +107,23 @@ export function SosLocationStep({
 }) {
   const valueRef = useRef(value)
   const onChangeRef = useRef(onChange)
+  const [offline, setOffline] = useState(
+    () => typeof navigator !== "undefined" && navigator.onLine === false
+  )
+  const [mapFallback, setMapFallback] = useState(false)
+
+  useEffect(() => {
+    const update = () => {
+      setOffline(navigator.onLine === false)
+      setMapFallback(false)
+    }
+    window.addEventListener("online", update)
+    window.addEventListener("offline", update)
+    return () => {
+      window.removeEventListener("online", update)
+      window.removeEventListener("offline", update)
+    }
+  }, [])
 
   useEffect(() => {
     valueRef.current = value
@@ -194,20 +212,32 @@ export function SosLocationStep({
         className
       )}
     >
-      <LocationPickerModal
-        open
-        renderInline
-        showSearch={false}
-        recenterOnOpen
-        showStreetView={false}
-        coverageScope="served"
-        onClose={() => {}}
-        onConfirm={confirmPin}
-        onPinStateChange={applyPinState}
-        initialLat={value?.lat ?? null}
-        initialLng={value?.lng ?? null}
-        initialAddress={value?.addressPrimary ?? value?.address ?? ""}
-      />
+      {offline && !mapFallback ? (
+        <OfflineSosMap
+          initialLat={value?.lat ?? null}
+          initialLng={value?.lng ?? null}
+          initialAddress={value?.addressPrimary ?? value?.address ?? ""}
+          onPinStateChange={applyPinState}
+          onConfirm={confirmPin}
+          onFallback={() => setMapFallback(true)}
+          className="min-h-[320px] flex-1"
+        />
+      ) : (
+        <LocationPickerModal
+          open
+          renderInline
+          showSearch={false}
+          recenterOnOpen
+          showStreetView={false}
+          coverageScope="served"
+          onClose={() => {}}
+          onConfirm={confirmPin}
+          onPinStateChange={applyPinState}
+          initialLat={value?.lat ?? null}
+          initialLng={value?.lng ?? null}
+          initialAddress={value?.addressPrimary ?? value?.address ?? ""}
+        />
+      )}
     </div>
   )
 }

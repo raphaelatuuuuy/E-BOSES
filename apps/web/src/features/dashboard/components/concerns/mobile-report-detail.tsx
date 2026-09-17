@@ -36,7 +36,7 @@ import {
   useConcernComments,
 } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { unitShortTag } from "@/features/dashboard/components/concerns/concern-display"
-import { streetOnly } from "@/features/dashboard/lib/location-text"
+import { streetOnly, streetSegment } from "@/features/dashboard/lib/location-text"
 import { formatResolvedOn } from "@/features/dashboard/lib/responder-format"
 import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 import {
@@ -52,17 +52,16 @@ import { EmergencyResolutionSheet } from "@/features/dashboard/components/respon
 import { useIncidentActions } from "@/features/dashboard/components/responder/use-incident-actions"
 import { isEmergencyActive } from "@/features/dashboard/lib/status-vocabulary"
 import { emergencyDescription } from "@/features/dashboard/lib/emergency-description"
-import {
-  emergencyResponderAssignments,
-  historicalRouteSummary,
-} from "@/features/dashboard/components/emergencies/lib"
 
 type MobileTab = "info" | "chat" | "updates"
 
 function residentSummaryLine(value: string) {
   const clean = value.trim()
   if (!clean) return "The resident submitted this emergency."
-  if (/^the resident\b/i.test(clean)) return clean
+  if (/^(the resident|the report|this report|a report)\b/i.test(clean)) {
+    const sentence = `${clean.charAt(0).toUpperCase()}${clean.slice(1)}`
+    return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`
+  }
   const softened = /^[A-Z]/.test(clean)
     ? `${clean.slice(0, 1).toLowerCase()}${clean.slice(1)}`
     : clean
@@ -452,7 +451,7 @@ export function MobileEmergencyReportDetailPage({
   const reporterInitial = (alert.reporter?.initials || reporterName)
     .charAt(0)
     .toUpperCase()
-  const location = streetOnly(
+  const location = streetSegment(
     alert.display_location ||
       alert.resolved_location ||
       alert.reported_area ||
@@ -474,8 +473,10 @@ export function MobileEmergencyReportDetailPage({
     (alert.current_assignment?.responder?.id === viewerId
       ? alert.current_assignment
       : null)
-  const sheetTitle = settled
-    ? "Emergency alert"
+  const sheetTitle = resolved
+    ? "Responder has resolved the issue"
+    : settled
+      ? "Emergency alert"
     : ownAssignment
       ? (OWN_HANDLING_HEADLINES[ownAssignment.status] ??
         "You are responding to this emergency.")
@@ -484,7 +485,6 @@ export function MobileEmergencyReportDetailPage({
         : "Live alert"
   const { phone: reporterContactPhone, busy: reporterCallBusy, call: callReporterContact } =
     useReporterPhone(alert, { autoReveal: true })
-  const historicalResponders = emergencyResponderAssignments(alert)
   const responderActions = useIncidentActions({
     alert,
     viewerId,
@@ -606,6 +606,7 @@ export function MobileEmergencyReportDetailPage({
               <p className="text-center text-[11px] text-neutral-400">
                 In case of follow-ups, contact the resident.
               </p>
+              {!resolved ? (
               <button
                 type="button"
                 onClick={() => setResolutionOpen(true)}
@@ -613,6 +614,7 @@ export function MobileEmergencyReportDetailPage({
               >
                 Resolve incident
               </button>
+              ) : null}
             </div>
           ) : undefined
         ) : undefined
@@ -817,17 +819,7 @@ export function MobileEmergencyReportDetailPage({
               />
             </section>
 
-            {settled && historicalResponders.length ? (
-              <div className="space-y-1.5 rounded-[14px] bg-status-closed-surface px-3 py-2.5 text-[12px] leading-relaxed text-status-closed-ink ring-1 ring-neutral-200">
-                <p className="font-semibold">Responded</p>
-                {historicalResponders.map((assignment) => (
-                  <p key={`mobile-past-response-${assignment.id}`}>
-                    {assignment.responder.full_name || "Responder"} responded.
-                    Route taken: {historicalRouteSummary(assignment.route)}.
-                  </p>
-                ))}
-              </div>
-            ) : alert.current_assignment?.responder ? null : (
+            {settled || alert.current_assignment?.responder ? null : (
               <p className="rounded-[14px] bg-status-closed-surface px-3 py-2 text-[12px] leading-relaxed text-status-closed-ink ring-1 ring-neutral-200">
                 Automatically routing to the nearest available responder.
               </p>

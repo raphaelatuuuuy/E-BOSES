@@ -36,6 +36,7 @@ import { type MediaPreviewItem } from "@/features/dashboard/lib/authenticated-me
 import { MobileReportDetailPage } from "@/features/dashboard/components/concerns/mobile-report-detail"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
 import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
+import { compareReportPriority } from "@/features/dashboard/lib/report-priority"
 
 export function filterResidentReports(reports: Concern[], filter: string) {
   if (filter === "All") return reports
@@ -143,13 +144,17 @@ export function ResidentReportsWorkspace({
     [reports, activeFilter, search]
   )
 
+  // Same sequencing as the overviews: Critical → High → Moderate → Low →
+  // Resolved → Rejected, most recent within a band.
   const ranked = useMemo<RankedConcern[]>(
     () =>
-      visible.map((concern) => ({
-        concern,
-        ...concernSeverityOf(concern),
-        priority: 0,
-      })),
+      [...visible]
+        .sort(compareReportPriority)
+        .map((concern) => ({
+          concern,
+          ...concernSeverityOf(concern),
+          priority: 0,
+        })),
     [visible]
   )
 

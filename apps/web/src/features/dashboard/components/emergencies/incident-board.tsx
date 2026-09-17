@@ -77,7 +77,7 @@ import {
   unitLabel,
 } from "./lib"
 
-import { streetOnly } from "@/features/dashboard/lib/location-text"
+import { streetSegment } from "@/features/dashboard/lib/location-text"
 
 function coord(lat?: string | number | null, lng?: string | number | null) {
   const latitude = Number(lat)
@@ -138,6 +138,7 @@ export function IncidentMap({
   } | null>(null)
   const assignment = alert.current_assignment
   const settled = !isActiveEmergency(alert)
+  const resolved = alert.status === "resolved"
   const responderAssignments = useMemo(
     () => emergencyResponderAssignments(alert),
     [alert]
@@ -160,7 +161,7 @@ export function IncidentMap({
   const routeIsLive = isActiveEmergency(alert)
 
   const locationLabel =
-    streetOnly(
+    streetSegment(
       readableLocation(
         alert.display_location,
         alert.resolved_location,
@@ -230,20 +231,23 @@ export function IncidentMap({
         "M12 9v4",
         "M12 17h.01",
       ]
+      const pinPaths = resolved
+        ? (lucideIconPaths("check") ?? ["M20 6 9 17l-5-5"])
+        : emergencyPaths
       L.marker(incident, {
         icon: L.divIcon({
           className: "eboses-emergency-pin",
           html: `<div style="position:relative;width:${pinSize}px;height:${pinSize}px">${glyphPinHtml(
             {
-              paths: emergencyPaths,
+              paths: pinPaths,
               content: undefined,
               color: settled ? MAP_COLORS.resolved : MAP_COLORS.emergency,
               size: BASE_SIZE,
               selected: !settled,
               tone: "light",
-              tint: settled,
-              idleNeutral: settled,
-              className: settled ? "is-settled" : undefined,
+              tint: settled && !resolved,
+              idleNeutral: settled && !resolved,
+              className: settled && !resolved ? "is-settled" : undefined,
             }
           )}</div>`,
           iconSize: [pinSize, pinSize],
@@ -329,7 +333,9 @@ export function IncidentMap({
         mapAssignment.last_location?.latitude,
         mapAssignment.last_location?.longitude
       )
-      const at = liveAt ?? routeStartPoint(assignmentRoute)
+      const at = settled
+        ? (routeStartPoint(assignmentRoute) ?? liveAt)
+        : (liveAt ?? routeStartPoint(assignmentRoute))
       if (!at) continue
       origins.set(mapAssignment.id, at)
       const existing = assignmentMarkersRef.current.get(mapAssignment.id)
@@ -345,7 +351,9 @@ export function IncidentMap({
           className: "",
           iconSize: [dotSize, dotSize],
           iconAnchor: [dotSize / 2, dotSize / 2],
-          html: reportDotHtml(MAP_COLORS.responder, dotSize),
+          html: settled
+            ? reportDotHtml("#4b5563", dotSize + 2, false)
+            : reportDotHtml(MAP_COLORS.responder, dotSize),
         }),
         keyboard: false,
       }).addTo(map)
@@ -375,11 +383,9 @@ export function IncidentMap({
         .filter((point): point is leaflet.LatLngTuple => point != null)
       if (history.length > 1) {
         const trail = L.polyline(history, {
-          color: settled
-            ? "var(--color-map-route-idle)"
-            : "var(--color-map-trail)",
-          weight: settled ? 2.5 : 2,
-          opacity: settled ? 0.7 : 0.5,
+          color: settled ? "#9ca3af" : "var(--color-map-trail)",
+          weight: settled ? 3 : 2,
+          opacity: settled ? 0.85 : 0.5,
           interactive: false,
         }).addTo(map)
         routeLayersRef.current.push({
@@ -393,11 +399,14 @@ export function IncidentMap({
       if (
         assignmentRoute &&
         assignmentRoute.status !== "unavailable" &&
-        assignmentRoute.geometry
+        Boolean(assignmentRoute.geometry)
       ) {
+        const routeOrigin = settled
+          ? (routeStartPoint(assignmentRoute) ?? assignmentResponder)
+          : assignmentResponder
         const { road, approach, connectors } = routeRenderGeometry(
           assignmentRoute,
-          { origin: assignmentResponder, destination: incident }
+          { origin: routeOrigin, destination: incident }
         )
         const layers = drawRoute(L, map, {
           road,
@@ -648,7 +657,9 @@ export function IncidentMap({
             tone="light"
             label="Center on pin"
             onClick={() => {
-              if (incident) mapRef.current?.setView(incident, 18, { animate: true })
+              if (!incident || !mapRef.current) return
+              fittedKeyRef.current = fitKey
+              mapRef.current.flyTo(incident, 18, { animate: true })
             }}
           >
             <LocateFixedIcon className="size-5" strokeWidth={1.9} />
@@ -661,6 +672,7 @@ export function IncidentMap({
           >
             <FootprintsIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
+          {!settled ? (
           <MapControlButton
             tone="light"
             divider
@@ -679,6 +691,7 @@ export function IncidentMap({
               <NavigationIcon className="size-5" strokeWidth={1.9} />
             )}
           </MapControlButton>
+          ) : null}
           <MapControlButton
             tone="light"
             divider
@@ -694,7 +707,7 @@ export function IncidentMap({
           </MapControlButton>
         </MapControlStack>
       </div>
-      {pillEta ? (
+      {pillEta && !fullView ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center px-4">
           <div className="flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)]">
             <span className="text-[16px] leading-none font-semibold text-neutral-900">
@@ -734,6 +747,10 @@ export function IncidentMap({
           background: color-mix(in srgb, var(--pin) 16%, white) !important;
           color: var(--pin) !important;
           box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15) !important;
+        }
+        .eboses-emergency-map .eboses-pin--glyph.is-alert .eboses-pin__disc {
+          background: #fef2f2 !important;
+          color: #dc2626 !important;
         }
         .eboses-emergency-map .eboses-pin--glyph.is-settled .eboses-pin__disc {
           background: #eef1f4 !important;

@@ -1,3 +1,4 @@
+import { useMemo } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Check,
@@ -17,6 +18,8 @@ import {
 } from "@/features/dashboard/components/concerns/concern-display"
 import { resolveIconByKey } from "@/features/dashboard/components/concerns/resolve-icon"
 import { streetSegment } from "@/features/dashboard/lib/location-text"
+import { compareReportPriority } from "@/features/dashboard/lib/report-priority"
+import { ReportPriorityIndicator } from "@/features/dashboard/components/concerns/report-detail-content"
 
 export function OfficialOverviewReports({
   items,
@@ -28,6 +31,13 @@ export function OfficialOverviewReports({
   onOpenReport?: (report: OfficialOverviewReport) => void
 }) {
   const navigate = useNavigate()
+
+  // Same sequencing as the resident card: Critical → High → Moderate → Low →
+  // Resolved → Rejected, most recent within a band.
+  const latestItems = useMemo(
+    () => [...items].sort(compareReportPriority),
+    [items]
+  )
 
   return (
     <section className="rounded-2xl border border-neutral-200 bg-white p-4">
@@ -49,7 +59,7 @@ export function OfficialOverviewReports({
         </button>
       </div>
 
-      {items.length === 0 ? (
+      {latestItems.length === 0 ? (
         <div className="flex flex-col items-center py-8 text-center">
           <InboxIcon
             className="size-8 text-neutral-300"
@@ -61,7 +71,7 @@ export function OfficialOverviewReports({
           </p>
         </div>
       ) : (
-        items.map((report) => {
+        latestItems.map((report) => {
           const resolved = report.status === "resolved"
           const critical = !resolved && report.severity === "critical"
           const CategoryIcon = resolved
@@ -82,9 +92,9 @@ export function OfficialOverviewReports({
                   ? onOpenReport(report)
                   : navigate(`/dashboard/reports/${report.id}`)
               }
-              className="flex w-full items-center gap-3 border-b border-neutral-100 py-3 text-left last:border-b-0"
+              className="flex w-full items-center gap-4 border-b border-neutral-100 py-3 text-left last:border-b-0"
             >
-              <span className="min-w-0 flex-1">
+              <span className="min-w-0 flex-1 pr-1">
                 <span className="block text-[15px] leading-snug font-bold break-words text-neutral-900">
                   <CategoryIcon
                     className={cn(
@@ -105,12 +115,16 @@ export function OfficialOverviewReports({
                     {report.summary}
                   </span>
                 ) : null}
-                <span className="mt-1 flex items-center gap-1 text-[13px] text-neutral-500">
+                <span className="mt-1 flex min-w-0 items-center gap-2 text-[13px] text-neutral-500">
                   <MapPinIcon
                     className="size-3.5 shrink-0"
                     aria-hidden="true"
                   />
-                  <span className="truncate">{street}</span>
+                  <span className="min-w-0 max-w-[65%] truncate">{street}</span>
+                  <ReportPriorityIndicator
+                    severity={report.severity}
+                    className="text-[12px]"
+                  />
                 </span>
                 <span className="mt-0.5 block text-[13px] text-neutral-500 tabular-nums">
                   {formatDate(report.created_at)} at{" "}

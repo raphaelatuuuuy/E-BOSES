@@ -114,10 +114,10 @@ export function ConfigShell({
     // White ground, like the Help Center. The official shell paints `bg-canvas`
     // (#f6f7f9) behind every page, which is so close to white that a
     // configuration screen read as neither one thing nor the other.
-    <div className={cn("bg-white", !embedded && "min-h-full")}>
+    <div className={cn("bg-white", embedded ? "flex h-full min-h-0 flex-col" : "min-h-full")}>
       <div className={cn(
         embedded
-          ? "w-full"
+          ? "flex min-h-0 w-full flex-1 flex-col"
           : "mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28",
         className,
       )}>
@@ -179,7 +179,7 @@ export function ConfigShell({
           </dl>
         ) : null}
 
-        <div className={cn(embedded ? "space-y-4" : "mt-12 space-y-12")}>{children}</div>
+        <div className={cn(embedded ? "scrollbar-hide min-h-0 flex-1 space-y-4 overflow-y-auto" : "mt-12 space-y-12")}>{children}</div>
       </div>
     </div>
   )

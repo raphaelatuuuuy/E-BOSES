@@ -135,9 +135,7 @@ function statusLabel(status: string): {
 /** Keep the resident list ordered by severity without rendering the priority.
  * Residents see the same urgent concerns first, but not the internal band label.
  */
-function concernPriorityRank(
-  concern: Pick<Concern, "severity" | "priority_score">
-) {
+function concernPriorityRank(concern: Pick<Concern, "severity">) {
   switch ((concern.severity || "").toLowerCase()) {
     case "critical":
       return 3
@@ -146,15 +144,8 @@ function concernPriorityRank(
     case "moderate":
     case "medium":
       return 1
-    default: {
-      // Older feed records may not have a severity string yet. Their score
-      // still carries the persisted 0/1000/2000/3000 severity band.
-      const score = Number(concern.priority_score || 0)
-      if (score >= 3000) return 3
-      if (score >= 2000) return 2
-      if (score >= 1000) return 1
+    default:
       return 0
-    }
   }
 }
 
@@ -229,9 +220,7 @@ function FeedPreviewCard({
     post.community.name
   const body = concernBodyText(post).replace(/\s+/g, " ").trim()
   const title = concernTitleText(post).replace(/\s+/g, " ").trim() || "Report"
-  const critical =
-    (post.severity ?? "").toLowerCase() === "critical" ||
-    Number(post.priority_score ?? 0) >= 3000
+  const critical = (post.severity ?? "").toLowerCase() === "critical"
   const summary = post.summary?.replace(/\s+/g, " ").trim() || ""
   const normalise = (value: string) =>
     value

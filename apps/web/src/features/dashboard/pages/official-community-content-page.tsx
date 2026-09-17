@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { MegaphoneIcon, PencilIcon, PlusIcon, SendIcon, SlidersHorizontalIcon } from "lucide-react"
+import {
+  MegaphoneIcon,
+  PencilIcon,
+  PencilLineIcon,
+  PlusIcon,
+  SendIcon,
+  SlidersHorizontalIcon,
+  Trash2Icon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -11,17 +19,26 @@ import {
   type AnnouncementAreaContext,
 } from "@/features/dashboard/api"
 import { usePageTitle } from "@/hooks/use-page-title"
+import { advisoryLabel } from "@/features/dashboard/components/community-content/advisory-tags"
 import {
-  ConfigBreadcrumb,
   ConfigHeroAction,
   ConfigShell,
 } from "@/features/dashboard/components/config/config-shell"
 import {
+  CONFIGURATION_PAGE_SIZE,
+  ConfigurationListToolbar,
+  ConfigurationPager,
+} from "@/features/dashboard/components/config/configuration-list-controls"
+import {
+  ConfigurationInfoRow,
+  ConfigurationTable,
+} from "@/features/dashboard/components/config/configuration-table"
+import {
   SheetDialog,
+  SheetIconButton,
   SheetPrimaryButton,
 } from "@/features/dashboard/components/sheet-dialog"
 import { ContentComposer } from "@/features/dashboard/components/community-content/content-composer"
-import { ContentList } from "@/features/dashboard/components/community-content/content-list"
 
 interface Stat {
   label: string
@@ -29,12 +46,24 @@ interface Stat {
   alarm?: boolean
 }
 
+type TypeFilter = "all" | "published" | "scheduled" | "drafts"
+
+const TYPE_OPTIONS: { key: TypeFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "published", label: "Published" },
+  { key: "scheduled", label: "Scheduled" },
+  { key: "drafts", label: "Drafts" },
+]
+
 export default function OfficialCommunityContentPage({ embedded = false }: { embedded?: boolean }) {
   usePageTitle("Community Announcements")
 
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [areaContext, setAreaContext] = useState<AnnouncementAreaContext | null>(null)
   const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState("")
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all")
+  const [offset, setOffset] = useState(0)
   const [composerOpen, setComposerOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<Announcement | null>(null)
   const [published, setPublished] = useState(false)
@@ -60,16 +89,9 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
   }, [])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load()
-    }, 0)
+    const timer = window.setTimeout(() => void load(), 0)
     return () => window.clearTimeout(timer)
   }, [load])
-
-  const items = useMemo(
-    () => announcements.map((item) => ({ kind: "announcement" as const, item })),
-    [announcements],
-  )
 
   const stats: Stat[] = useMemo(() => {
     const published = announcements.filter((item) => item.is_published).length
@@ -81,6 +103,29 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
       { label: "Drafts", value: drafts },
     ]
   }, [announcements])
+
+  const typeCounts = useMemo(() => {
+    const counts: Record<TypeFilter, number> = {
+      all: announcements.length,
+      published: announcements.filter((a) => a.is_published).length,
+      scheduled: announcements.filter((a) => a.status_label === "scheduled").length,
+      drafts: announcements.filter((a) => !a.is_published).length,
+    }
+    return counts
+  }, [announcements])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return announcements.filter((item) => {
+      if (typeFilter === "published" && !item.is_published) return false
+      if (typeFilter === "scheduled" && item.status_label !== "scheduled") return false
+      if (typeFilter === "drafts" && item.is_published) return false
+      if (q && !`${item.title} ${item.body} ${item.tag}`.toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [announcements, query, typeFilter])
+
+  const page = filtered.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
 
   function openNew() {
     setEditTarget(null)
@@ -130,18 +175,18 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
     if (target) setDeleteTarget(target)
   }
 
-  const listBody = loading ? (
-    <p className="py-14 text-center text-read text-neutral-400">
-      Reading announcements…
-    </p>
-  ) : (
-    <ContentList
-      items={items}
-      areaContext={areaContext}
-      onEdit={openEdit}
-      onDelete={handleDelete}
-    />
-  )
+  const clearFilters = () => { setQuery(""); setTypeFilter("all") }
+
+  const emptyMessage =
+    typeFilter === "published"
+      ? "No published announcements yet."
+      : typeFilter === "scheduled"
+        ? "No scheduled announcements."
+        : typeFilter === "drafts"
+          ? "No drafts yet."
+          : query
+            ? "Nothing matches your search."
+            : "Nothing here yet — create your first announcement."
 
   const overlays = (
     <>
@@ -177,7 +222,7 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
                           : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
                       )}
                     >
-                      <Icon className="size-[18px]" />
+                      <Icon className="size-[18px]" aria-hidden />
                     </button>
                   )
                 })}
@@ -189,7 +234,7 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
                 onClick={() => setConfigureOpen(true)}
                 className="flex size-9 items-center justify-center rounded-full text-neutral-900 transition-colors hover:bg-neutral-100"
               >
-                <SlidersHorizontalIcon className="size-[18px]" />
+                <SlidersHorizontalIcon className="size-[18px]" aria-hidden />
               </button>
             </div>
           }
@@ -209,14 +254,13 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
             }}
             onClose={closeComposer}
           />
-
         </SheetDialog>
       ) : null}
 
       <SheetDialog
         open={Boolean(deleteTarget)}
         onClose={() => setDeleteTarget(null)}
-        title={deleteTarget ? `Delete “${deleteTarget.title}”?` : ""}
+        title={deleteTarget ? `Delete "${deleteTarget.title}"?` : ""}
         description="Residents will no longer see this announcement, and it will leave the content list. This cannot be undone."
         footer={
           <div className="flex gap-2">
@@ -241,82 +285,66 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
     </>
   )
 
-  if (embedded) {
-    return (
-      <ConfigShell
-        embedded
-        hideEmbeddedAction
-        icon={MegaphoneIcon}
-        eyebrow="Operations"
-        title="Community Announcements"
-        description="Create and manage advisories, schedules, affected areas, and resident-facing updates."
-        action={<ConfigHeroAction icon={PlusIcon} onClick={openNew}>New announcement</ConfigHeroAction>}
-      >
-        {listBody}
-        {overlays}
-      </ConfigShell>
-    )
-  }
-
   return (
-    <div className="min-h-full bg-white">
-      <div className="mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28">
-        <ConfigBreadcrumb
-          trail={[
-            { label: "Concerns", to: "/dashboard/reports" },
-            { label: "Community Announcements" },
-          ]}
-        />
-
-        <header className="mt-8 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
-          <div className="flex min-w-0 items-start gap-6 sm:flex-1">
-            <span className="hidden size-16 shrink-0 items-center justify-center rounded-2xl bg-brand-navy text-white sm:flex">
-              <MegaphoneIcon className="size-7" strokeWidth={1.7} aria-hidden />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-page-title text-balance text-brand-navy">
-                Community Announcements
-              </h1>
-              <p className="mt-3 max-w-2xl text-read leading-relaxed text-neutral-500">
-                Create and manage advisories, schedules, affected areas, and
-                resident-facing updates.
-              </p>
+    <ConfigShell
+      embedded={embedded}
+      hideEmbeddedAction={embedded}
+      icon={MegaphoneIcon}
+      eyebrow="Operations"
+      title="Community Announcements"
+      description="Create and manage advisories, schedules, affected areas, and resident-facing updates."
+      stats={!embedded ? stats : undefined}
+      action={<ConfigHeroAction icon={PlusIcon} onClick={openNew}>New announcement</ConfigHeroAction>}
+    >
+      {loading ? (
+        <p className="py-14 text-center text-read text-neutral-400">Reading announcements…</p>
+      ) : (
+        <>
+          <ConfigurationListToolbar
+            search={query}
+            onSearch={(value) => { setQuery(value); setOffset(0) }}
+            placeholder="Search announcements"
+            filters={TYPE_OPTIONS.map((o) => ({ key: o.key, label: o.label, count: typeCounts[o.key] }))}
+            activeFilter={typeFilter}
+            onFilter={(value) => { setTypeFilter(value as TypeFilter); setOffset(0) }}
+          />
+          {page.length === 0 ? (
+            <div className="py-16 text-center">
+              <MegaphoneIcon className="mx-auto size-7 text-neutral-300" aria-hidden />
+              <h2 className="mt-4 text-row font-semibold text-brand-navy">{announcements.length ? "No announcements match this view" : "No announcements yet"}</h2>
+              <p className="mt-2 text-read text-neutral-500">{emptyMessage}</p>
+              <button type="button" onClick={announcements.length ? clearFilters : openNew} className="mt-5 font-semibold text-brand-navy underline underline-offset-4">
+                {announcements.length ? "Show all announcements" : "New announcement"}
+              </button>
             </div>
-          </div>
-
-          <div className="shrink-0 [&>*]:w-full sm:[&>*]:w-auto">
-            <ConfigHeroAction icon={PlusIcon} onClick={openNew}>
-              New announcement
-            </ConfigHeroAction>
-          </div>
-        </header>
-
-        <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-6">
-          {stats.map((stat) => (
-            <div key={stat.label} className="min-w-0">
-              <dd
-                className={cn(
-                  "text-[1.75rem] leading-none tabular-nums font-light tracking-tight",
-                  stat.alarm ? "text-sos" : "text-brand-navy",
-                )}
-              >
-                {stat.value}
-              </dd>
-              <dt className="mt-2 text-meta text-neutral-500">{stat.label}</dt>
-            </div>
-          ))}
-        </dl>
-
-        {loading ? (
-          <p className="mt-12 py-14 text-center text-read text-neutral-400">
-            Reading announcements…
-          </p>
-        ) : (
-          <div className="mt-12">{listBody}</div>
-        )}
-      </div>
-
+          ) : (
+            <>
+                  <ConfigurationTable label="Announcements" hideHeader>
+                {page.map((item) => (
+                  <ConfigurationInfoRow
+                    key={item.id}
+                    icon={MegaphoneIcon}
+                    title={item.title}
+                    subtext={advisoryLabel(item.tag)}
+                    badge={item.is_pinned ? <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-meta font-medium text-neutral-500">Pinned</span> : null}
+                    description={<>{item.audience === "all" ? "All users" : item.audience === "residents" ? "Residents" : item.audience === "responders" ? "Responders" : "Officials"} · {item.affected_streets?.length ? item.affected_streets.join(" · ") : "Whole barangay"}</>}
+                    actions={<>
+                      <SheetIconButton label={`Edit ${item.title}`} onClick={() => openEdit(item.id)}>
+                        <PencilLineIcon className="size-5" strokeWidth={1.8} aria-hidden />
+                      </SheetIconButton>
+                      <SheetIconButton label={`Remove ${item.title}`} onClick={() => handleDelete(item.id)} className="text-neutral-500 hover:text-sos">
+                        <Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden />
+                      </SheetIconButton>
+                    </>}
+                  />
+                ))}
+              </ConfigurationTable>
+              <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="announcements" />
+            </>
+          )}
+        </>
+      )}
       {overlays}
-    </div>
+    </ConfigShell>
   )
 }

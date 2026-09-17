@@ -21,7 +21,7 @@ from apps.concerns.models import (
     ContentFlag,
     Department,
 )
-from apps.concerns.severity import priority_score, severity_label
+from apps.concerns.severity import severity_label
 from apps.concerns.units import assigned_unit_for
 from apps.emergencies.models import (
     Community,
@@ -224,6 +224,22 @@ def resident_report_overview(user, period):
             created_at__date__lt=current_start,
         ).select_related("ai_assessment", "community")
     )
+    current_sos = list(
+        EmergencyAlert.objects.filter(
+            reporter=user,
+            created_at__date__gte=current_start,
+            created_at__date__lte=today,
+            status__in=EMERGENCY_REPORTABLE,
+        )
+    )
+    previous_sos = list(
+        EmergencyAlert.objects.filter(
+            reporter=user,
+            created_at__date__gte=previous_start,
+            created_at__date__lt=current_start,
+            status__in=EMERGENCY_REPORTABLE,
+        )
+    )
 
     day_count = (today - current_start).days + 1
     by_day = {
@@ -232,6 +248,8 @@ def resident_report_overview(user, period):
             "submitted": 0,
             "resolved": 0,
             "critical": 0,
+            "sos": 0,
+            "severity": {"low": 0, "moderate": 0, "high": 0, "critical": 0},
         }
         for offset in range(day_count)
     }
@@ -242,13 +260,27 @@ def resident_report_overview(user, period):
         if point is None:
             continue
         point["submitted"] += 1
-        if severity_label(concern) == "critical":
+        level = severity_label(concern)
+        if level in point["severity"]:
+            point["severity"][level] += 1
+        if level == "critical":
             point["critical"] += 1
             critical_total += 1
 
+    for sos in current_sos:
+        day = timezone.localtime(sos.created_at).date()
+        point = by_day.get(day)
+        if point is None:
+            continue
+        point["submitted"] += 1
+        point["critical"] += 1
+        point["sos"] += 1
+        point["severity"]["critical"] += 1
+        critical_total += 1
+
     previous_critical_total = sum(
         severity_label(concern) == "critical" for concern in previous_reports
-    )
+    ) + len(previous_sos)
 
     resolved_by_day = {
         row["day"]: row["total"]
@@ -267,8 +299,17 @@ def resident_report_overview(user, period):
         if day in by_day:
             by_day[day]["resolved"] = total
 
-    current_total = len(current_reports)
-    previous_total = len(previous_reports)
+    for sos in EmergencyAlert.objects.filter(
+        reporter=user,
+        status__in=EMERGENCY_SETTLED,
+    ):
+        resolved_at = sos.resolved_at or sos.updated_at
+        day = timezone.localtime(resolved_at).date()
+        if day in by_day:
+            by_day[day]["resolved"] += 1
+
+    current_total = len(current_reports) + len(current_sos)
+    previous_total = len(previous_reports) + len(previous_sos)
     return {
         "period": period,
         "label": period_label,
@@ -549,6 +590,8 @@ def official_report_overview(concerns, period, emergencies=None):
             "submitted": 0,
             "resolved": 0,
             "critical": 0,
+            "sos": 0,
+            "severity": {"low": 0, "moderate": 0, "high": 0, "critical": 0},
         }
         for offset in range((today - current_start).days + 1)
     }
@@ -558,7 +601,10 @@ def official_report_overview(concerns, period, emergencies=None):
         if point is None:
             continue
         point["submitted"] += 1
-        if severity_label(concern) == "critical":
+        level = severity_label(concern)
+        if level in point["severity"]:
+            point["severity"][level] += 1
+        if level == "critical":
             point["critical"] += 1
             critical_total += 1
 
@@ -569,6 +615,8 @@ def official_report_overview(concerns, period, emergencies=None):
         point["submitted"] += 1
         # SOS reports are the critical lane by definition.
         point["critical"] += 1
+        point["sos"] += 1
+        point["severity"]["critical"] += 1
         critical_total += 1
 
     resolved_by_day = {
@@ -707,8 +755,34 @@ def official_emergency_payload(alert):
 
 
 def official_recent_reports(concerns, emergencies, limit=3):
-    concern_rows = list(
-        concerns.filter(status__in=CONCERN_ACTIVE | CONCERN_SETTLED)
+    """Overview rows in the shared queue sequence: Critical → High → Moderate
+    → Low → Resolved → Rejected, most recent within a band.
+
+    Open concerns form the whole candidate pool — a recency slice would let
+    newer minor reports crowd a severe older one off the card. Settled rows
+    can never outrank an open band, so only the newest few of each settled
+    kind are needed.
+    """
+    open_rows = list(
+        concerns.filter(status__in=CONCERN_ACTIVE)
+        .select_related(
+            "ai_assessment",
+            "assigned_department",
+            "category_ref__department",
+        )
+        .order_by("-created_at", "-id")
+    )
+    resolved_rows = list(
+        concerns.filter(status=Concern.Status.RESOLVED)
+        .select_related(
+            "ai_assessment",
+            "assigned_department",
+            "category_ref__department",
+        )
+        .order_by("-created_at", "-id")[:limit]
+    )
+    rejected_rows = list(
+        concerns.filter(status=Concern.Status.REJECTED)
         .select_related(
             "ai_assessment",
             "assigned_department",
@@ -717,18 +791,45 @@ def official_recent_reports(concerns, emergencies, limit=3):
         .order_by("-created_at", "-id")[:limit]
     )
     emergency_rows = list(
-        emergencies.filter(status__in=EMERGENCY_REPORTABLE)
+        emergencies.filter(status__in=EMERGENCY_ACTIVE)
         .select_related("community")
         .order_by("-created_at", "-id")[:limit]
     )
-    return sorted(
-        [
-            *(official_report_payload(item) for item in concern_rows),
-            *(official_emergency_payload(item) for item in emergency_rows),
-        ],
-        key=lambda item: (item["created_at"], item["id"]),
+    settled_emergency_rows = list(
+        emergencies.filter(status__in=EMERGENCY_SETTLED)
+        .select_related("community")
+        .order_by("-created_at", "-id")[:limit]
+    )
+    rows = [
+        *(official_report_payload(item) for item in open_rows),
+        *(official_report_payload(item) for item in resolved_rows),
+        *(official_report_payload(item) for item in rejected_rows),
+        *(official_emergency_payload(item) for item in emergency_rows),
+        *(official_emergency_payload(item) for item in settled_emergency_rows),
+    ]
+
+    def sequence_rank(item):
+        # Emergencies always arrive as criticals; a settled one is reported
+        # with status "resolved"/"closed", which must rank below all open
+        # severity bands, and rejected below resolved.
+        status = item["status"]
+        if status in ("resolved", "closed"):
+            return 0
+        if status == "rejected":
+            return -1
+        return {"critical": 4, "high": 3, "moderate": 2, "low": 1}.get(
+            item["severity"], 1
+        )
+
+    rows.sort(
+        key=lambda item: (
+            sequence_rank(item),
+            item["created_at"],
+            item["id"],
+        ),
         reverse=True,
-    )[:limit]
+    )
+    return rows[:limit]
 
 
 def official_critical_report(concerns, emergencies=None):
@@ -745,7 +846,7 @@ def official_critical_report(concerns, emergencies=None):
     selected = (
         max(
             critical,
-            key=lambda item: (priority_score(item), item.updated_at, item.pk),
+            key=lambda item: (item.updated_at, item.pk),
         )
         if critical
         else None

@@ -4,12 +4,11 @@ import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
 
 import { MM, prefersReducedMotion } from "../landing-theme"
-import { AlarmMap2D } from "./alarm-map-2d"
 
 // The 3D scene pulls in three.js (~900 kB before gzip). It is only mounted
 // once the map section gets near the viewport (see mapNear3D below), so the
 // chunk is not downloaded while the user is still reading the hero / problem
-// sections. The 2D fallback stays on screen until the chunk is ready.
+// sections. A quiet placeholder holds the space until the chunk is ready.
 const AlarmMap3D = lazy(() => import("./alarm-map-3d"))
 
 const BEATS = [
@@ -33,7 +32,6 @@ export function AlarmMap() {
   const pinArea = useRef<HTMLDivElement | null>(null)
   const progress = useRef(0)
   const reduced = prefersReducedMotion()
-  const use3D = !reduced
 
   // Defer the three.js chunk until the pinned map area is within ~1.5 viewport
   // heights below the screen. Stops the browser downloading ~244 kB gzip for a
@@ -44,7 +42,7 @@ export function AlarmMap() {
   )
 
   useEffect(() => {
-    if (!use3D || mapNear3D) return
+    if (mapNear3D) return
     const target = pinArea.current
     if (!target) return
     const observer = new IntersectionObserver(
@@ -54,13 +52,11 @@ export function AlarmMap() {
           observer.disconnect()
         }
       },
-      // 1.5 viewport heights of lead time: the SVG is usually in cache, and the
-      // 2D fallback covers the brief fetch window after the pin releases.
       { rootMargin: "0px 0px 150% 0px", threshold: 0 },
     )
     observer.observe(target)
     return () => observer.disconnect()
-  }, [use3D, mapNear3D])
+  }, [mapNear3D])
 
   useGSAP(
     () => {
@@ -138,14 +134,14 @@ export function AlarmMap() {
             grid fits short viewports. No overflow-clip: the canvas is sized to
             this box, so nothing may cut it on the sides or bottom. */}
         <div className="relative mx-auto flex aspect-square w-full min-w-0 max-w-[min(96vw,32rem,56svh)] items-center justify-center lg:max-w-[min(48rem,84svh)]">
-          {use3D && mapNear3D ? (
-            <MapErrorBoundary fallback={<AlarmMap2D progress={progress} />}>
-              <Suspense fallback={<AlarmMap2D progress={progress} />}>
+          {mapNear3D ? (
+            <MapErrorBoundary fallback={null}>
+              <Suspense fallback={<div aria-hidden className="aspect-square w-full animate-pulse rounded-3xl bg-white/5" />}>
                 <AlarmMap3D progress={progress} />
               </Suspense>
             </MapErrorBoundary>
           ) : (
-            <AlarmMap2D progress={progress} />
+            <div aria-hidden className="aspect-square w-full animate-pulse rounded-3xl bg-white/5" />
           )}
         </div>
       </div>

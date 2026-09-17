@@ -347,8 +347,10 @@ class ResidentDashboardAPITests(APITestCase):
         assessment = concern.ai_assessment
         assessment.status = ConcernAiAssessment.Status.COMPLETED
         assessment.severity_estimate = "high"
-        assessment.urgent_attention = True
-        assessment.save(update_fields=["status", "severity_estimate", "urgent_attention"])
+        assessment.raw_result = {
+            "review": {"current_danger": True, "incident_timing": "ongoing"}
+        }
+        assessment.save(update_fields=["status", "severity_estimate", "raw_result"])
         concern.refresh_from_db()
         self.assertEqual(severity_label(concern), "critical")
         self.assertGreaterEqual(priority_score(concern), 3000)

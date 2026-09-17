@@ -23,15 +23,19 @@ import { resolveIconByKey } from "@/features/dashboard/components/concerns/resol
 import { streetSegment } from "@/features/dashboard/lib/location-text"
 import { isCriticalConcern } from "@/features/dashboard/lib/critical-concern"
 import { emergencyTitleText } from "@/features/dashboard/lib/emergency-description"
+import { ReportPriorityIndicator } from "@/features/dashboard/components/concerns/report-detail-content"
+import { compareReportPriority } from "@/features/dashboard/lib/report-priority"
 
 export function OverviewReportRow({
   post,
   onOpen,
   showDivider = true,
+  showPriority = false,
 }: {
   post: Concern
   onOpen?: (post: Concern) => void
   showDivider?: boolean
+  showPriority?: boolean
 }) {
   const navigate = useNavigate()
   const resolved = isResolvedRecord(post)
@@ -76,9 +80,15 @@ export function OverviewReportRow({
           />
           {concernTitleText(post)}
         </span>
-        <span className="mt-1 flex items-center gap-1 text-[13px] text-neutral-500">
+        <span className="mt-1 flex min-w-0 items-center gap-2 text-[13px] text-neutral-500">
           <MapPinIcon className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">{street}</span>
+          <span className="min-w-0 max-w-[65%] truncate">{street}</span>
+          {showPriority && post.severity ? (
+            <ReportPriorityIndicator
+              severity={post.severity}
+              className="text-[12px]"
+            />
+          ) : null}
         </span>
         <span className="mt-0.5 block text-[13px] text-neutral-500 tabular-nums">
           {formatDate(post.created_at)} at {formatTime(post.created_at)}
@@ -109,16 +119,11 @@ export function OverviewReports({
   const latestItems = [
     ...items.map((post) => ({ kind: "concern" as const, post })),
     ...emergencies.map((alert) => ({ kind: "emergency" as const, alert })),
-  ]
-    .sort((left, right) => {
-      const leftDate =
-        left.kind === "concern" ? left.post.created_at : left.alert.created_at
-      const rightDate =
-        right.kind === "concern"
-          ? right.post.created_at
-          : right.alert.created_at
-      return rightDate.localeCompare(leftDate)
-    })
+  ].sort((left, right) => {
+    const leftReport = left.kind === "concern" ? left.post : left.alert
+    const rightReport = right.kind === "concern" ? right.post : right.alert
+    return compareReportPriority(leftReport, rightReport)
+  })
     .slice(0, 3)
   return (
     <section className="rounded-2xl border border-neutral-200 bg-white p-4">
@@ -194,7 +199,6 @@ function EmergencyOverviewRow({
     ) ||
     alert.barangay ||
     "Community"
-
   return (
     <button
       type="button"
@@ -203,7 +207,7 @@ function EmergencyOverviewRow({
           ? onOpen(alert)
           : navigate(`/dashboard/reports?alert=${alert.id}`)
       }
-      className="flex w-full items-center gap-3 border-b border-neutral-100 py-3 text-left last:border-b-0"
+      className="flex w-full items-center gap-4 border-b border-neutral-100 py-3 text-left last:border-b-0"
     >
       <span className="min-w-0 flex-1">
         <span className="block text-[15px] leading-snug font-bold break-words text-neutral-900">
@@ -222,9 +226,9 @@ function EmergencyOverviewRow({
           )}
           {title}
         </span>
-        <span className="mt-1 flex items-center gap-1 text-[13px] text-neutral-500">
+        <span className="mt-1 flex min-w-0 items-center gap-1 text-[13px] text-neutral-500">
           <MapPinIcon className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">{street}</span>
+          <span className="min-w-0 flex-1 truncate">{street}</span>
         </span>
         <span className="mt-0.5 block text-[13px] text-neutral-500 tabular-nums">
           {formatDate(alert.created_at)} at {formatTime(alert.created_at)}

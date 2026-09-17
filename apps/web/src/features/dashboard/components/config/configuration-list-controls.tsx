@@ -144,6 +144,7 @@ export function ConfigurationPager({
   onChange,
   noun = "items",
   className,
+  inline = false,
 }: {
   offset: number
   total: number
@@ -151,6 +152,7 @@ export function ConfigurationPager({
   onChange: (nextOffset: number) => void
   noun?: string
   className?: string
+  inline?: boolean
 }) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const currentPage = Math.min(Math.floor(Math.max(offset, 0) / pageSize) + 1, pageCount)
@@ -186,9 +188,10 @@ export function ConfigurationPager({
         onClick={() => goToPage(currentPage - 1)}
         disabled={currentPage === 1}
         aria-label="Previous page"
-        className="inline-flex size-10 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 disabled:pointer-events-none disabled:text-neutral-300"
+        className="inline-flex h-10 items-center gap-1 rounded-full px-2.5 text-[13px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100 disabled:pointer-events-none disabled:text-neutral-300"
       >
-        <ChevronLeftIcon className="size-5" aria-hidden="true" />
+        <ChevronLeftIcon className="size-4" aria-hidden="true" />
+        Prev
       </button>
       <label className="flex items-center gap-1.5 text-[13px] font-medium text-neutral-500">
         <input
@@ -214,16 +217,19 @@ export function ConfigurationPager({
         onClick={() => goToPage(currentPage + 1)}
         disabled={currentPage === pageCount}
         aria-label="Next page"
-        className="inline-flex size-10 items-center justify-center rounded-full text-neutral-700 transition-colors hover:bg-neutral-100 disabled:pointer-events-none disabled:text-neutral-300"
+        className="inline-flex h-10 items-center gap-1 rounded-full px-2.5 text-[13px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100 disabled:pointer-events-none disabled:text-neutral-300"
       >
-        <ChevronRightIcon className="size-5" aria-hidden="true" />
+        Next
+        <ChevronRightIcon className="size-4" aria-hidden="true" />
       </button>
     </nav>
   ) : null, [className, commitPageInput, currentPage, goToPage, noun, pageCount, pageInput, total])
 
-  const registered = useSheetDialogFooter(pager, total > 0)
+  const registered = useSheetDialogFooter(pager, total > 0 && !inline)
 
   if (total === 0 || registered) return null
+
+  if (inline) return pager
 
   return (
     <div className="sticky bottom-0 z-20 -mx-1 bg-white/95 backdrop-blur-sm">

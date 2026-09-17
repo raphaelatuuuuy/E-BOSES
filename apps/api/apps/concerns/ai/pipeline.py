@@ -18,7 +18,6 @@ is no separate AI-review decision.
 """
 
 import logging
-import math
 import time
 from datetime import timedelta
 
@@ -92,6 +91,7 @@ def should_run_sam3(*, image_uploaded: bool, gemma_image_review_succeeded: bool,
 # What SAM3 looks for when Gemma could not read the photo and so named nothing.
 # The three that are always worth checking on a civic report.
 FALLBACK_PROTECTIVE_CLASSES = list(CORE_SENSITIVE_CLASSES)
+CORE_AUTO_BLUR_CLASSES = [name for name in CORE_SENSITIVE_CLASSES if name != "blood"]
 
 
 def privacy_classes_for(gemma_result: dict, *, image_uploaded: bool, gemma_image_review_succeeded: bool) -> list[str]:
@@ -111,7 +111,15 @@ def privacy_classes_for(gemma_result: dict, *, image_uploaded: bool, gemma_image
     if not image_uploaded:
         return []
     if gemma_image_review_succeeded:
-        return sam3_classes_for(gemma_result) if gemma_result.get("privacy_scan_required") is True else []
+        # Gemma can miss a face while correctly spotting a plate (or the other
+        # way around). SAM3 can inspect both, so always request the two classes
+        # that can be automatically redacted and retain any extra LLM signal.
+        requested = (
+            sam3_classes_for(gemma_result)
+            if gemma_result.get("privacy_scan_required") is True
+            else []
+        )
+        return list(dict.fromkeys([*CORE_AUTO_BLUR_CLASSES, *requested]))
     return list(FALLBACK_PROTECTIVE_CLASSES)
 
 
@@ -181,11 +189,10 @@ def _prepare_media_image(media):
 
 
 def _visual_duplicate_check(config, *, concern: Concern, prepared_images: list[PreparedImage]) -> dict | None:
-    """LLM photo-vs-photo comparison against earlier same-category reports.
+    """LLM photo-vs-photo comparison against earlier reports at the same address.
 
-    Candidates reuse the text-duplicate rules (same barangay + category, inside
-    the lookback window and distance cap) but only reports that actually have a
-    readable photo. Returns a payload for `duplicate.visual_check`, or None.
+    Only reports that actually have a readable photo. Returns a payload
+    for `duplicate.visual_check`, or None.
     """
     if not config.photo_duplicate_llm_enabled or not prepared_images:
         return None
@@ -193,8 +200,8 @@ def _visual_duplicate_check(config, *, concern: Concern, prepared_images: list[P
     since = timezone.now() - timedelta(days=config.report_duplicate_lookback_days)
     pool = (
         Concern.objects.filter(
-            category=concern.category,
-            barangay=concern.barangay,
+            community=concern.community,
+            address=concern.address,
             created_at__gte=since,
         )
         .exclude(pk=concern.pk)
@@ -202,19 +209,10 @@ def _visual_duplicate_check(config, *, concern: Concern, prepared_images: list[P
         .prefetch_related("media")
         .order_by("-created_at")[:200]
     )
-    origin_lat = float(concern.latitude) if concern.latitude is not None else None
-    origin_lon = float(concern.longitude) if concern.longitude is not None else None
-
     candidates: list[dict] = []
     for other in pool:
         if len(candidates) >= limit:
             break
-        if origin_lat is None or origin_lon is None or other.latitude is None or other.longitude is None:
-            distance = None
-        else:
-            distance = _haversine_m(origin_lat, origin_lon, float(other.latitude), float(other.longitude))
-            if distance > config.report_duplicate_distance_meters:
-                continue
         media = next((m for m in other.media.all() if m.mime_type.startswith("image/")), None)
         image = _prepare_media_image(media)
         if image is None:
@@ -222,32 +220,44 @@ def _visual_duplicate_check(config, *, concern: Concern, prepared_images: list[P
         candidates.append({
             "concern_id": other.pk,
             "tracking_id": other.tracking_id,
+            "public_id": str(other.public_id),
+            "title": other.title,
+            "summary": other.summary or other.description[:160],
+            "status": other.status,
             "captured_at": other.created_at.date().isoformat(),
-            "distance_meters": round(distance, 1) if distance is not None else None,
             "image": image,
         })
     if not candidates:
         return None
 
     comparisons = compare_photo_duplicates(submitted_images=prepared_images, candidates=candidates)
+    candidates_by_id = {candidate["concern_id"]: candidate for candidate in candidates}
+    match = next(
+        (
+            {
+                "concern_id": comparison.get("concern_id"),
+                "tracking_id": comparison.get("tracking_id"),
+                "public_id": candidates_by_id[comparison["concern_id"]].get("public_id"),
+                "title": candidates_by_id[comparison["concern_id"]].get("title"),
+                "summary": candidates_by_id[comparison["concern_id"]].get("summary"),
+                "status": candidates_by_id[comparison["concern_id"]].get("status"),
+            }
+            for comparison in comparisons or []
+            if comparison.get("verdict") == "same_issue"
+            and comparison.get("concern_id") in candidates_by_id
+        ),
+        None,
+    )
     payload = {
         "checked": True,
         "candidate_count": len(candidates),
         "comparisons": comparisons or [],
+        "match": match,
     }
     if comparisons is None:
         payload["checked"] = False
         payload["skip_reason"] = "vision_check_unavailable"
     return payload
-
-
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    radius = 6371000.0
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    d_phi = math.radians(lat2 - lat1)
-    d_lambda = math.radians(lon2 - lon1)
-    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
-    return 2 * radius * math.asin(math.sqrt(a))
 
 
 def _street_imagery_check(config, *, concern: Concern, prepared_images: list[PreparedImage]) -> dict | None:
@@ -410,10 +420,6 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         threshold=config.duplicate_threshold,
     )
 
-    visual_duplicate = _visual_duplicate_check(config, concern=concern, prepared_images=prepared_images)
-    if visual_duplicate:
-        duplicate_payload["visual_check"] = visual_duplicate
-
     try:
         issue_count = int(details.get("issue_count", 1))
     except (TypeError, ValueError):
@@ -423,6 +429,14 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         if issue_count != 1
         else _street_imagery_check(config, concern=concern, prepared_images=prepared_images)
     )
+    area_passed = not street_check or street_check.get("status") != "checked" or street_check.get("verdict") == "area_matches"
+    visual_duplicate = (
+        _visual_duplicate_check(config, concern=concern, prepared_images=prepared_images)
+        if area_passed
+        else None
+    )
+    if visual_duplicate:
+        duplicate_payload["visual_check"] = visual_duplicate
 
     integrity_check = _media_integrity_check(
         config,
@@ -481,7 +495,6 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         is_irrelevant=gemma_result.is_irrelevant,
         label=gemma_result.label,
         possible_duplicate=duplicate_match.possible_duplicate,
-        urgent_attention=bool(details.get("urgent_attention")),
         integrity_check=integrity_check,
     )
     if photo_evidence_contradicted:
@@ -518,7 +531,6 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
         "privacy_scan_required": bool(details.get("privacy_scan_required")),
         "privacy_scan_reasons": details.get("privacy_scan_reasons") or [],
         "suspected_sensitive_classes": sam3_classes,
-        "urgent_attention": bool(details.get("urgent_attention")),
         "missing_information": details.get("missing_information") or [],
         "recommended_action": recommended_action,
         "recommendation": recommendation,
@@ -558,6 +570,7 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
             photo_count=len(image_media_list),
             suggested_category=gemma_result.category,
             duplicate_match=duplicate_match,
+            visual_duplicate=visual_duplicate,
             config=config,
             street_check=street_check,
             integrity_check=integrity_check,
@@ -643,6 +656,7 @@ def _record_decision_log(
         "automated_incomplete": "Required information check",
         "automated_multiple_issues": "Description issue-count check",
         "automated_unclear_description": "Description clarity check",
+        "automated_photo_duplicate": "Photo duplicate check",
     }
     output_snapshot = {
         "model_recommended_action": details.get("recommended_action"),
@@ -773,6 +787,7 @@ def _apply_automated_validation(
     config,
     street_check: dict | None = None,
     integrity_check: dict | None = None,
+    visual_duplicate: dict | None = None,
 ) -> None:
     """Finish validation without creating an AI-review task for an official."""
     uncertain = (
@@ -798,25 +813,13 @@ def _apply_automated_validation(
             summary="Please report one issue at a time only",
         )
         return
+
     if issue_count == 0:
         _reject_concern(
             concern,
             rejection_code="automated_unclear_description",
-            summary="Please describe one concern clearly and include only relevant details about the issue.",
+            summary="Please include only relevant details about the issue.",
         )
-        return
-
-    if uncertain:
-        concern.validation_status = Concern.ValidationStatus.PENDING
-        concern.validation_summary = (
-            "Automated review could not be completed. Your report has not been assigned "
-            "to a unit yet and is waiting for review."
-        )
-        concern.update_text = "Waiting for validation before routing."
-        concern.save(update_fields=[
-            "category", "category_ref", "assigned_department", "duplicate_of",
-            "validation_status", "validation_summary", "update_text", "updated_at",
-        ])
         return
 
     if _photo_evidence_contradicted(details):
@@ -835,7 +838,8 @@ def _apply_automated_validation(
             concern,
             rejection_code="automated_photo_unsupported",
             summary=(
-                "Please submit a photo that clearly shows the reported issue."
+                "The photo does not show the reported issue clearly. Please submit a photo "
+                "that clearly shows the reported issue."
             ),
         )
         return
@@ -947,6 +951,28 @@ def _apply_automated_validation(
                     summary=summary,
                 )
                 return
+
+    visual_match = (visual_duplicate or {}).get("match")
+    if visual_match:
+        _reject_concern(
+            concern,
+            rejection_code="automated_photo_duplicate",
+            summary="Please use a different photo, this issue was already reported.",
+        )
+        return
+
+    if uncertain:
+        concern.validation_status = Concern.ValidationStatus.PENDING
+        concern.validation_summary = (
+            "Automated review could not be completed. Your report has not been assigned "
+            "to a unit yet and is waiting for review."
+        )
+        concern.update_text = "Waiting for validation before routing."
+        concern.save(update_fields=[
+            "category", "category_ref", "assigned_department", "duplicate_of",
+            "validation_status", "validation_summary", "update_text", "updated_at",
+        ])
+        return
 
     # A configured location-policy review remains separate from AI validation.
     location_hold = concern.validation_status == Concern.ValidationStatus.PENDING and concern.validation_summary.startswith("Location ")
@@ -1099,7 +1125,6 @@ def _flag_reasons(
     is_irrelevant: bool,
     label: str,
     possible_duplicate: bool,
-    urgent_attention: bool,
     integrity_check: dict | None = None,
 ) -> list[dict]:
     # Driven by the analyzer-reported booleans, not by sniffing substrings out
@@ -1111,8 +1136,6 @@ def _flag_reasons(
         reasons.append({"reason": "irrelevant_text", "label": label})
     if possible_duplicate:
         reasons.append({"reason": "possible_duplicate"})
-    if urgent_attention:
-        reasons.append({"reason": "urgent_attention"})
     if integrity_check and integrity_check.get("status") == "checked":
         for finding in flagged_integrity_findings(integrity_check.get("findings") or []):
             reasons.append({

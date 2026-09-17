@@ -11,7 +11,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { PageSection } from "@/components/ui/page-header"
 import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
-import { ConfigurationTable, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
+import { ConfigurationInfoRow, ConfigurationTable } from "@/features/dashboard/components/config/configuration-table"
 
 type ModuleStatus = "operational" | "degraded" | "down" | "not_configured" | "unknown"
 type DayStatus = "operational" | "degraded" | "down" | "not_configured" | "no_data"
@@ -413,22 +413,14 @@ function AuditLogSheet({
         ) : (
           <ConfigurationTable label="Audit activity">
             {visibleEntries.map((entry) => (
-              <ConfigurationTableRow
+              <ConfigurationInfoRow
                 key={entry.id}
+                icon={ScrollTextIcon}
+                title={<>{entry.label}{entry.sensitive ? <span className="ml-2 text-meta font-semibold text-brand-orange">Private data</span> : null}</>}
+                subtext={auditAction(entry.action)}
+                description={<>{entry.actor?.name || "System automation"} · {auditDate(entry.created_at)}</>}
                 actions={<span className="px-2 text-[13px] text-neutral-400" aria-label="No action">—</span>}
-              >
-                <div className="min-w-0">
-                  <p className="break-words text-[14px] font-semibold text-neutral-900">
-                    {entry.label}
-                    {entry.sensitive ? (
-                      <span className="ml-2 text-[11px] font-semibold text-brand-orange">Private data</span>
-                    ) : null}
-                  </p>
-                  <p className="mt-1 text-[12px] text-neutral-500">{auditAction(entry.action)}</p>
-                  <p className="mt-1 text-[12px] text-neutral-500">{entry.actor?.name || "System automation"}</p>
-                  <p className="mt-1 text-[12px] tabular-nums text-neutral-400">{auditDate(entry.created_at)}</p>
-                </div>
-              </ConfigurationTableRow>
+              />
             ))}
           </ConfigurationTable>
         )}

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react"
-import { CheckIcon, ChevronDownIcon } from "lucide-react"
+import { useEffect, useId, useRef, useState } from "react"
+import { ChartColumn, ChartLine, CheckIcon, ChevronDownIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import type {
@@ -88,10 +88,10 @@ function dayAriaLabel(
 }
 
 function activityFeedback(count: number) {
-  if (count <= 0) return "Quiet for now"
-  if (count === 1) return "Good start"
-  if (count <= 3) return "Looking good"
-  return "Staying involved"
+  if (count <= 0) return "All clear"
+  if (count === 1) return "One on record"
+  if (count <= 3) return "A few on record"
+  return "Several on record"
 }
 
 function chartStackFor(day: ResidentReportOverview["days"][number]) {
@@ -100,12 +100,71 @@ function chartStackFor(day: ResidentReportOverview["days"][number]) {
   const filed = Math.max(0, day.submitted - day.critical)
   const resolved = Math.max(0, day.resolved)
   const critical = Math.max(0, day.critical)
+  const sos = Math.max(0, day.sos ?? 0)
+  const severity = {
+    low: Math.max(0, day.severity?.low ?? 0),
+    moderate: Math.max(0, day.severity?.moderate ?? 0),
+    high: Math.max(0, day.severity?.high ?? 0),
+    critical,
+  }
   return {
     filed,
     resolved,
     critical,
+    sos,
+    severity,
+    severityTotal:
+      severity.low + severity.moderate + severity.high + severity.critical,
     total: filed + resolved + critical,
   }
+}
+
+function blendedGradient(segments: [number, string][], fallback: string) {
+  const bands = segments.filter(([value]) => value > 0)
+  if (bands.length === 0) return fallback
+  const total = bands.reduce((sum, [value]) => sum + value, 0)
+  const widths = bands.map(([value]) => (value / total) * 100)
+  const stops: string[] = []
+  let edge = 0
+  bands.forEach(([, color], index) => {
+    const width = widths[index] ?? 0
+    const next = bands[index + 1]
+    if (index === 0) stops.push(`${color} 0%`)
+    edge += width
+    if (!next) {
+      stops.push(`${color} 100%`)
+      return
+    }
+    const blend = Math.min(6, width / 3, (widths[index + 1] ?? 0) / 3)
+    stops.push(`${color} ${(edge - blend).toFixed(2)}%`)
+    stops.push(`${next[1]} ${(edge + blend).toFixed(2)}%`)
+  })
+  return `linear-gradient(to top, ${stops.join(", ")})`
+}
+
+function barGradient(
+  stack: ReturnType<typeof chartStackFor>,
+  filter: "reports" | "priority" | null
+) {
+  const severity = stack.severity
+  if (filter === "priority") {
+    return blendedGradient(
+      [
+        [severity.low, "#1f6c98"],
+        [severity.moderate, "#f2a03d"],
+        [severity.high, "#ea6f24"],
+        [severity.critical, "#f23b35"],
+      ],
+      "#1f6c98"
+    )
+  }
+  return blendedGradient(
+    [
+      [stack.filed + stack.sos, "#f4a261"],
+      [stack.resolved, "#2f9e78"],
+    ],
+    "#f4a261"
+  )
 }
 
 type ChartDay = ResidentReportOverview["days"][number] & {
@@ -142,13 +201,29 @@ function chartDaysFor(
     const last = slice[slice.length - 1]
     if (!first || !last) continue
     const label = monthRangeLabel(first.date, last.date)
+    const severity = {
+      low: 0,
+      moderate: 0,
+      high: 0,
+      critical: 0,
+    }
+    for (const day of slice) {
+      severity.low += Math.max(0, day.severity?.low ?? 0)
+      severity.moderate += Math.max(0, day.severity?.moderate ?? 0)
+      severity.high += Math.max(0, day.severity?.high ?? 0)
+    }
     groups.push({
       date: first.date,
       label,
-       ariaLabel: `${label}: ${slice.reduce((sum, day) => sum + day.submitted, 0)} reports ${verb}${slice.reduce((sum, day) => sum + day.resolved, 0) > 0 ? `, ${slice.reduce((sum, day) => sum + day.resolved, 0)} resolved` : ""}${slice.some((day) => day.critical > 0) ? ", including a critical report" : ""}`,
+      ariaLabel: `${label}: ${slice.reduce((sum, day) => sum + day.submitted, 0)} reports ${verb}${slice.reduce((sum, day) => sum + day.resolved, 0) > 0 ? `, ${slice.reduce((sum, day) => sum + day.resolved, 0)} resolved` : ""}${slice.some((day) => day.critical > 0) ? ", including a critical report" : ""}`,
       submitted: slice.reduce((sum, day) => sum + day.submitted, 0),
       resolved: slice.reduce((sum, day) => sum + day.resolved, 0),
       critical: slice.reduce((sum, day) => sum + day.critical, 0),
+      sos: slice.reduce((sum, day) => sum + (day.sos ?? 0), 0),
+      severity: {
+        ...severity,
+        critical: slice.reduce((sum, day) => sum + day.critical, 0),
+      },
     })
   }
   return groups
@@ -373,9 +448,80 @@ export function WeekChart({
   const days = activeOverview?.days ?? []
   const chartDays = chartDaysFor(days, period, activityVerb)
   const chartStacks = chartDays.map(chartStackFor)
-  const heights = barHeights(chartStacks.map((stack) => stack.total))
+  const [segmentFilter, setSegmentFilter] = useState<
+    "reports" | "priority" | null
+  >("reports")
+  const filteredTotals = chartStacks.map((stack) =>
+    segmentFilter === "priority"
+      ? stack.severityTotal
+      : stack.filed + stack.resolved + stack.sos
+  )
+  const heights = barHeights(filteredTotals)
+  const seriesKey = `${segmentFilter ?? "all"}|${heights.join(",")}`
   const compact = chartDays.length > 14
-  const hasCritical = chartDays.some((day) => day.critical > 0)
+  const [chartType, setChartType] = useState<"bar" | "line">("bar")
+  const [barAnimated, setBarAnimated] = useState(false)
+  const linePathRef = useRef<SVGPathElement>(null)
+  const clipRectRef = useRef<SVGRectElement>(null)
+  const clipId = useId()
+  const lineMax = Math.max(0, ...filteredTotals)
+  const lineDots = filteredTotals.map((value, index) => ({
+    x: ((index + 0.5) / Math.max(filteredTotals.length, 1)) * 100,
+    y: 38 - (lineMax > 0 ? (value / lineMax) * 32 : 0),
+  }))
+  const lineFirstX = lineDots[0]?.x ?? 50
+  const lineLastX = lineDots[lineDots.length - 1]?.x ?? 50
+  const lineCurve = (() => {
+    if (lineDots.length === 0) return ""
+    const formatted = lineDots.map(
+      (point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`
+    )
+    if (lineDots.length < 3) return `M ${formatted.join(" L ")}`
+    let path = `M ${formatted[0]}`
+    for (let index = 0; index < lineDots.length - 1; index += 1) {
+      const before = lineDots[Math.max(0, index - 1)]
+      const start = lineDots[index]
+      const end = lineDots[index + 1]
+      const after = lineDots[Math.min(lineDots.length - 1, index + 2)]
+      if (!before || !start || !end || !after) continue
+      const control1X = start.x + (end.x - before.x) / 6
+      const control1Y = start.y + (end.y - before.y) / 6
+      const control2X = end.x - (after.x - start.x) / 6
+      const control2Y = end.y - (after.y - start.y) / 6
+      path += ` C ${control1X.toFixed(2)},${control1Y.toFixed(2)} ${control2X.toFixed(2)},${control2Y.toFixed(2)} ${end.x.toFixed(2)},${end.y.toFixed(2)}`
+    }
+    return path
+  })()
+  const lineStrokeClass =
+    segmentFilter === "priority" ? "stroke-severity-critical" : "stroke-overview-bar"
+  const lineFillClass =
+    segmentFilter === "priority" ? "fill-severity-critical" : "fill-overview-bar"
+
+  useEffect(() => {
+    setBarAnimated(false)
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setBarAnimated(true))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [chartType, seriesKey])
+  useEffect(() => {
+    if (chartType !== "line") return
+    const rect = clipRectRef.current
+    if (!rect || !lineCurve) return
+    rect.setAttribute("width", "0")
+    const frame = requestAnimationFrame(() => {
+      rect.style.transition = "width 0.9s ease-in-out"
+      rect.setAttribute("width", "100")
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      rect.removeAttribute("style")
+    }
+  }, [lineCurve, chartType])
 
   return (
     <section
@@ -425,35 +571,65 @@ export function WeekChart({
         </p>
       ) : null}
 
-      <div className="mt-5 flex items-center justify-between gap-3">
-        <p className="text-[12px] font-semibold text-neutral-500">
-          {period === "month" ? "Weekly activity" : "Daily activity"}
-        </p>
-        <div className="flex items-center gap-3 text-[11px] font-medium text-neutral-500">
-          <span className="inline-flex items-center gap-1.5">
-            <span
-              className="size-2 rounded-[3px] bg-overview-bar"
-              aria-hidden="true"
-            />
-            Filed
-          </span>
-          <span className="inline-flex items-center gap-1.5 text-status-closed">
-            <span
-              className="size-2 rounded-full bg-status-closed"
-              aria-hidden="true"
-            />
-            Resolved
-          </span>
-          {hasCritical ? (
-            <span className="inline-flex items-center gap-1.5 text-severity-critical-ink">
-              <span
-                className="size-2 rounded-[3px] bg-severity-critical"
-                aria-hidden="true"
-              />
-              Critical
-            </span>
-          ) : null}
+      <div className="mt-5 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            aria-pressed={segmentFilter === "reports"}
+            aria-label="Filter bars to filed and resolved reports"
+            onClick={() =>
+              setSegmentFilter((current) =>
+                current === "reports" ? null : "reports"
+              )
+            }
+            className={cn(
+              "text-[11px] font-medium",
+              segmentFilter === "reports"
+                ? "font-semibold text-brand-orange"
+                : "text-neutral-500"
+            )}
+          >
+            Reports
+          </button>
+          <button
+            type="button"
+            aria-pressed={segmentFilter === "priority"}
+            aria-label="Filter bars to priority levels"
+            onClick={() =>
+              setSegmentFilter((current) =>
+                current === "priority" ? null : "priority"
+              )
+            }
+            className={cn(
+              "text-[11px] font-medium",
+              segmentFilter === "priority"
+                ? "font-semibold text-brand-orange"
+                : "text-neutral-500"
+            )}
+          >
+            Priority
+          </button>
         </div>
+        <button
+          type="button"
+          onClick={() =>
+            setChartType((current) => (current === "bar" ? "line" : "bar"))
+          }
+          aria-pressed={chartType === "line"}
+          aria-label={
+            chartType === "bar" ? "Switch to line chart" : "Switch to bar chart"
+          }
+          title={
+            chartType === "bar" ? "Switch to line chart" : "Switch to bar chart"
+          }
+          className="flex size-8 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+        >
+          {chartType === "bar" ? (
+            <ChartLine className="size-4" aria-hidden="true" />
+          ) : (
+            <ChartColumn className="size-4" aria-hidden="true" />
+          )}
+        </button>
       </div>
 
       <div
@@ -466,6 +642,7 @@ export function WeekChart({
         ) : (
           <>
             <div className="overflow-x-auto pb-1">
+              {chartType === "bar" ? (
               <div
                 className={cn(
                   "relative flex h-40 items-end gap-2 px-1",
@@ -480,10 +657,6 @@ export function WeekChart({
                   const stack = chartStacks[index]
                   const stackHeight = heights[index] ?? 0
                   const barWidth = chartDays.length === 1 ? "mx-auto max-w-[72px]" : ""
-                  const segmentHeight = (value: number) =>
-                    stack && stack.total > 0
-                      ? `${(value / stack.total) * 100}%`
-                      : "0%"
                   return (
                     <div
                       key={day.date}
@@ -492,39 +665,87 @@ export function WeekChart({
                     >
                       <div
                         className={cn(
-                          "flex w-full min-w-0 flex-col overflow-hidden rounded-t-[6px] transition-[height] duration-300",
+                          "flex w-full min-w-0 flex-col overflow-hidden rounded-t-[6px] transition-[height] duration-700 ease-out",
                           barWidth,
                         )}
-                        style={{ height: `${stackHeight}%` }}
+                        style={{
+                          height: barAnimated ? `${stackHeight}%` : "0%",
+                          background: barGradient(stack, segmentFilter),
+                          transitionDelay: `${Math.min(index, 12) * 28}ms`,
+                        }}
                         title={
                           stack
                             ? `${day.label}: ${stack.total} report${stack.total === 1 ? "" : "s"}\nFiled: ${day.submitted}\nResolved: ${day.resolved}\nCritical: ${day.critical}`
                             : undefined
                         }
-                      >
-                        {stack?.filed ? (
-                          <div
-                            className="min-h-0 w-full bg-overview-bar"
-                            style={{ height: segmentHeight(stack.filed) }}
-                          />
-                        ) : null}
-                        {stack?.resolved ? (
-                          <div
-                            className="min-h-0 w-full bg-status-closed"
-                            style={{ height: segmentHeight(stack.resolved) }}
-                          />
-                        ) : null}
-                        {stack?.critical ? (
-                          <div
-                            className="min-h-0 w-full bg-severity-critical"
-                            style={{ height: segmentHeight(stack.critical) }}
-                          />
-                        ) : null}
-                      </div>
+                      />
                     </div>
                   )
                 })}
               </div>
+              ) : (
+                <svg
+                  viewBox="0 0 100 42"
+                  preserveAspectRatio="none"
+                  aria-hidden="true"
+                  className={cn(
+                    "h-40 w-full overflow-hidden px-1",
+                    compact ? "min-w-[720px]" : "min-w-0"
+                  )}
+                >
+                  {[30, 22, 14].map((gridY) => (
+                    <line
+                      key={gridY}
+                      x1={0}
+                      x2={100}
+                      y1={gridY}
+                      y2={gridY}
+                      className="stroke-neutral-200"
+                      strokeWidth={1}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ))}
+                  <defs>
+                    <clipPath id={clipId}>
+                      <rect
+                        x={0}
+                        y={0}
+                        width={0}
+                        height={42}
+                        ref={clipRectRef}
+                      />
+                    </clipPath>
+                  </defs>
+                  <g clipPath={`url(#${clipId})`}>
+                    <path
+                      d={`${lineCurve} L ${lineLastX.toFixed(2)},42 L ${lineFirstX.toFixed(2)},42 Z`}
+                      className={lineFillClass}
+                      fillOpacity={0.12}
+                      stroke="none"
+                    />
+                    <path
+                      ref={linePathRef}
+                      d={lineCurve}
+                      fill="none"
+                      className={lineStrokeClass}
+                      strokeWidth={2.5}
+                      strokeLinecap="round"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    {lineDots.map((point, index) => (
+                      <circle
+                        key={index}
+                        cx={point.x}
+                        cy={point.y}
+                        r={index === lineDots.length - 1 ? 2.6 : 1.8}
+                        className={lineFillClass}
+                        stroke="#fff"
+                        strokeWidth={1.2}
+                      />
+                    ))}
+                  </g>
+                </svg>
+              )}
               <div
                 className={cn(
                   "mt-2 flex min-w-0 gap-2 px-1",
@@ -546,6 +767,60 @@ export function WeekChart({
             </div>
           </>
         )}
+      </div>
+
+      <div className="mt-3 flex items-center justify-center">
+        <div className="flex items-center gap-3 text-[11px] font-medium text-neutral-500">
+          {segmentFilter === "priority" ? (
+            <>
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="size-2 rounded-[3px] bg-severity-low"
+                  aria-hidden="true"
+                />
+                Low
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="size-2 rounded-[3px] bg-severity-moderate"
+                  aria-hidden="true"
+                />
+                Moderate
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="size-2 rounded-[3px] bg-severity-high"
+                  aria-hidden="true"
+                />
+                High
+              </span>
+              <span className="inline-flex items-center gap-1.5 text-severity-critical-ink">
+                <span
+                  className="size-2 rounded-[3px] bg-severity-critical"
+                  aria-hidden="true"
+                />
+                Critical
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="size-2 rounded-[3px] bg-overview-bar"
+                  aria-hidden="true"
+                />
+                Filed
+              </span>
+              <span className="inline-flex items-center gap-1.5 text-status-closed">
+                <span
+                  className="size-2 rounded-full bg-status-closed"
+                  aria-hidden="true"
+                />
+                Resolved
+              </span>
+            </>
+          )}
+        </div>
       </div>
     </section>
   )

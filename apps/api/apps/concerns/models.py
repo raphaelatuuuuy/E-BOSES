@@ -678,7 +678,6 @@ class ConcernAiAssessment(models.Model):
     privacy_scan_required = models.BooleanField(default=False)
     privacy_scan_reasons = models.JSONField(default=list, blank=True)
     suspected_sensitive_classes = models.JSONField(default=list, blank=True)
-    urgent_attention = models.BooleanField(default=False)
     missing_information = models.JSONField(default=list, blank=True)
     recommended_action = models.CharField(max_length=32, blank=True)
     recommendation = models.CharField(max_length=120, blank=True)
@@ -893,8 +892,6 @@ class ConcernClassificationConfiguration(models.Model):
         if isinstance(cached, cls):
             return cached
         obj, _ = cls.objects.get_or_create(community=community, defaults=cls._config_defaults())
-        for field, value in cls.CAREFUL_REVIEW_VALUES.items():
-            setattr(obj, field, value)
         cache.set(cache_key, obj, 60)
         return obj
 
@@ -908,8 +905,6 @@ class ConcernClassificationConfiguration(models.Model):
         """
         community = cls._community(community)
         obj, _ = cls.objects.get_or_create(community=community, defaults=cls._config_defaults())
-        for field, value in cls.CAREFUL_REVIEW_VALUES.items():
-            setattr(obj, field, value)
         return obj
 
     def save(self, *args, **kwargs):

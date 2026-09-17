@@ -203,12 +203,6 @@ def active_communities_for_point(latitude, longitude):
     ).select_related("boundary")
     matches = []
     for community in candidates:
-        bbox = (community.bbox_min_latitude, community.bbox_min_longitude, community.bbox_max_latitude, community.bbox_max_longitude)
-        if all(value is not None for value in bbox) and not (
-            float(bbox[0]) <= latitude <= float(bbox[2])
-            and float(bbox[1]) <= longitude <= float(bbox[3])
-        ):
-            continue
         if point_in_geojson_inclusive(longitude, latitude, community.boundary.geometry):
             matches.append(community)
     return matches

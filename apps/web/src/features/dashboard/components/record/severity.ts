@@ -58,9 +58,9 @@ const CONCERN_CATEGORY_BASELINE: Record<string, number> = {
 }
 
 /**
- * Gemma reports three levels; the queue shows four. The top Concern band is
- * reserved for an explicit urgent flag or a high-severity situation that is
- * both dangerous and ongoing, rather than every `high` estimate.
+ * Gemma reports four levels; the queue shows four. The top Concern band is
+ * reserved for an explicit critical estimate or a high-severity situation that
+ * is both dangerous and ongoing, rather than every `high` estimate.
  *
  * Mirrors SEVERITY_ESTIMATE_LEVEL in apps/api/apps/concerns/severity.py.
  */
@@ -68,21 +68,21 @@ const SEVERITY_ESTIMATE_LEVEL: Record<string, number> = {
   low: 0,
   medium: 1,
   high: 2,
+  critical: 3,
 }
 
 export interface ConcernSeverityInput {
   category?: string | null
   /**
    * The review model's severity judgement over the text and the photo:
-   * "low" | "medium" | "high". Absent until the assessment completes.
+   * "low" | "medium" | "high" | "critical". Absent until the assessment
+   * completes.
    *
    * This replaced a YOLOv8 damage score — the mean confidence of the objects a
    * detector found — which measured how recognisable a photo was, not how bad
    * the situation in it was.
    */
   severityEstimate?: string | null
-  /** True when the review flagged possible immediate danger. Reaches `critical`. */
-  urgentAttention?: boolean | null
   /** Structured review signal for an active high-risk Concern. */
   currentDanger?: boolean | null
   incidentTiming?: string | null
@@ -107,15 +107,6 @@ export function deriveConcernSeverity(
 
   if (!(estimate in SEVERITY_ESTIMATE_LEVEL)) {
     return { severity: clampToSeverity(baseline), assessed: false }
-  }
-
-  const activeHighRisk =
-    estimate === "high" &&
-    input.currentDanger === true &&
-    input.incidentTiming === "ongoing"
-
-  if (input.urgentAttention || activeHighRisk) {
-    return { severity: clampToSeverity(3), assessed: true }
   }
 
   let level = Math.max(SEVERITY_ESTIMATE_LEVEL[estimate], baseline)
@@ -248,7 +239,6 @@ export function priorityBand(score: number): PriorityBand {
 
 export interface PriorityExplanationInput {
   severity: Severity
-  urgentAttention?: boolean
   hoursSinceStatusChange?: number
   linkedReports?: number
   voteCount?: number
@@ -257,8 +247,6 @@ export interface PriorityExplanationInput {
 
 export function priorityReasons(input: PriorityExplanationInput): string[] {
   const reasons: string[] = []
-  if (input.urgentAttention)
-    reasons.push("the report describes immediate danger")
   if (input.severity === "critical" || input.severity === "high") {
     reasons.push(`the assessed impact is ${input.severity}`)
   }

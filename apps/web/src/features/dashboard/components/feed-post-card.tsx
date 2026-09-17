@@ -492,9 +492,7 @@ export function FeedPostCard({
     })
   }
   const resolved = statusGroupOf(post.status) === "closed"
-  const critical =
-    (post.severity ?? "").toLowerCase() === "critical" ||
-    post.priority_score >= 3000
+  const critical = (post.severity ?? "").toLowerCase() === "critical"
   const bodyText = (post.description || "").trim()
   const rawTitle = concernTitleText(post)
   const resolvedAt =

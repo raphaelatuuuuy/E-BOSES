@@ -12,12 +12,9 @@ interface DobStepProps {
 }
 
 export function DobStep({ values, errors, onChange, onContinue }: DobStepProps) {
-  const firstName =
-    values.firstName.trim().split(/\s+/).filter(Boolean)[0] || "neighbor"
-
   return (
-    <div className="flex flex-1 flex-col pt-2 pb-8">
-      <StepTitle>Okay, {firstName}. When were you born?</StepTitle>
+    <div className="flex flex-1 flex-col pt-0 pb-8">
+      <StepTitle className="text-center">When were you born?</StepTitle>
 
       <div className="mt-8">
         <BirthDatePicker

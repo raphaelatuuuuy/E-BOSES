@@ -189,7 +189,6 @@ export function SignUpForm({
 
         {step === 1 ? (
           <EmailOtpStep
-            email={values.email}
             code={values.emailOtpCode ?? ""}
             errors={errors}
             isSending={isSendingEmailOtp}

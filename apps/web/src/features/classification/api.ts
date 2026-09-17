@@ -115,7 +115,6 @@ export type ReportValidationResult = {
     | "image_review_failed"
     | string
   missing_information?: string[]
-  urgent_attention?: boolean
   severity?: "low" | "medium" | "high"
   privacy_scan_required?: boolean
   suspected_sensitive_classes?: string[]

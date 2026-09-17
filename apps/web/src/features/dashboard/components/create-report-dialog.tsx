@@ -33,6 +33,7 @@ import {
   submitGuestConcern,
   type Concern,
   type ConcernActiveDuplicate,
+  type ConcernPhotoDuplicateMatch,
   type ConcernPhotoVerdict,
   type ConcernPrecheckResult,
   type ConcernResolvedMatch,
@@ -40,7 +41,14 @@ import {
 import { CameraCaptureDialog } from "@/features/dashboard/components/camera-capture-dialog"
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
 import { ReportDetailsDialog } from "@/features/dashboard/components/report-details-dialog"
-import { isPhotoVerdictRejected } from "@/features/dashboard/components/create-report-dialog-photo"
+import {
+  duplicatePhotoFeedLocation,
+  duplicatePhotoFeedback,
+  duplicatePhotoReportIssueLocation,
+  DUPLICATE_PHOTO_FEEDBACK,
+  isPhotoVerdictRejected,
+  photoVerdictsWithWarningFallback,
+} from "@/features/dashboard/components/create-report-dialog-photo"
 import { ApiError } from "@/lib/api"
 import { lookupRegistrationPinAddress } from "@/features/auth/api"
 import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
@@ -81,9 +89,9 @@ const FRIENDLY_ERROR_TEXT: Record<string, string> = {
   "One or more photos could not be validated.":
     "We couldn't check one or more photos. Try adding them again.",
   "This photo was already uploaded before.":
-    "This photo was already used in another report. Please use a different photo.",
+    DUPLICATE_PHOTO_FEEDBACK,
   "This image appears to have been uploaded before.":
-    "This photo was already used in another report. Please use a different photo.",
+    DUPLICATE_PHOTO_FEEDBACK,
   "Report attachment files must be 10MB or smaller.":
     "That photo is over 10 MB. Try a smaller version or take a new photo.",
   "Report attachment files must be JPG, JPEG, or PNG.":
@@ -120,7 +128,7 @@ const FRIENDLY_ERROR_TEXT: Record<string, string> = {
   "This report does not describe a valid community issue.":
     "This doesn't look like a community issue we handle.",
   "Add a clearer description of the issue.":
-    "Please describe one concern clearly and include only relevant details about the issue.",
+    "Please include only relevant details about the issue.",
   "We could not determine the type of concern. Add a little more detail and try again.":
     "We couldn't tell what kind of issue this is. Add a little more detail and try again.",
   "A similar report already exists near this location.":
@@ -156,8 +164,11 @@ const INFO_ERROR_TEXT: Record<string, string> = {
 function friendlyFooterError(raw: string): {
   text: string
   tone: FooterErrorTone
+  actionLabel?: string
 } {
   const text = raw.trim()
+  const duplicate = duplicatePhotoFeedback(text)
+  if (duplicate) return duplicate
   const info = INFO_ERROR_TEXT[text]
   if (info) return { text: info, tone: "info" }
   const friendly = FRIENDLY_ERROR_TEXT[text]
@@ -273,6 +284,23 @@ function isAutomatedPhotoMismatchError(error: unknown): boolean {
   return ["code", "detail", "rejection_code"].some(
     (key) => payload[key] === "automated_photo_mismatch"
   )
+}
+
+function parseDuplicatePhotoMatch(
+  value: unknown
+): ConcernPhotoDuplicateMatch | null {
+  if (!value || typeof value !== "object") return null
+  const match = value as Record<string, unknown>
+  if (
+    typeof match.concern_id !== "number" ||
+    !Number.isInteger(match.concern_id) ||
+    typeof match.tracking_id !== "string" ||
+    typeof match.public_id !== "string" ||
+    typeof match.status !== "string"
+  ) {
+    return null
+  }
+  return match as unknown as ConcernPhotoDuplicateMatch
 }
 
 function titleFromDescription(text: string, max = 80): string {
@@ -456,6 +484,8 @@ export function CreateReportDialog({
   const [duplicateConfirm, setDuplicateConfirm] =
     useState<ConcernActiveDuplicate | null>(null)
   const [photoVerdicts, setPhotoVerdicts] = useState<ConcernPhotoVerdict[]>([])
+  const [photoDuplicateMatch, setPhotoDuplicateMatch] =
+    useState<ConcernPhotoDuplicateMatch | null>(null)
   const [privacyPreview, setPrivacyPreview] = useState<{
     state: string
     detected_classes: string[]
@@ -645,6 +675,7 @@ export function CreateReportDialog({
     setResolvedMatch(null)
     setDuplicateConfirm(null)
     setPhotoVerdicts([])
+    setPhotoDuplicateMatch(null)
     setPrivacyPreview(null)
     setAwaitingValidation(false)
     recurrenceOfRef.current = null
@@ -749,6 +780,8 @@ export function CreateReportDialog({
   async function addFiles(files: File[]): Promise<File[]> {
     const errors: string[] = []
     const candidates: File[] = []
+    let duplicateMatch: ConcernPhotoDuplicateMatch | null = null
+    setPhotoDuplicateMatch(null)
     // Keep existing verdicts until their photos are removed. A retry should
     // not hide a still-attached invalid photo or its latest feedback.
     const existingInvalidVerdict = photoVerdicts.some(
@@ -815,9 +848,15 @@ export function CreateReportDialog({
             checkedFile.message ||
               "This photo could not be accepted. Please upload a different photo."
           )
+          duplicateMatch ??= parseDuplicatePhotoMatch(checkedFile.existing_match)
         }
         added = filesToCheck.filter((_, index) => !rejectedIndexes.has(index))
       } catch (error) {
+        if (error instanceof ApiError && error.data && typeof error.data === "object") {
+          duplicateMatch = parseDuplicatePhotoMatch(
+            (error.data as Record<string, unknown>).existing_match
+          )
+        }
         const messages = mediaCheckErrorMessages(error)
         errors.push(
           ...(messages.length
@@ -832,6 +871,7 @@ export function CreateReportDialog({
         setIsCheckingMedia(false)
       }
     }
+    setPhotoDuplicateMatch(duplicateMatch)
     setMediaFiles((prev) => [...prev, ...added])
     const unique = [...new Set(errors.filter(Boolean))]
     setFieldErrors((current) => ({
@@ -872,15 +912,19 @@ export function CreateReportDialog({
   }
 
   function showPhotoMismatchError() {
+    const message =
+      mediaFiles.length > 1
+        ? PHOTO_MISMATCH_FRIENDLY_MESSAGE
+        : PHOTO_MISMATCH_MESSAGE
     setAwaitingValidation(false)
     setSubmittedReport(null)
     setOpen(true)
+    setPhotoVerdicts(
+      photoVerdictsWithWarningFallback([], [message], mediaFiles.length)
+    )
     setFieldErrors((current) => ({
       ...current,
-      media:
-        mediaFiles.length > 1
-          ? PHOTO_MISMATCH_FRIENDLY_MESSAGE
-          : PHOTO_MISMATCH_MESSAGE,
+      media: message,
     }))
   }
 
@@ -1113,6 +1157,7 @@ export function CreateReportDialog({
       // Do not carry that transient feedback into the successful submission
       // state, especially when the vision review was deferred to the backend.
       setPhotoVerdicts([])
+      setPhotoDuplicateMatch(null)
       setPrivacyPreview(null)
       setFieldErrors({})
       if (report.validation_status === "accepted") {
@@ -1148,6 +1193,12 @@ export function CreateReportDialog({
         typeof submitError.data === "object"
       ) {
         const responseData = submitError.data as Record<string, unknown>
+        const responseDuplicateMatch = parseDuplicatePhotoMatch(
+          responseData.existing_match
+        )
+        if (responseDuplicateMatch) {
+          setPhotoDuplicateMatch(responseDuplicateMatch)
+        }
         const responsePhotoVerdicts = Array.isArray(responseData.photo_verdicts)
           ? responseData.photo_verdicts.flatMap((item) => {
               if (!item || typeof item !== "object") return []
@@ -1206,8 +1257,12 @@ export function CreateReportDialog({
         // their valid photos.
         const removeAllSubmittedPhotos =
           hardMediaMessages.length > 0 && hardPhotoIndexes.size === 0
-        const visiblePhotoVerdicts = responsePhotoVerdicts.filter(
-          (verdict) => !hardPhotoIndexes.has(verdict.index)
+        const visiblePhotoVerdicts = photoVerdictsWithWarningFallback(
+          responsePhotoVerdicts.filter(
+            (verdict) => !hardPhotoIndexes.has(verdict.index)
+          ),
+          responseFieldMessages,
+          mediaFiles.length
         )
         if (removeAllSubmittedPhotos || hardPhotoIndexes.size > 0) {
           setMediaFiles((current) =>
@@ -1312,6 +1367,7 @@ export function CreateReportDialog({
     // precheck. Otherwise a successful retry can briefly retain its old red
     // photo ring while the request is in flight.
     setPhotoVerdicts([])
+    setPhotoDuplicateMatch(null)
     setPrivacyPreview(null)
     setFieldErrors({})
     if (guest) {
@@ -1415,11 +1471,26 @@ export function CreateReportDialog({
   // at least 40 characters, one photo, and a set location pin.
   const formReady =
     descriptionLength >= descriptionMin && hasMedia && Boolean(locationPin)
+
+  function openDuplicatePhotoMatch() {
+    const match = photoDuplicateMatch
+    if (!match) return
+    resetForm()
+    setSubmittedReport(null)
+    setOpen(false)
+    navigate(
+      guest
+        ? duplicatePhotoReportIssueLocation(match.concern_id)
+        : duplicatePhotoFeedLocation(match.concern_id)
+    )
+  }
+
   const footerErrors = useMemo(() => {
     const items: {
       text: string
       kind: "media" | "address" | "other"
       tone: FooterErrorTone
+      actionLabel?: string
     }[] = []
     const seen = new Set<string>()
     const push = (raw: unknown, kind: "media" | "address" | "other") => {
@@ -1427,7 +1498,12 @@ export function CreateReportDialog({
       const mapped = friendlyFooterError(raw)
       if (!mapped.text || seen.has(mapped.text)) return
       seen.add(mapped.text)
-      items.push({ text: mapped.text, kind, tone: mapped.tone })
+      items.push({
+        text: mapped.text,
+        kind,
+        tone: mapped.tone,
+        actionLabel: mapped.actionLabel,
+      })
     }
     const kindForKey = (key: string) =>
       key === "media" ||
@@ -1772,6 +1848,16 @@ export function CreateReportDialog({
                               >
                                 {footerErrors[0]?.text}
                               </p>
+                              {footerErrors[0]?.actionLabel &&
+                              photoDuplicateMatch ? (
+                                <button
+                                  type="button"
+                                  onClick={openDuplicatePhotoMatch}
+                                  className="shrink-0 text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary/80"
+                                >
+                                  {footerErrors[0].actionLabel}
+                                </button>
+                              ) : null}
                             </div>
                           ) : (
                             <div>
@@ -1956,6 +2042,7 @@ export function CreateReportDialog({
             // authenticated precheck.
             resolvedAddressRef.current = null
             setPhotoVerdicts([])
+            setPhotoDuplicateMatch(null)
             setPrivacyPreview(null)
             setLocationPin({
               lat: payload.lat,
@@ -1997,7 +2084,9 @@ export function CreateReportDialog({
             resetForm()
             setSubmittedReport(null)
             setOpen(false)
-            navigate(`/dashboard/reports/${reportId}`)
+            navigate("/dashboard/home", {
+              state: { trackConcernId: reportId },
+            })
           }}
         />
       ) : null}
@@ -2113,46 +2202,67 @@ export function CreateReportDialog({
             aria-hidden
           />
           <div className="relative z-10 w-full max-w-[360px] rounded-2xl border border-neutral-200 bg-white px-6 pt-7 pb-6 shadow-2xl">
-            <h2
-              id="duplicate-confirm-title"
-              className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
-            >
-              Neighbours already reported this
-            </h2>
-            <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
-              {duplicateConfirm.reporter_count === 1
-                ? "1 resident has"
-                : `${duplicateConfirm.reporter_count} residents have`}{" "}
-              reported the same issue nearby. Adding yours to the same incident
-              helps the barangay see how many people it affects.
-            </p>
-            {duplicateConfirm.summary ? (
-              <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-[13px] leading-snug text-neutral-700">
-                {duplicateConfirm.summary}
-              </p>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                duplicateOfRef.current = duplicateConfirm.concern_id
-                setDuplicateConfirm(null)
-                void advance("resolved")
-              }}
-              className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.99]"
-            >
-              Add to the same incident
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                duplicateOfRef.current = null
-                setDuplicateConfirm(null)
-                void advance("resolved")
-              }}
-              className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
-            >
-              Mine is a different issue
-            </button>
+            {duplicateConfirm.photo_duplicate ? (
+              <>
+                <h2
+                  id="duplicate-confirm-title"
+                  className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
+                >
+                  Please use a different photo, this issue was already reported.
+                </h2>
+                {duplicateConfirm.view_report_url ? (
+                  <a
+                    href={duplicateConfirm.view_report_url}
+                    className="mt-6 inline-flex w-full items-center justify-center rounded-full bg-primary text-[15px] font-semibold text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.99]"
+                  >
+                    Click to see
+                  </a>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <h2
+                  id="duplicate-confirm-title"
+                  className="text-center text-[20px] font-semibold tracking-tight text-neutral-900"
+                >
+                  Neighbours already reported this
+                </h2>
+                <p className="mt-2 text-center text-[13px] leading-snug text-neutral-500">
+                  {duplicateConfirm.reporter_count === 1
+                    ? "1 resident has"
+                    : `${duplicateConfirm.reporter_count} residents have`}{" "}
+                  reported the same issue nearby. Adding yours to the same incident
+                  helps the barangay see how many people it affects.
+                </p>
+                {duplicateConfirm.summary ? (
+                  <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-[13px] leading-snug text-neutral-700">
+                    {duplicateConfirm.summary}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    duplicateOfRef.current = duplicateConfirm.concern_id
+                    setDuplicateConfirm(null)
+                    void advance("resolved")
+                  }}
+                  className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-primary text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong active:scale-[0.99]"
+                >
+                  Add to the same incident
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    duplicateOfRef.current = null
+                    setDuplicateConfirm(null)
+                    void advance("resolved")
+                  }}
+                  className="mt-3 flex h-11 w-full items-center justify-center rounded-full text-[15px] font-semibold text-neutral-800 transition-colors hover:bg-neutral-50"
+                >
+                  Mine is a different issue
+                </button>
+              </>
+            )}
           </div>
         </div>
       ) : null}

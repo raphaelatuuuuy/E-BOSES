@@ -1,4 +1,4 @@
-"""Gemma reads the report — text and photo — and recommends what to do next.
+﻿"""Gemma reads the report — text and photo — and recommends what to do next.
 
 This replaces a two-model arrangement where YOLO named COCO objects, a
 hand-maintained table mapped `car → vehicle`, and Gemma was handed those labels
@@ -39,7 +39,7 @@ OLLAMA_CLOUD_PROVIDER = "ollama_cloud"
 OLLAMA_TEXT_MODEL = "gemma4:31b"
 
 RELEVANCE_VALUES = {"VALID", "UNCLEAR", "IRRELEVANT"}
-SEVERITY_VALUES = {"low", "medium", "high"}
+SEVERITY_VALUES = {"low", "medium", "high", "critical"}
 
 EVIDENCE_RELATIONSHIPS = {
     "supports_report",
@@ -57,6 +57,15 @@ RECOMMENDED_ACTIONS = {
     "escalate_as_emergency",
     "reject_as_irrelevant",
 }
+
+_MAINTENANCE_REPORT_TERMS = (
+    "sidewalk", "pothole", "potholes", "walkway", "parking obstruction",
+    "blocked access", "cracked pavement", "broken pavement", "road repair",
+)
+_EXPLICIT_HARM_TERMS = (
+    "injured", "hurt", "bleeding", "trapped", "fell", "fallen", "accident",
+    "immediate danger", "dangerous now", "about to fall", "someone was hit",
+)
 
 # Content-level authenticity. The byte-level layer (accounts/media_forensics.py)
 # reads EXIF, PNG chunks, C2PA and ELA, so it catches a Photoshop save or a
@@ -266,7 +275,6 @@ def empty_details() -> dict:
         "photo_assessment": "",
         "evidence_relationship": "image_unavailable",
         "missing_information": [],
-        "urgent_attention": False,
         "severity": "medium",
         "privacy_scan_required": False,
         "privacy_scan_reasons": [],
@@ -596,7 +604,7 @@ def build_prompt(
         "danger exists now. Read tense, negation, completion, drills, examples, quoted news, and future plans. "
         "Set current_danger true only when harm is happening now or a danger remains. A past start can still be "
         "ongoing, for example a fire that started yesterday but is still burning or a person who is still trapped.\n"
-        "8. Only ongoing danger can set urgent_attention true and use escalate_as_emergency. Ended, historical, "
+        "8. Only ongoing danger can use escalate_as_emergency. Ended, historical, "
         "planned, and hypothetical events stay normal concerns. When timing is unclear but current danger is "
         "possible, set ongoing_emergency_confirmation_required true instead of assuming. Examples: 'May sunog "
         "ngayon' is ongoing; 'Nasunog kahapon, naapula na' is ended; 'The fire was last night but a person is "
@@ -649,37 +657,40 @@ def build_prompt(
         "reason actually supports. Judge the real risk to people from the description AND the photo "
         "together — read scale from the image: how deep, how wide, how close to where people walk, "
         "whether anything is already broken or exposed.\n"
-        "    high  = someone can be hurt as things stand. A hole or opening a person can fall into, "
-        "exposed or sagging electrical wiring, a structure at risk of collapse, water entering "
-        "occupied homes, a hazard right where children pass such as a school or day-care gate, or "
-        "anyone already reported hurt.\n"
+        "    critical = someone is being harmed right now or is in immediate mortal danger. A person "
+        "already reported injured or trapped, an active fire, flood water inside occupied homes with "
+        "people unable to evacuate, an active assault or robbery in progress, or a collapsing "
+        "structure with occupants. Do not use critical for a hazard that could cause harm; use it "
+        "only when the report states that harm is already happening or is seconds away.\n"
+        "    high  = someone can be hurt as things stand but is not currently being harmed. A hole "
+        "or opening a person can fall into, exposed or sagging electrical wiring, a structure at "
+        "risk of collapse, water entering occupied homes, a hazard right where children pass such as "
+        "a school or day-care gate, or anyone already reported hurt.\n"
         "    medium = it blocks access, damages property, or is a health risk that needs official "
         "action, but nobody is about to be injured. Clogged or overflowing canals, uncollected "
         "garbage, a dark streetlight on an ordinary street, a rough or cracked road surface.\n"
+         "    A damaged sidewalk, parking obstruction, driveway obstruction, or blocked access route "
+         "with no stated immediate risk of injury is medium: set current_danger to false.\n"
         "    low   = nuisance, comfort or upkeep with no physical risk. Noise, videoke, faded paint, "
         "overgrown grass, scattered litter, a stray animal that has not harmed anyone.\n"
         "    Do not default to medium. Most ordinary reports are low or medium; keep high for a real "
-        "risk of injury. These two must never disagree: if your reason says nobody is in physical "
-        "danger, severity is not high; if your reason names someone who could be hurt today, "
-        "severity is not low.\n"
+        "risk of injury and critical only for confirmed ongoing harm. These must never disagree: "
+        "if your reason says nobody is in physical danger, severity is not high; if your reason "
+        "names someone who could be hurt today, severity is not low.\n"
          "11a. severity_reason is one sentence naming the specific thing in the description or image "
-         "that set that severity — what is damaged, blocked, or at risk, and who it affects. Never "
-         "restate the level itself. Good: 'An open drainage hole about a metre wide sits in the "
-         "pedestrian lane with no cover.' Bad: 'The severity is high.', 'This is a serious issue.' "
-         "When urgent_attention is true, or when severity is high with current danger and ongoing timing "
-         "(the conditions the system uses for Critical), describe the human risk naturally and say who "
-         "could be hurt. Use wording such as 'People at the scene could be hurt by the collision' when "
-         "supported by the report. Do not use the generic phrase 'risk of injury' for a Critical report, "
-         "and do not claim that anyone is already injured unless the report says so.\n"
+         "that set that severity -- what is damaged, blocked, or at risk, and who it affects. Never "
+         "restate the level itself. When severity is critical, describe who is being harmed or is "
+         "in immediate mortal danger. When severity is high with current danger and ongoing timing, "
+         "describe the human risk naturally. Do not use the generic phrase risk of injury for a "
+         "Critical report, and do not claim anyone is already injured unless the report says so.\n"
          "11b. report_title is a short official heading for the barangay queue: at most 10 words, no "
          "ending period, naming the issue and where it is. Write it in English even when the report is "
          "in Filipino or Taglish. State only what the report and image support, never a cause or blame. "
-         "Good: 'Stray dogs gathering outside the day-care on Dao Street'. "
-         "Bad: 'Urgent!!! ang daming askal!!!', 'Negligent owners letting dogs roam'.\n"
+         "Good: Stray dogs gathering outside the day-care on Dao Street. "
+         "Bad: Urgent!!! ang daming askal!!!, Negligent owners letting dogs roam.\n"
          "11c. text_assessment is the concise, plain-English summary shown to residents and staff. "
-         "Write one or two natural sentences explaining what the report is about. When urgent_attention "
-         "is true, or when severity is high with current danger and ongoing timing, the system displays "
-         "the report as Critical, so describe the immediate human risk in "
+         "Write one or two natural sentences explaining what the report is about. When severity is "
+         "critical, the system displays the report as Critical, so describe the immediate human risk in "
          "context rather than copying a priority label or appending a canned sentence. For example, "
          "write 'The report describes a vehicle collision that just happened near Ayala Malls, where "
          "someone could be hurt.' Do not use the generic phrase 'risk of injury' for an urgent report. "
@@ -772,7 +783,6 @@ def build_prompt(
         '  "photo_assessment": null,\n'
         '  "evidence_relationship": null,\n'
         '  "missing_information": [],\n'
-        '  "urgent_attention": false,\n'
         '  "severity_reason": null,\n'
         '  "severity": null,\n'
         '  "privacy_scan_required": false,\n'
@@ -870,12 +880,6 @@ def parse_gemma_result(
     elif issue_count > 1:
         action = "request_more_information"
 
-    urgent = bool(data.get("urgent_attention"))
-    if urgent and action == "accept":
-        # An accept on something the model itself called urgent is the one
-        # combination that would let a dangerous report slide through the queue.
-        action = "escalate_as_emergency"
-
     detected_objects = _clean_strings(data.get("detected_objects"))
     if not image_attached or image_review_succeeded is False:
         # No image was read, so nothing was observed in one. Anything listed
@@ -929,7 +933,6 @@ def parse_gemma_result(
         # Do not let a model infer an emergency type from severity alone. This
         # is the final guard before the precheck can authorize auto-escalation.
         matched_emergency_type = ""
-        urgent = False
         emergency_routing_reason = ""
         if action == "escalate_as_emergency":
             action = "accept"
@@ -945,26 +948,32 @@ def parse_gemma_result(
         incident_timing == "unclear" and bool(data.get("current_danger"))
     )
 
+    report_text_lower = report_text.lower()
+    maintenance_report = any(term in report_text_lower for term in _MAINTENANCE_REPORT_TERMS)
+    explicit_harm = any(term in report_text_lower for term in _EXPLICIT_HARM_TERMS)
+    if severity == "high" and maintenance_report and not explicit_harm and not matched_emergency_type:
+        severity = "medium"
+
     # Timing only matters when the report was otherwise an emergency signal.
     # Running the drill/past/future downgrade on every concern -- including
     # ordinary ones the model never called urgent -- surfaced an irrelevant
     # "this is not a current emergency" line on plain infrastructure reports.
-    had_emergency_signal = bool(matched_emergency_type) or urgent or bool(data.get("current_danger"))
+    had_emergency_signal = bool(matched_emergency_type) or bool(data.get("current_danger"))
 
     if incident_timing in NON_CURRENT and had_emergency_signal:
         matched_emergency_type = ""
-        urgent = False
         current_danger = False
         ongoing_emergency_confirmation_required = False
         if action == "escalate_as_emergency":
             action = "accept"
         emergency_routing_reason = incident_timing_reason
     elif incident_timing == "ongoing" and matched_emergency_type:
-        urgent = True
         action = "escalate_as_emergency"
         ongoing_emergency_confirmation_required = False
     else:
-        ongoing_emergency_confirmation_required = bool(matched_emergency_type and urgent)
+        ongoing_emergency_confirmation_required = bool(
+            matched_emergency_type and incident_timing == "unclear" and current_danger
+        )
         if incident_timing in NON_CURRENT:
             incident_timing = "unclear"
             incident_timing_reason = ""
@@ -983,7 +992,6 @@ def parse_gemma_result(
         "photo_assessment": _clean_text(data.get("photo_assessment")),
         "evidence_relationship": relationship,
         "missing_information": _clean_strings(data.get("missing_information")),
-        "urgent_attention": urgent,
         "severity": severity,
         "privacy_scan_required": privacy_required,
         "privacy_scan_reasons": _clean_strings(data.get("privacy_scan_reasons")) if privacy_required else [],

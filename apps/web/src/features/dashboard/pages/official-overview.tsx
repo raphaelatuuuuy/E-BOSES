@@ -27,6 +27,7 @@ import { OverviewAnnouncements } from "@/features/dashboard/components/resident-
 import { StatTiles } from "@/features/dashboard/components/resident-overview/stat-tiles"
 import { WeekChart } from "@/features/dashboard/components/resident-overview/week-chart"
 import { OfficialOverviewReports } from "@/features/dashboard/components/official-overview/report-rows"
+import { compareReportPriority } from "@/features/dashboard/lib/report-priority"
 import { OverviewReportsSheet } from "@/features/dashboard/components/resident-overview/reports-sheet"
 import { OverviewReportDetailSheet } from "@/features/dashboard/components/resident-overview/report-detail-sheet"
 import { MobileEmergencyReportDetailPage } from "@/features/dashboard/components/concerns/mobile-report-detail"
@@ -142,7 +143,7 @@ function buildResponderAnalytics(
     (concern) => concern.severity === "critical"
   ).length
   const reports = [...concerns]
-    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .sort(compareReportPriority)
     .slice(0, 5)
     .map<OfficialOverviewReport>((concern) => ({
       id: concern.id,
@@ -201,7 +202,7 @@ function buildResponderAnalytics(
   const latestReports = [
     ...(dashboard?.recent_reports ?? [...reports, ...emergencyReports]),
   ]
-    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .sort(compareReportPriority)
     .slice(0, 3)
   return {
     window_days: dayCount,
@@ -552,6 +553,7 @@ export default function OfficialOverviewPage({
       <OverviewReportsSheet
         open={reportsOpen}
         onClose={() => setReportsOpen(false)}
+        showPriority
         onSelectReport={(post) => {
           setReportsOpen(false)
           setDetailPost(post)
@@ -563,11 +565,11 @@ export default function OfficialOverviewPage({
         }}
         loadReports={loadUnitReports}
         title={
-          isResponder
-            ? "All reports"
-            : selectedUnitId == null
-              ? "All reports"
-              : `${unitName} reports`
+          isResponder || selectedUnitId == null ? (
+            <>All <span className="text-brand-orange">reports</span></>
+          ) : (
+            <>{unitName} <span className="text-brand-orange">reports</span></>
+          )
         }
         description={
           isResponder

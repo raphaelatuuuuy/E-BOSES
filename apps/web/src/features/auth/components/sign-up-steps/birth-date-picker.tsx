@@ -97,7 +97,7 @@ function SelectField({
         aria-label={label}
         aria-invalid={Boolean(invalid)}
         className={cn(
-          "flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors",
+          "flex w-full items-center gap-2 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-3 py-3 text-left text-sm text-neutral-900 outline-none transition-colors",
           "hover:border-neutral-400 focus:border-neutral-500",
           "aria-invalid:border-destructive aria-invalid:focus:border-destructive",
           open && "border-neutral-400",
@@ -233,7 +233,7 @@ export function BirthDatePicker({
       >
         Date of birth
       </p>
-      <div className="grid grid-cols-[1.4fr_0.8fr_1fr] gap-2">
+      <div className="grid grid-cols-[1fr_0.6fr_0.9fr] gap-2">
         <SelectField
           label="Month"
           value={parts.month}

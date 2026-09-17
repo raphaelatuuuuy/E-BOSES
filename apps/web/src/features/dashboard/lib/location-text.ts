@@ -68,6 +68,19 @@ const AREA_SEGMENTS = [...BARANGAY_SUFFIXES, "marikina city", "marikina", "metro
  * Unlike `streetOnly` this drops the area segments wherever they appear, so
  * "Marikina Heights, Marikina City" yields "" rather than echoing the barangay.
  */
+export function streetShort(text?: string | null): string {
+  const value = (text || "").trim()
+  if (!value || looksLikeCoordinates(value)) return ""
+  const parts = value
+    .split(",")
+    .map((part) => part.trim().replace(/,+$/, "").trim())
+    .filter(Boolean)
+  const named = parts.filter(
+    (part) => !AREA_SEGMENTS.includes(part.toLowerCase())
+  )
+  return named.slice(0, 2).join(", ")
+}
+
 export function streetSegment(text?: string | null): string {
   const value = (text || "").trim()
   if (!value || looksLikeCoordinates(value)) return ""

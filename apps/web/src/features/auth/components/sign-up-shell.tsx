@@ -169,19 +169,21 @@ export function SignUpShell({
 interface StepContinueButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   fullWidth?: boolean
   loading?: boolean
+  align?: "start" | "end"
   children: React.ReactNode
 }
 
 export function StepContinueButton({
   fullWidth = false,
   loading = false,
+  align = "end",
   className,
   children,
   disabled,
   ...props
 }: StepContinueButtonProps) {
   return (
-    <div className={cn("mt-8 flex", fullWidth ? "w-full" : "w-full justify-end")}>
+    <div className={cn("mt-8 flex", fullWidth ? "w-full" : "w-full", align === "start" ? "justify-start" : "justify-end")}>
       <button
         type="button"
         disabled={disabled || loading}

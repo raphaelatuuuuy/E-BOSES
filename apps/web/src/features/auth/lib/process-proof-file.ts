@@ -79,12 +79,17 @@ export function humanizeProofError(message: string, _side?: ProofSide | null): s
   if (/duplicate proof|document has already been used|already attached|same image/i.test(text)) {
     return "This document was already used; please submit a different one."
   }
-  if (
-    /AI-generated|edited or digitally altered|digitally altered|digitally manipulated|edited or manipulated media|media authenticity|C2PA/i.test(
-      text,
-    )
-  ) {
-    return "Please upload a clear photo of the original document."
+  if (/AI-generated/i.test(text)) {
+    return "Please upload a real photo of your ID. AI-generated images are not accepted."
+  }
+  if (/edited or digitally altered|digitally manipulated/i.test(text)) {
+    return "Please upload the original, unedited photo."
+  }
+  if (/photo of (a )?screen/i.test(text)) {
+    return "Please upload a direct photo of the physical ID, not a photo of a screen."
+  }
+  if (/media authenticity|C2PA/i.test(text)) {
+    return "Please upload a different photo. This one could not be verified."
   }
 
   // The picture check found something. Already short and already says what to
@@ -98,62 +103,67 @@ export function humanizeProofError(message: string, _side?: ProofSide | null): s
   text = text
     .replace(
       /This ID expired on ([^.]+)\.\s*Please use a valid,? unexpired ID\.?/gi,
-      "ID has already expired. Please use a valid one.",
+      "Please use a valid ID, this one has already expired.",
     )
     .replace(
       /This ID has already expired\.?/gi,
-      "ID has already expired. Please use a valid one.",
+      "Please use a valid ID, this one has already expired.",
     )
     .replace(
       /This ID looks expired or the expiry date could not be read\.\s*Please use a valid ID\.?/gi,
-      "This is expired or the date could not be read. Please use a valid one.",
+      "Please use a valid ID, this one is expired or the date could not be read.",
     )
     .replace(
       /We could not read the expiry date on your ID\.\s*Please retake a clearer photo(?: of that section)?\.?/gi,
-      "Could not read the expiry date. Please retake a clearer photo.",
+      "Please retake a clearer photo, we could not read the expiry date.",
     )
     .replace(
       /We could not find the expiry date on this photo\.\s*Please retake a clearer photo(?: of your ID)?\.?/gi,
-      "Could not find the expiry date. Please retake a clearer photo.",
+      "Please retake a clearer photo, we could not find the expiry date.",
     )
 
   // Other common long forms → shorter
   text = text
     .replace(
       /We could not find the (.+?) on this photo\.\s*Use a clearer photo of the correct side of your ID\.?/gi,
-      "Could not find the $1. Please retake a clearer photo.",
+      (_m: string, f: string) =>
+        `Please retake a clearer photo, we could not find the ${f.toLowerCase()}.`,
     )
     .replace(
       /We could not read the (.+?) clearly(?: on this photo)?\.\s*Please retake a clearer photo(?: and make sure the text is not cut off)?(?: of the correct side of your ID)?\.?/gi,
-      "Could not read the $1 clearly. Please retake a clearer photo.",
+      (_m: string, f: string) =>
+        `Please retake a clearer photo, we could not read the ${f.toLowerCase()} clearly.`,
     )
     .replace(
       /The (.+?) on your ID does not match what you entered on the form\.\s*Check your details or upload a clearer photo\.?/gi,
-      "The $1 does not match what you entered. Please check your details.",
+      (_m: string, f: string) =>
+        `Please check your details, your ${f.toLowerCase()} does not match what you entered.`,
     )
     .replace(
       /This document looks too old\.\s*Please use a more recent ID if you can\.?/gi,
-      "This document looks too old. Please use a more recent one.",
+      "Please use a more recent document, this one looks too old.",
     )
     .replace(
       /We could not confirm the (.+?) on this photo\.\s*Please try a clearer photo of the correct document\.?/gi,
-      "Could not confirm the $1. Please retake a clearer photo.",
+      (_m: string, f: string) =>
+        `Please retake a clearer photo, we could not confirm the ${f.toLowerCase()}.`,
     )
     .replace(
       /We could not verify the (.+?) on this photo\.\s*Please retake a clearer photo(?: of your ID)?\.?/gi,
-      "Could not verify the $1. Please retake a clearer photo.",
+      (_m: string, f: string) =>
+        `Please retake a clearer photo, we could not verify the ${f.toLowerCase()}.`,
     )
     .replace(
       /We could not read the date of birth on your ID\.\s*Please retake a clearer photo\.?/gi,
-      "Could not read the date of birth. Please retake a clearer photo.",
+      "Please retake a clearer photo, we could not read the date of birth.",
     )
     .replace(
       /The date of birth on this photo looks incorrect\.\s*Please (?:check the photo and try again|retake a clearer photo(?: of your ID)?)\.?/gi,
-      "The date of birth looks incorrect. Please retake a clearer photo.",
+      "Please retake a clearer photo, the date of birth looks incorrect.",
     )
     .replace(
       /We could not verify this photo\.\s*Please try a clearer photo of your ID\.?/gi,
-      "Could not verify this photo. Please try a clearer one.",
+      "Please retake a clearer photo, we could not verify this photo.",
     )
 
   return text.replace(/\s{2,}/g, " ").trim()

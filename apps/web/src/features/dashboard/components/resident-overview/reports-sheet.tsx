@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import {
@@ -8,6 +8,7 @@ import {
   Check,
   MapPinIcon,
   SearchIcon,
+  SignalIcon,
   SlidersHorizontalIcon,
   TriangleAlert,
 } from "lucide-react"
@@ -29,6 +30,7 @@ import {
   searchResidentReports,
 } from "@/features/dashboard/components/concerns/resident-reports-workspace"
 import { OverviewReportRow } from "@/features/dashboard/components/resident-overview/report-rows"
+import { compareReportPriority } from "@/features/dashboard/lib/report-priority"
 
 const REPORTS_PER_PAGE = 4
 
@@ -49,7 +51,6 @@ function SheetPager({
   onCommit: (value: string) => void
   onGoToPage: (page: number) => void
 }) {
-  if (pageCount <= 1) return null
   return (
     <nav
       aria-label={label}
@@ -103,8 +104,9 @@ export function OverviewReportsSheet({
   onOpenEmergency,
   loadReports = listMyConcerns,
   loadEmergencies,
-  title = "My Reports",
+  title = (<>Monitor your <span className="text-brand-orange">reports</span></>),
   description = "Every concern you submitted.",
+  showPriority = false,
 }: {
   open: boolean
   onClose: () => void
@@ -112,8 +114,9 @@ export function OverviewReportsSheet({
   onOpenEmergency?: (report: OfficialOverviewReport) => void
   loadReports?: () => Promise<Concern[]>
   loadEmergencies?: () => Promise<OfficialOverviewReport[]>
-  title?: string
-  description?: string
+  title?: ReactNode
+  description?: ReactNode
+  showPriority?: boolean
 }) {
   const navigate = useNavigate()
   const [reports, setReports] = useState<Concern[]>([])
@@ -257,7 +260,11 @@ export function OverviewReportsSheet({
           id: report.id,
           report,
         })),
-      ].sort((left, right) => right.at.localeCompare(left.at) || right.id - left.id),
+      ].sort((left, right) => {
+        const leftReport = left.kind === "concern" ? left.post : left.report
+        const rightReport = right.kind === "concern" ? right.post : right.report
+        return compareReportPriority(leftReport, rightReport)
+      }),
     [visible, visibleEmergencies]
   )
 
@@ -305,9 +312,17 @@ export function OverviewReportsSheet({
       open={open}
       onClose={onClose}
       title={title}
-      description={description}
+      titleClassName="text-center"
+      description={
+        typeof description === "string" ? (
+          <span className="block text-center">{description}</span>
+        ) : (
+          description
+        )
+      }
       size="wide"
       draggable
+      showClose={false}
     >
       <div className="sticky top-0 bg-white pt-1 pb-3">
         <div ref={searchRowRef} className="flex items-center gap-2">
@@ -439,12 +454,16 @@ export function OverviewReportsSheet({
                           )}
                           {report.official_title?.trim() || report.title}
                         </span>
-                        <span className="mt-1 flex items-center gap-1 text-[13px] text-neutral-500">
+                        <span className="mt-1 flex min-w-0 items-center gap-2 text-[13px] text-neutral-500">
                           <MapPinIcon
                             className="size-3.5 shrink-0"
                             aria-hidden="true"
                           />
-                          <span className="truncate">{street}</span>
+                          <span className="min-w-0 max-w-[65%] truncate">{street}</span>
+                          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] font-medium leading-none text-severity-critical-map-ink">
+                            <SignalIcon className="size-4 shrink-0" strokeWidth={2} aria-hidden="true" />
+                            Critical
+                          </span>
                         </span>
                         <span className="mt-0.5 block text-[13px] text-neutral-500 tabular-nums">
                           {formatDate(report.created_at)} at{" "}
@@ -467,22 +486,21 @@ export function OverviewReportsSheet({
                     post={row.post}
                     onOpen={openReport}
                     showDivider={false}
+                    showPriority={showPriority}
                   />
                 </div>
               )
             )}
           </div>
-          {pageCount > 1 ? (
-            <SheetPager
-              label="Report pages"
-              pageCount={pageCount}
-              currentPage={currentPage}
-              pageInput={pageInput}
-              onInputChange={setPageInput}
-              onCommit={commitPageInput}
-              onGoToPage={goToPage}
-            />
-          ) : null}
+          <SheetPager
+            label="Report pages"
+            pageCount={pageCount}
+            currentPage={currentPage}
+            pageInput={pageInput}
+            onInputChange={setPageInput}
+            onCommit={commitPageInput}
+            onGoToPage={goToPage}
+          />
         </>
       ) : (
         <div className="flex flex-col items-center py-10 text-center">

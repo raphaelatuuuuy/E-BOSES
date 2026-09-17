@@ -1,21 +1,18 @@
 import { useState } from "react"
-import { ChevronLeft } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
 import { completeOnboard } from "@/features/auth/api"
 
 const steps = [
-  { imgMb: "/contents/onboarding-1-mb.webp", img: "/contents/onboarding-1.webp", title: "Report a Concern", description: "Easily submit reports about road issues, flood concerns, or any community problem. Your voice matters in making our barangay better." },
-  { imgMb: "/contents/onboarding-2-mb.webp", img: "/contents/onboarding-2.webp", title: "Emergency Alert", description: "Send instant emergency alerts with your location. First responders and barangay officials are notified immediately to provide assistance." },
-  { imgMb: "/contents/onboarding-3-mb.webp", img: "/contents/onboarding-3.webp", title: "Stay Connected", description: "Keep up with barangay announcements, community events, and updates. Engage with your neighbors and local officials in one place." },
-  { img: "/contents/onboarding-4.webp", title: "You're All Set!", description: "You now have access to report concerns, send alerts, and stay connected. Let's work together for a better barangay." },
+  { title: "Report a concern", img: "/contents/onboarding-report.webp" },
+  { title: "Send an emergency alert" },
+  { title: "Stay connected" },
+  { title: "Let's get started" },
 ]
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(0)
-  const [isMobile] = useState(() => window.innerWidth < 768)
   const current = steps[step]
-  const imgSrc = (isMobile && current.imgMb) ? current.imgMb : current.img
   const isLast = step === steps.length - 1
 
   async function finishOnboard() {
@@ -41,57 +38,56 @@ export default function OnboardingPage() {
     if (step > 0) setStep((s) => s - 1)
   }
 
-  const content = (
-    <div className="flex w-full max-w-sm flex-col items-center">
-      <div className="mb-5 flex items-center gap-2" role="tablist" aria-label={`Step ${step + 1} of ${steps.length}`}>
+  return (
+    <div className="flex min-h-svh flex-col items-center bg-white px-6 pt-6">
+      <div className="flex items-center gap-1.5" role="tablist" aria-label={`Step ${step + 1} of ${steps.length}`}>
         {steps.map((_, i) => (
-          <span key={i} role="tab" aria-selected={i === step} className={`block rounded-full transition-all duration-300 ${i === step ? "h-2.5 w-8 bg-primary" : "h-2.5 w-2.5 bg-muted-foreground/25"}`} />
+          <button key={i} type="button" role="tab" aria-selected={i === step} aria-label={`Go to step ${i + 1}`} onClick={() => setStep(i)} className={cn("block h-2 rounded-full transition-all duration-300", i === step ? "w-7 bg-accent" : "w-2 bg-muted-foreground/25")} />
         ))}
       </div>
-      <h1 className="mb-2 text-center font-heading text-2xl font-bold text-foreground">{current.title}</h1>
-      <p className="mb-8 text-center text-sm leading-relaxed text-muted-foreground">{current.description}</p>
-      <Button size="lg" className="w-full rounded-3xl text-base font-semibold md:max-w-sm" onClick={handleNext}>
-        {isLast ? "Get Started" : "Next"}
-      </Button>
-      <div className="mt-4 flex w-full items-center justify-center md:max-w-sm">
-        {step > 0 && (
-          <button type="button" onClick={handleBack} className="flex items-center gap-1 text-sm text-muted-foreground/60 hover:text-muted-foreground">
-            <ChevronLeft className="size-3.5" />
-            Back
+      <div className="flex w-full max-w-sm flex-1 flex-col items-center justify-center py-8 text-center">
+        {current.img ? (
+          <img src={current.img} alt="" className="h-64 w-auto md:h-80" />
+        ) : null}
+        <h1 className={cn("font-heading font-bold text-foreground", current.img ? "mt-6 text-4xl" : "text-3xl")}>{current.title}</h1>
+      </div>
+      <div className="flex w-full max-w-sm gap-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+        {isLast ? (
+          <button
+            type="button"
+            onClick={handleNext}
+            className="h-16 flex-1 rounded-full bg-accent text-base font-semibold text-white transition-colors hover:bg-brand-orange-strong"
+          >
+            Get Started
           </button>
+        ) : (
+          <>
+            {step === 0 ? (
+              <button
+                type="button"
+                onClick={handleSkip}
+                className="h-16 flex-[0.75] rounded-full bg-neutral-100 text-[15px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-200"
+              >
+                Skip
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleBack}
+                className="h-16 flex-[0.75] rounded-full bg-neutral-100 text-[15px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-200"
+              >
+                Back
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleNext}
+              className="h-16 flex-[1.25] rounded-full bg-accent text-base font-semibold text-white transition-colors hover:bg-brand-orange-strong"
+            >
+              Next
+            </button>
+          </>
         )}
-        {!isLast && step > 0 && <span className="mx-4 text-muted-foreground/20">|</span>}
-        {!isLast && (
-          <button type="button" onClick={handleSkip} className="text-sm text-muted-foreground underline-offset-2 hover:underline">
-            Skip for now
-          </button>
-        )}
-      </div>
-    </div>
-  )
-
-  // Mobile last step: everything centered as one group, image edge-to-edge
-  if (isLast && isMobile) {
-    return (
-      <div className="flex min-h-svh flex-col bg-white">
-        <div className="flex flex-1 flex-col justify-center">
-          <img src={imgSrc} alt="" className="w-full object-cover" />
-          <div className="flex flex-col items-center px-6 pt-4 pb-8">
-            {content}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Desktop last step and all other steps: image fills top, content below
-  return (
-    <div className="flex min-h-svh flex-col bg-white">
-      <div className="relative flex-1 flex items-center justify-center md:flex-[5] md:py-8">
-        <img src={imgSrc} alt="" className="w-full md:max-h-screen md:w-auto md:max-w-full" />
-      </div>
-      <div className="flex flex-col items-center px-6 pb-16 pt-6 md:pb-8">
-        {content}
       </div>
     </div>
   )

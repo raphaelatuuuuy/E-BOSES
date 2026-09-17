@@ -157,3 +157,169 @@ export function addBaseTiles(
   })
   return tiles
 }
+
+const WARM_STAMP_PREFIX = "eboses:tiles-warmed:v1:"
+const WARM_STAMP_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+type WarmBounds = {
+  minLat: number
+  maxLat: number
+  minLng: number
+  maxLng: number
+}
+
+function readWarmStamp(key: string): number | null {
+  try {
+    const raw = window.localStorage.getItem(WARM_STAMP_PREFIX + key)
+    const value = Number(raw)
+    return Number.isFinite(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function writeWarmStamp(key: string, value: number) {
+  try {
+    window.localStorage.setItem(WARM_STAMP_PREFIX + key, String(value))
+  } catch {
+    // Best effort. Warming repeats instead of breaking the map.
+  }
+}
+
+function prefetchAllowsDownload(): boolean {
+  const connection =
+    (navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string }
+    }).connection ?? null
+  if (connection?.saveData) return false
+  return (
+    connection?.effectiveType !== "slow-2g" &&
+    connection?.effectiveType !== "2g"
+  )
+}
+
+export function prewarmOfflineMapLibs() {
+  try {
+    if (typeof window === "undefined" || typeof navigator === "undefined")
+      return
+    if (navigator.onLine === false) return
+    if (!("serviceWorker" in navigator)) return
+    if (!prefetchAllowsDownload()) return
+    void import("pmtiles").catch(() => undefined)
+    void import("maplibre-gl/dist/maplibre-gl.css").catch(() => undefined)
+    void import("maplibre-gl")
+      .then((maplibre) => {
+        try {
+          maplibre.prewarm()
+        } catch {
+          // Workers start with the first map instead.
+        }
+        window.setTimeout(() => {
+          try {
+            maplibre.clearPrewarmedResources()
+          } catch {
+            // The downloaded files stay cached regardless.
+          }
+        }, 30000)
+      })
+      .catch(() => undefined)
+  } catch {
+    // Prefetch is best effort and must never break the caller.
+  }
+}
+
+export function readyOfflineMap() {
+  warmBundledCoverageTiles()
+  prewarmOfflineMapLibs()
+}
+
+export function warmBundledCoverageTiles(zooms: number[] = [14, 15, 16]) {
+  try {
+    const config = loadOfflineSosConfig()
+    const communities = config.communities?.length
+      ? config.communities
+      : [config.community]
+    for (const community of communities) {
+      const bounds = community?.bounds
+      if (!bounds) continue
+      warmTileCacheForBounds(
+        "light",
+        {
+          minLat: bounds.minLatitude,
+          maxLat: bounds.maxLatitude,
+          minLng: bounds.minLongitude,
+          maxLng: bounds.maxLongitude,
+        },
+        zooms
+      )
+    }
+  } catch {
+    // Warming is best effort and must never break the caller.
+  }
+}
+
+export function warmTileCacheForBounds(
+  tone: MapBaseTone,
+  bounds: WarmBounds,
+  zooms: number[] = [14, 15, 16]
+) {
+  try {
+    if (typeof window === "undefined" || typeof navigator === "undefined") return
+    if (navigator.onLine === false) return
+    if (!("serviceWorker" in navigator)) return
+    if (
+      ![bounds.minLat, bounds.maxLat, bounds.minLng, bounds.maxLng].every(
+        Number.isFinite
+      ) ||
+      bounds.minLat >= bounds.maxLat ||
+      bounds.minLng >= bounds.maxLng
+    )
+      return
+    const pickedZooms = zooms.filter(
+      (zoom) => Number.isInteger(zoom) && zoom >= 0 && zoom <= 20
+    )
+    if (!pickedZooms.length) return
+    const connection =
+      (navigator as Navigator & {
+        connection?: { saveData?: boolean; effectiveType?: string }
+      }).connection ?? null
+    if (connection?.saveData) return
+    const slow =
+      connection?.effectiveType === "slow-2g" ||
+      connection?.effectiveType === "2g"
+    const finalZooms = slow ? pickedZooms.filter((zoom) => zoom < 16) : pickedZooms
+    if (!finalZooms.length) return
+    const retina = (window.devicePixelRatio || 1) > 1
+    const stampKey = [
+      tone,
+      retina ? "2x" : "1x",
+      bounds.minLat.toFixed(3),
+      bounds.maxLat.toFixed(3),
+      bounds.minLng.toFixed(3),
+      bounds.maxLng.toFixed(3),
+      [...finalZooms].sort((a, b) => a - b).join(","),
+    ].join("|")
+    const stampedAt = readWarmStamp(stampKey)
+    if (stampedAt != null && Date.now() - stampedAt < WARM_STAMP_TTL_MS) return
+    const usingCarto = hasCartoBasemapKey()
+    writeWarmStamp(stampKey, Date.now())
+    const template = cartoTileUrl(tone)
+    const subdomains = usingCarto ? "abcd" : "abc"
+    void navigator.serviceWorker.ready
+      .then((registration) => {
+        registration.active?.postMessage({
+          type: "eboses.warm-tiles",
+          payload: {
+            template,
+            subdomains,
+            bounds,
+            zooms: finalZooms,
+            retina,
+          },
+        })
+      })
+      .catch(() => undefined)
+  } catch {
+    // Warming is best effort and must never break the map.
+  }
+}

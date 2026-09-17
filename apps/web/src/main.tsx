@@ -8,6 +8,7 @@ import { Toaster } from "@workspace/ui/components/sonner"
 
 import App from "./App"
 import { registerAppServiceWorker, unregisterStaleServiceWorker } from "./lib/pwa"
+import { readyOfflineMap } from "./features/dashboard/components/map/tile-layers"
 
 const rootElement = document.getElementById("root")
 
@@ -21,6 +22,7 @@ if (Capacitor.isNativePlatform()) {
   void unregisterStaleServiceWorker()
 } else {
   void registerAppServiceWorker()
+  readyOfflineMap()
 }
 
 createRoot(rootElement).render(

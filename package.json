@@ -31,6 +31,8 @@
     "@turf/simplify": "^7.4.0",
     "@turf/union": "^7.4.0",
     "leaflet": "^1.9.4",
+    "maplibre-gl": "^6.10.0",
+    "pmtiles": "^4.5.0",
     "zod": "^4.4.3"
   }
 }

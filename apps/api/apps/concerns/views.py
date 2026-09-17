@@ -92,7 +92,7 @@ from .models import (
 )
 from .announcement_services import dispatch_due_announcements, mark_announcement_published
 from .announcement_summary import refresh_announcement_summary
-from .severity import priority_score as compute_priority_score, severity_label, severity_level
+from .severity import severity_label, severity_level
 from .units import assigned_unit_for, department_for_responder_unit
 
 from .serializers import (
@@ -158,6 +158,19 @@ ACTIVE_STATUSES = {
 }
 
 MAX_CONCERN_MEDIA_FILES = 3
+DUPLICATE_PHOTO_MESSAGE = "This photo was already used in another report. Please use a different photo."
+
+
+def _existing_concern_match(media):
+    concern = media.concern
+    if concern.status == Concern.Status.REJECTED:
+        return None
+    return {
+        "concern_id": concern.pk,
+        "tracking_id": concern.tracking_id,
+        "public_id": str(concern.public_id),
+        "status": concern.status,
+    }
 
 
 def _discard_unaccepted_concern(concern):
@@ -251,12 +264,15 @@ def _validate_concern_before_commit(concern):
     photo_failed = rejection_code in {
         "automated_photo_mismatch",
         "automated_photo_unsupported",
+        "automated_photo_duplicate",
     } or any(item.get("state") != "relevant" for item in photo_verdicts)
     payload = {
         "code": rejection_code or "automated_validation_rejected",
         "photo_verdicts": photo_verdicts,
         "media" if photo_failed else "description": [
-            "Please remove photos that don't show the reported issue and upload clear ones."
+            message
+            if rejection_code == "automated_photo_duplicate"
+            else "Please remove photos that don't show the reported issue and upload clear ones."
             if photo_failed
             else message
         ],
@@ -601,6 +617,7 @@ def _deterministic_concern_media_check(media_files):
     accepted_files = []
     accepted_indices = []
     rejected = {}
+    duplicate_matches = {}
 
     for file_index, uploaded_file in enumerate(media_files):
         try:
@@ -630,8 +647,16 @@ def _deterministic_concern_media_check(media_files):
         validated_file.seek(0)
         media_phash = phash_file(raw_content)
         media_phash_blocks = phash_blocks_file(raw_content)
-        if media_hash in current_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
-            rejected[file_index] = "This photo was already uploaded before."
+        exact_match = (
+            ConcernMedia.objects.filter(sha256_hash=media_hash)
+            .exclude(concern__status=Concern.Status.REJECTED)
+            .select_related("concern")
+            .first()
+        )
+        if media_hash in current_hashes or exact_match is not None:
+            rejected[file_index] = DUPLICATE_PHOTO_MESSAGE
+            if exact_match is not None:
+                duplicate_matches[file_index] = _existing_concern_match(exact_match)
             continue
 
         candidate_ids = phash_candidate_ids(
@@ -639,21 +664,37 @@ def _deterministic_concern_media_check(media_files):
             phashes=[media_phash],
             blocks=media_phash_blocks,
         )
-        existing_phashes = (
+        existing_media = (
             list(
                 ConcernMedia.objects.filter(pk__in=candidate_ids)
                 .exclude(phash="")
-                .values_list("phash", "phash_blocks")
+                .exclude(concern__status=Concern.Status.REJECTED)
+                .select_related("concern")
             )
             if candidate_ids
             else []
         )
+        existing_phashes = [(media.phash, media.phash_blocks) for media in existing_media]
         if media_looks_duplicate(
             media_phash,
             media_phash_blocks,
             [*existing_phashes, *current_phashes],
         ):
-            rejected[file_index] = "This image appears to have been uploaded before."
+            rejected[file_index] = DUPLICATE_PHOTO_MESSAGE
+            matched_media = next(
+                (
+                    media
+                    for media in existing_media
+                    if media_looks_duplicate(
+                        media_phash,
+                        media_phash_blocks,
+                        [(media.phash, media.phash_blocks)],
+                    )
+                ),
+                None,
+            )
+            if matched_media is not None:
+                duplicate_matches[file_index] = _existing_concern_match(matched_media)
             continue
 
         current_hashes.add(media_hash)
@@ -661,12 +702,17 @@ def _deterministic_concern_media_check(media_files):
         accepted_files.append(uploaded_file)
         accepted_indices.append(file_index)
 
-    return accepted_files, accepted_indices, rejected
+    return accepted_files, accepted_indices, rejected, duplicate_matches
 
 
 def _concern_media_check_results(media_files, *, config, run_ai=True):
     """Build an indexed result for every uploaded file without persisting it."""
-    accepted_files, accepted_indices, rejected = _deterministic_concern_media_check(media_files)
+    (
+        accepted_files,
+        accepted_indices,
+        rejected,
+        duplicate_matches,
+    ) = _deterministic_concern_media_check(media_files)
     ai_results = (
         _attachment_authenticity_results(
             accepted_files,
@@ -689,16 +735,17 @@ def _concern_media_check_results(media_files, *, config, run_ai=True):
     results = []
     for original_index, uploaded_file in enumerate(media_files):
         if original_index in rejected:
-            results.append(
-                {
-                    "index": original_index,
-                    "name": uploaded_file.name,
-                    "status": "rejected",
-                    "authenticity_status": "blocked",
-                    "authenticity_verdict": "deterministic_rejection",
-                    "message": rejected[original_index],
-                }
-            )
+            result = {
+                "index": original_index,
+                "name": uploaded_file.name,
+                "status": "rejected",
+                "authenticity_status": "blocked",
+                "authenticity_verdict": "deterministic_rejection",
+                "message": rejected[original_index],
+            }
+            if duplicate_matches.get(original_index) is not None:
+                result["existing_match"] = duplicate_matches[original_index]
+            results.append(result)
             continue
 
         accepted_position = accepted_position_by_original[original_index]
@@ -899,9 +946,6 @@ def decorate_concerns(queryset, user):
         voted_ids = set()
     for concern in concerns:
         concern.user_vote = 1 if concern.pk in voted_ids else 0
-        # Severity-banded, not popularity. See concerns/severity.py for why
-        # `votes * 3 + comments * 2` was wrong for this system.
-        concern.priority_score = compute_priority_score(concern)
         concern.severity = severity_label(concern)
         concern.severity_assessed = severity_level(concern)[1]
     return concerns
@@ -1140,7 +1184,7 @@ class GuestConcernCreateView(APIView):
             )
         if low_information_reason(description):
             return Response(
-                {"description": ["Please describe one concern clearly and include only relevant details about the issue."]},
+                {"description": ["Please include only relevant details about the issue."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1164,20 +1208,50 @@ class GuestConcernCreateView(APIView):
             validated_file.seek(0)
             media_phash = phash_file(raw_content)
             media_phash_blocks = phash_blocks_file(raw_content)
-            if media_hash in media_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
-                return Response({"media": ["This photo was already uploaded before."]}, status=status.HTTP_400_BAD_REQUEST)
+            exact_match = (
+                ConcernMedia.objects.filter(sha256_hash=media_hash)
+                .exclude(concern__status=Concern.Status.REJECTED)
+                .select_related("concern")
+                .first()
+            )
+            if media_hash in media_hashes or exact_match is not None:
+                payload = {"media": [DUPLICATE_PHOTO_MESSAGE]}
+                if exact_match is not None:
+                    payload["existing_match"] = _existing_concern_match(exact_match)
+                return Response(payload, status=status.HTTP_400_BAD_REQUEST)
             candidate_ids = phash_candidate_ids(
                 SCOPE_CONCERN_MEDIA,
                 phashes=[media_phash],
                 blocks=media_phash_blocks,
             )
-            existing_phashes = (
-                list(ConcernMedia.objects.filter(pk__in=candidate_ids).exclude(phash="").values_list("phash", "phash_blocks"))
+            existing_media = (
+                list(
+                    ConcernMedia.objects.filter(pk__in=candidate_ids)
+                    .exclude(phash="")
+                    .exclude(concern__status=Concern.Status.REJECTED)
+                    .select_related("concern")
+                )
                 if candidate_ids
                 else []
             )
+            existing_phashes = [(media.phash, media.phash_blocks) for media in existing_media]
             if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
-                return Response({"media": ["This image appears to have been uploaded before."]}, status=status.HTTP_400_BAD_REQUEST)
+                matched_media = next(
+                    (
+                        media
+                        for media in existing_media
+                        if media_looks_duplicate(
+                            media_phash,
+                            media_phash_blocks,
+                            [(media.phash, media.phash_blocks)],
+                        )
+                    ),
+                    None,
+                )
+                payload = {"media": [DUPLICATE_PHOTO_MESSAGE]}
+                if matched_media is not None:
+                    payload["existing_match"] = _existing_concern_match(matched_media)
+                return Response(payload, status=status.HTTP_400_BAD_REQUEST)
             media_hashes.add(media_hash)
             current_phashes.append((media_phash, media_phash_blocks))
             validated_media.append((uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks))
@@ -1403,7 +1477,7 @@ class ConcernListCreateView(APIView):
             return Response({"description": ["Describe the issue in at least 20 characters."]}, status=status.HTTP_400_BAD_REQUEST)
         if low_information_reason(description):
             return Response(
-                {"description": ["Please describe one concern clearly and include only relevant details about the issue."]},
+                {"description": ["Please include only relevant details about the issue."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if category_ref and category_ref.location_required:
@@ -1444,22 +1518,48 @@ class ConcernListCreateView(APIView):
             raw_content = validated_file.read(); validated_file.seek(0)
             media_phash = phash_file(raw_content)
             media_phash_blocks = phash_blocks_file(raw_content)
-            if media_hash in media_hashes or ConcernMedia.objects.filter(sha256_hash=media_hash).exists():
-                return Response({"media": ["This photo was already uploaded before."]}, status=status.HTTP_400_BAD_REQUEST)
+            exact_match = (
+                ConcernMedia.objects.filter(sha256_hash=media_hash)
+                .exclude(concern__status=Concern.Status.REJECTED)
+                .select_related("concern")
+                .first()
+            )
+            if media_hash in media_hashes or exact_match is not None:
+                payload = {"media": [DUPLICATE_PHOTO_MESSAGE]}
+                if exact_match is not None:
+                    payload["existing_match"] = _existing_concern_match(exact_match)
+                return Response(payload, status=status.HTTP_400_BAD_REQUEST)
             candidate_ids = phash_candidate_ids(
                 SCOPE_CONCERN_MEDIA, phashes=[media_phash], blocks=media_phash_blocks
             )
-            if candidate_ids:
-                existing_phashes = list(
-                    ConcernMedia.objects.filter(pk__in=candidate_ids).exclude(phash="").values_list("phash", "phash_blocks")
+            existing_media = (
+                list(
+                    ConcernMedia.objects.filter(pk__in=candidate_ids)
+                    .exclude(phash="")
+                    .exclude(concern__status=Concern.Status.REJECTED)
+                    .select_related("concern")
                 )
-            else:
-                existing_phashes = []
+                if candidate_ids
+                else []
+            )
+            existing_phashes = [(media.phash, media.phash_blocks) for media in existing_media]
             if media_looks_duplicate(media_phash, media_phash_blocks, [*existing_phashes, *current_phashes]):
-                return Response(
-                    {"media": ["This image appears to have been uploaded before."]},
-                    status=status.HTTP_400_BAD_REQUEST,
+                matched_media = next(
+                    (
+                        media
+                        for media in existing_media
+                        if media_looks_duplicate(
+                            media_phash,
+                            media_phash_blocks,
+                            [(media.phash, media.phash_blocks)],
+                        )
+                    ),
+                    None,
                 )
+                payload = {"media": [DUPLICATE_PHOTO_MESSAGE]}
+                if matched_media is not None:
+                    payload["existing_match"] = _existing_concern_match(matched_media)
+                return Response(payload, status=status.HTTP_400_BAD_REQUEST)
             media_hashes.add(media_hash)
             current_phashes.append((media_phash, media_phash_blocks))
             validated_media.append((uploaded_file, validated_file, media_hash, media_phash, media_phash_blocks))
@@ -1976,7 +2076,11 @@ class ConcernFeedView(APIView):
                         float(concern.longitude),
                     )
 
-        concerns.sort(key=lambda item: (item.priority_score, item.updated_at, item.pk), reverse=True)
+        severity_order = {"low": 0, "moderate": 1, "high": 2, "critical": 3}
+        concerns.sort(
+            key=lambda item: (severity_order.get(item.severity, 0), item.updated_at, item.pk),
+            reverse=True,
+        )
         return Response(ConcernSerializer(concerns, many=True, context={"request": request, "privacy_safe": True}).data)
 
 

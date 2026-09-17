@@ -141,10 +141,6 @@ export const FLAG_REASON: Record<string, PlainTerm> = {
     label: "Possibly already reported",
     help: "A very similar report was filed nearby. Check before creating duplicate work.",
   },
-  urgent_attention: {
-    label: "May need urgent attention",
-    help: "The report describes possible immediate danger. Open it before the rest of the queue.",
-  },
   media_integrity: {
     label: "Photo may not be genuine",
     help: "The photo shows signs of editing, of being made by a computer, or of being a picture of a screen. This is a suspicion, not proof — open the photo and judge for yourself.",

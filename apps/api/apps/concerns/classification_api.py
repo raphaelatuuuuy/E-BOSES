@@ -838,8 +838,6 @@ class ResidentConcernPrecheckView(APIView):
             incident_community = Community.objects.filter(
                 pk=location_review["community_id"], status=Community.Status.ACTIVE
             ).first()
-        if location_review and location_review.get("accepted") is False:
-            return Response({"location": [location_review.get("message") or "Choose a served location."]}, status=status.HTTP_400_BAD_REQUEST)
         category_queryset = ConcernCategory.objects.filter(code=selected_category, is_active=True)
         if incident_community is not None:
             category_queryset = category_queryset.filter(Q(community=incident_community) | Q(community__isnull=True))
@@ -916,6 +914,7 @@ class ResidentConcernPrecheckView(APIView):
                 selected_category=inferred_category,
                 title=title,
                 description=description,
+                images=images,
             )
             if duplicate_feedback:
                 payload = _resident_feedback(
@@ -1110,7 +1109,7 @@ def _rewind(uploaded) -> None:
         pass
 
 
-def _report_duplicate_feedback(config, *, request, selected_category: str, title: str, description: str) -> dict:
+def _report_duplicate_feedback(config, *, request, selected_category: str, title: str, description: str, images=None) -> dict:
     if not config.report_duplicate_detection_enabled:
         return {"found": False}
     fingerprints = report_fingerprints(
@@ -1133,7 +1132,13 @@ def _report_duplicate_feedback(config, *, request, selected_category: str, title
         report_fingerprint=fingerprints["report_fingerprint"],
         report_text_fingerprint=fingerprints["report_text_fingerprint"],
         report_location_bucket=fingerprints["report_location_bucket"],
+        address=_resolved_address(
+            request.data.get("latitude"),
+            request.data.get("longitude"),
+            local_only=True,
+        ).get("address") if request.data.get("latitude") and request.data.get("longitude") else "",
     )
+    text_match = None
     duplicate = find_duplicate_concern(
         candidate,
         enabled=True,
@@ -1141,26 +1146,115 @@ def _report_duplicate_feedback(config, *, request, selected_category: str, title
         lookback_days=getattr(config, "report_duplicate_lookback_days", 180),
         distance_meters=getattr(config, "report_duplicate_distance_meters", 1000),
     )
-    if not duplicate.possible_duplicate or not duplicate.matched_concern_id:
-        return {"found": False}
-    match = Concern.objects.filter(
-        pk=duplicate.matched_concern_id,
-        community=config.community,
-    ).exclude(status=Concern.Status.REJECTED).first()
-    if not match:
-        return {"found": False}
-    return {
-        "found": True,
-        "action": config.report_duplicate_action,
-        "tracking_id": match.tracking_id,
-        "message": "A similar report may already exist near this location. Check it first or continue if this is a new issue.",
-        "concern_id": match.pk,
-        "title": match.title,
-        "summary": match.summary or match.description[:160],
-        "reporter_count": 1 + Concern.objects.filter(duplicate_of_id=match.pk).count(),
-        "status": match.status,
-        "distance_meters": duplicate.distance_meters,
-    }
+    if duplicate.possible_duplicate and duplicate.matched_concern_id:
+        match = Concern.objects.filter(
+            pk=duplicate.matched_concern_id,
+            community=config.community,
+        ).exclude(status=Concern.Status.REJECTED).first()
+        if match:
+            text_match = {
+                "found": True,
+                "action": config.report_duplicate_action,
+                "tracking_id": match.tracking_id,
+                "message": "A similar report may already exist near this location. Check it first or continue if this is a new issue.",
+                "concern_id": match.pk,
+                "title": match.title,
+                "summary": match.summary or match.description[:160],
+                "reporter_count": 1 + Concern.objects.filter(duplicate_of_id=match.pk).count(),
+                "status": match.status,
+                "distance_meters": duplicate.distance_meters,
+            }
+    photo_match = None
+    if images and config.photo_duplicate_llm_enabled:
+        photo_match = _photo_duplicate_precheck(config=config, concern=candidate, prepared_images=images)
+    if photo_match:
+        return {
+            "found": True,
+            "action": "block",
+            "photo_duplicate": True,
+            "tracking_id": photo_match["tracking_id"],
+            "message": "This issue was already reported.",
+            "concern_id": photo_match["concern_id"],
+            "title": photo_match["title"],
+            "summary": photo_match["summary"],
+            "reporter_count": 1 + Concern.objects.filter(duplicate_of_id=photo_match["concern_id"]).count(),
+            "status": photo_match["status"],
+            "view_report_url": f"/concerns/{photo_match['concern_id']}/",
+        }
+    if text_match:
+        return text_match
+    return {"found": False}
+
+
+def _photo_duplicate_precheck(*, config, concern: Concern, prepared_images: list) -> dict | None:
+    if not config.photo_duplicate_llm_enabled or not prepared_images or not concern.address:
+        return None
+    limit = max(1, int(config.photo_duplicate_candidate_limit))
+    since = timezone.now() - timedelta(days=config.report_duplicate_lookback_days)
+    pool = (
+        Concern.objects.filter(
+            community=concern.community,
+            address=concern.address,
+            created_at__gte=since,
+        )
+        .exclude(pk=concern.pk)
+        .exclude(status=Concern.Status.REJECTED)
+        .prefetch_related("media")
+        .order_by("-created_at")[:200]
+    )
+    candidates: list[dict] = []
+    for other in pool:
+        if len(candidates) >= limit:
+            break
+        media = next((m for m in other.media.all() if m.mime_type.startswith("image/")), None)
+        if media is None:
+            continue
+        try:
+            with media.file.open("rb") as handle:
+                raw = handle.read()
+        except (OSError, ValueError, NotImplementedError):
+            continue
+        image = prepare_image_for_gemma(raw, filename=media.original_filename, mime_type=media.mime_type)
+        if image is None:
+            continue
+        candidates.append({
+            "concern_id": other.pk,
+            "tracking_id": other.tracking_id,
+            "public_id": str(other.public_id),
+            "title": other.title,
+            "summary": other.summary or other.description[:160],
+            "status": other.status,
+            "captured_at": other.created_at.date().isoformat(),
+            "image": image,
+        })
+    if not candidates:
+        return None
+    comparisons = compare_photo_duplicates(submitted_images=prepared_images, candidates=candidates)
+    if not comparisons:
+        return None
+    for comparison in comparisons:
+        if comparison.get("verdict") != "same_issue":
+            continue
+        match_concern = next(
+            (c for c in candidates if c["concern_id"] == comparison.get("concern_id")),
+            None,
+        )
+        if match_concern is None:
+            continue
+        existing = Concern.objects.filter(
+            pk=comparison["concern_id"],
+            community=concern.community,
+        ).exclude(status=Concern.Status.REJECTED).first()
+        if existing is None:
+            continue
+        return {
+            "concern_id": existing.pk,
+            "tracking_id": existing.tracking_id,
+            "title": existing.title,
+            "summary": existing.summary or existing.description[:160],
+            "status": existing.status,
+        }
+    return None
 
 
 def _resident_message_text(
@@ -1186,8 +1280,6 @@ def _resident_message_text(
         messages.append("No photo was attached. A clear photo helps confirm your report.")
     if details.get("privacy_scan_required"):
         messages.append("This may show private details. Sensitive parts may be blurred before public display.")
-    if details.get("urgent_attention"):
-        messages.append("This report may need urgent attention. It will be sent as a high-priority concern for official review.")
     if duplicate_feedback and duplicate_feedback.get("found"):
         action = duplicate_feedback.get("action")
         if action == ConcernClassificationConfiguration.ReportDuplicateAction.BLOCK:
@@ -1214,34 +1306,66 @@ def _resident_feedback(
     field_errors = {}
     can_submit = True
     needs_revision = False
-    photo_error = (
-        "Please remove photos that don't show the reported issue and upload clear ones."
-        if photo_count > 1
-        else "Please submit a photo that clearly shows the reported issue."
-    )
     text_feedback = None
     try:
         issue_count = int(details.get("issue_count", 1))
     except (TypeError, ValueError):
         issue_count = 1
+    reviewed_verdicts = [
+        item
+        for item in details.get("photo_verdicts") or []
+        if isinstance(item, dict)
+    ]
+    photo_evidence_contradicted = relationship == "contradicts_report" or any(
+        str(item.get("relevance") or "").lower() == "contradicts_report"
+        for item in reviewed_verdicts
+    )
+    photo_evidence_invalid = photo_evidence_contradicted or (
+        image_uploaded
+        and details.get("image_review_succeeded") is True
+        and (
+            relationship != "supports_report"
+            or (
+                reviewed_verdicts
+                and len(reviewed_verdicts) < len(prepared_indices or [])
+            )
+            or any(
+                str(item.get("relevance") or "").lower() != "supports_report"
+                for item in reviewed_verdicts
+            )
+        )
+    )
+    photo_error = (
+        "The photo contradicts the issue described. Upload a matching photo."
+        if photo_evidence_contradicted
+        else (
+            "Please remove photos that don't show the reported issue and upload clear ones."
+            if photo_count > 1
+            else "Please submit a photo that clearly shows the reported issue."
+        )
+    )
     if not details.get("failure_type") and issue_count > 1:
         text_feedback = "Please report one issue at a time only"
     elif not details.get("failure_type") and issue_count == 0:
-        text_feedback = "Please describe one concern clearly and include only relevant details about the issue."
-    elif not details.get("failure_type") and result.get("outcome") == "irrelevant":
-        text_feedback = "Please describe one concern clearly and include only relevant details about the issue."
-    elif not details.get("failure_type") and result.get("outcome") == "needs_review" and not primary:
-        text_feedback = "Please describe one concern clearly and include only relevant details about the issue."
+        text_feedback = "Please include only relevant details about the issue."
+    elif (
+        not details.get("failure_type")
+        and result.get("outcome") == "irrelevant"
+        and not photo_evidence_invalid
+    ):
+        text_feedback = "Please include only relevant details about the issue."
+    elif (
+        not details.get("failure_type")
+        and result.get("outcome") == "needs_review"
+        and not primary
+        and not photo_evidence_invalid
+    ):
+        text_feedback = "Please include only relevant details about the issue."
     if text_feedback:
         field_errors["description"] = text_feedback
         can_submit = False
         needs_revision = True
-    photo_evidence_contradicted = relationship == "contradicts_report" or any(
-        isinstance(item, dict)
-        and str(item.get("relevance") or "").lower() == "contradicts_report"
-        for item in details.get("photo_verdicts") or []
-    )
-    if not text_feedback and photo_evidence_contradicted:
+    if not text_feedback and photo_evidence_invalid:
         field_errors["media"] = photo_error
         can_submit = False
         needs_revision = True
@@ -1253,24 +1377,6 @@ def _resident_feedback(
         field_errors["media"] = photo_error
         can_submit = False
         needs_revision = True
-    elif not text_feedback and details.get("image_review_succeeded") is True:
-        reviewed_verdicts = [
-            item
-            for item in details.get("photo_verdicts") or []
-            if isinstance(item, dict)
-        ]
-        if (
-            relationship != "supports_report"
-            or len(reviewed_verdicts) < len(prepared_indices or [])
-            or not reviewed_verdicts
-            or any(
-            str(item.get("relevance") or "").lower() != "supports_report"
-            for item in reviewed_verdicts
-            )
-        ):
-            field_errors["media"] = photo_error
-            can_submit = False
-            needs_revision = True
     elif not text_feedback and relationship == "no_useful_image_evidence":
         needs_revision = True
     if (
@@ -1307,9 +1413,7 @@ def _resident_feedback(
         "suggested_category_label": "",
         "category_confirm_required": False,
         "photo_required": False,
-        "photo_verdicts": []
-        if text_feedback
-        else _photo_verdict_payload(
+        "photo_verdicts": _photo_verdict_payload(
             details,
             photo_count=photo_count,
             image_errors=image_errors or {},
@@ -1591,7 +1695,6 @@ def _review_details(result: dict, *, selected_category: str, image_uploaded: boo
         "photo_assessment": details.get("photo_assessment"),
         "evidence_relationship": details.get("evidence_relationship"),
         "missing_information": details.get("missing_information") or [],
-        "urgent_attention": bool(details.get("urgent_attention")),
         "severity": details.get("severity"),
         "privacy_scan_required": bool(details.get("privacy_scan_required")),
         "suspected_sensitive_classes": details.get("suspected_sensitive_classes") or [],

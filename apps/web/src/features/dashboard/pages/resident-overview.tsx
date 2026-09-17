@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -7,6 +7,7 @@ import { geocodeCommunityStreet } from "@/features/auth/lib/forward-geocode"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { initials } from "@/lib/initials"
 import {
+  getConcern,
   getResidentDashboardSummary,
   listAnnouncements,
   listFeedConcerns,
@@ -42,6 +43,7 @@ import { isCriticalConcern } from "@/features/dashboard/lib/critical-concern"
 export default function ResidentOverviewPage() {
   usePageTitle("Home")
   const navigate = useNavigate()
+  const location = useLocation()
   const { user } = useAuthSession()
   const [summary, setSummary] = useState<ResidentRoleSummary | null>(null)
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
@@ -58,6 +60,17 @@ export default function ResidentOverviewPage() {
   const [reportsOpen, setReportsOpen] = useState(false)
   const [detailPost, setDetailPost] = useState<Concern | null>(null)
   const [detailAlert, setDetailAlert] = useState<EmergencyAlert | null>(null)
+
+  useEffect(() => {
+    const trackConcernId = (location.state as { trackConcernId?: unknown } | null)
+      ?.trackConcernId
+    if (typeof trackConcernId !== "string" || !trackConcernId) return
+
+    navigate(location.pathname, { replace: true, state: null })
+    void getConcern(trackConcernId)
+      .then((report) => setDetailPost(report))
+      .catch(() => navigate(`/dashboard/reports/${trackConcernId}`))
+  }, [location.pathname, location.state, navigate])
 
   useEffect(() => {
     function open() {

@@ -418,6 +418,10 @@ export function ResponderLeafletMap({
           border-color: rgb(255 255 255 / 0.28);
           color: #14203c;
         }
+        .responder-map-scope .eboses-map-light .eboses-pin--glyph.is-alert .eboses-pin__disc {
+          background: #fef2f2;
+          color: #dc2626;
+        }
         .responder-map-scope .eboses-map-light .eboses-pin--glyph.is-you .eboses-pin__disc {
           background: #ffffff;
           border-color: rgb(37 99 235 / 0.35);

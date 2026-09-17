@@ -1903,21 +1903,20 @@ def resident_validation_message(
     rule_key = (rule or "").lower()
 
     if rule_key in {"required", "exists", "missing"}:
-        return f"Could not find the {name}. Please retake a clearer photo."
+        return f"Please retake a clearer photo, we could not find the {name}."
     if rule_key in {"regex", "pattern", "format", "format_mismatch"}:
-        return f"Could not read the {name} clearly. Please retake a clearer photo."
+        return f"Please retake a clearer photo, we could not read the {name} clearly."
     if rule_key in {"not_expired", "expiry", "expired"}:
-        return "This is expired or the date could not be read. Please use a valid one."
+        return "Please use a valid ID, this one is expired or the date could not be read."
     if rule_key in {"date_format", "date"}:
-        return f"Could not read the {name} as a date. Please retake a clearer photo."
+        return f"Please retake a clearer photo, we could not read the {name} as a date."
     if rule_key in {"profile_match", "matches_profile", "similarity"}:
-        display_name = name[:1].upper() + name[1:] if name else "This detail"
-        return f"{display_name} does not match what you entered. Please check your details."
+        return f"Please check your details, your {name.lower()} does not match what you entered."
     if rule_key in {"recency"}:
-        return "This document looks too old. Please use a more recent one."
+        return "Please use a more recent document, this one looks too old."
     if rule_key in {"allowed_value", "contains_keyword"}:
-        return f"Could not confirm the {name}. Please retake a clearer photo."
-    return f"Could not verify the {name}. Please retake a clearer photo."
+        return f"Please retake a clearer photo, we could not confirm the {name}."
+    return f"Please retake a clearer photo, we could not verify the {name}."
 
 
 def normalize_extracted_dates(document_type, extracted: dict) -> dict:
@@ -2009,7 +2008,7 @@ def validate_extracted_field_rules(
                     "label": label,
                     "passed": False,
                     "rule": "required",
-                    "detail": f"Could not find the {friendly_label}. Please retake a clearer photo.",
+                    "detail": f"Please retake a clearer photo, we could not find the {friendly_label}.",
                 }
             )
             continue
@@ -2025,7 +2024,7 @@ def validate_extracted_field_rules(
                         "label": label,
                         "passed": False,
                         "rule": "not_expired",
-                        "detail": "Could not read the expiry date. Please retake a clearer photo.",
+                        "detail": "Please retake a clearer photo, we could not read the expiry date.",
                     }
                 )
             elif parsed < date.today():
@@ -2035,7 +2034,7 @@ def validate_extracted_field_rules(
                         "label": label,
                         "passed": False,
                         "rule": "not_expired",
-                        "detail": "ID has already expired. Please use a valid one.",
+                        "detail": "Please use a valid ID, this one has already expired.",
                     }
                 )
             else:
@@ -2055,7 +2054,7 @@ def validate_extracted_field_rules(
                     "label": label,
                     "passed": False,
                     "rule": "not_expired",
-                    "detail": "Could not find the expiry date. Please retake a clearer photo.",
+                    "detail": "Please retake a clearer photo, we could not find the expiry date.",
                 }
             )
 
@@ -2069,7 +2068,7 @@ def validate_extracted_field_rules(
                         "label": label,
                         "passed": False,
                         "rule": "date_format",
-                        "detail": "Could not read the date of birth. Please retake a clearer photo.",
+                        "detail": "Please retake a clearer photo, we could not read the date of birth.",
                     }
                 )
             elif parsed > date.today():
@@ -2079,7 +2078,7 @@ def validate_extracted_field_rules(
                         "label": label,
                         "passed": False,
                         "rule": "date_format",
-                        "detail": "Date of birth looks incorrect. Please retake a clearer photo.",
+                        "detail": "Please retake a clearer photo, the date of birth looks incorrect.",
                     }
                 )
             else:
@@ -2092,7 +2091,7 @@ def validate_extracted_field_rules(
                             "label": label,
                             "passed": False,
                             "rule": "date_format",
-                            "detail": "Date of birth looks incorrect. Please retake a clearer photo.",
+                            "detail": "Please retake a clearer photo, the date of birth looks incorrect.",
                         }
                     )
 
@@ -2323,10 +2322,10 @@ def evaluate_rules(
                 )
             elif parsed is None:
                 passed = False
-                detail = "Could not read the expiry date. Please retake a clearer photo."
+                detail = "Please retake a clearer photo, we could not read the expiry date."
             elif parsed < date.today():
                 passed = False
-                detail = "ID has already expired. Please use a valid one."
+                detail = "Please use a valid ID, this one has already expired."
             else:
                 passed = True
                 detail = f"Valid until {parsed.strftime('%B %d, %Y')}."

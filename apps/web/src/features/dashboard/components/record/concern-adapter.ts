@@ -72,6 +72,17 @@ export function concernSeverityOf(concern: Concern): {
   severity: Severity
   assessed: boolean
 } {
+  if (
+    concern.severity === "low" ||
+    concern.severity === "moderate" ||
+    concern.severity === "high" ||
+    concern.severity === "critical"
+  ) {
+    return {
+      severity: concern.severity,
+      assessed: concern.severity_assessed !== false,
+    }
+  }
   const assessment = concern.ai_assessment
   const completed = assessment?.status === "completed"
 
@@ -81,9 +92,6 @@ export function concernSeverityOf(concern: Concern): {
     severityEstimate: completed
       ? (assessment?.severity_estimate ?? null)
       : null,
-    urgentAttention: completed
-      ? (assessment?.urgent_attention ?? false)
-      : false,
     currentDanger: completed ? (assessment?.current_danger ?? false) : false,
     incidentTiming: completed ? (assessment?.incident_timing ?? null) : null,
     relevance: completed ? (assessment?.nlp_confidence ?? null) : null,

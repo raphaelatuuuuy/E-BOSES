@@ -163,7 +163,6 @@ export interface ConcernAiAssessment {
   evidence_relationship: ConcernEvidenceRelationship | ""
   privacy_scan_required: boolean
   suspected_sensitive_classes: string[]
-  urgent_attention: boolean
   incident_timing?: string
   current_danger?: boolean
   missing_information: string[]
@@ -394,7 +393,6 @@ export interface Concern {
   viewers?: PublicUser[]
   severity?: "low" | "moderate" | "high" | "critical"
   severity_assessed?: boolean
-  urgent_attention?: boolean
   severity_reason?: string
   clarifications?: ConcernClarification[]
   appeals?: ConcernAppeal[]
@@ -403,7 +401,6 @@ export interface Concern {
   conversation?: ConcernConversationItem[]
   vote_count: number
   comment_count: number
-  priority_score: number
   user_vote: 0 | 1
   /** Coarse distance (m) from the requesting viewer, set by the feed API when
       the client passes its position — powers the "nearby" tab without
@@ -490,6 +487,8 @@ export interface ResidentReportOverviewDay {
   submitted: number
   resolved: number
   critical: number
+  sos?: number
+  severity?: { low: number; moderate: number; high: number; critical: number }
 }
 
 export interface ResidentReportOverview {
@@ -715,6 +714,16 @@ export interface ConcernPhotoVerdict {
   message: string
 }
 
+export interface ConcernPhotoDuplicateMatch {
+  concern_id: number
+  tracking_id: string
+  public_id: string
+  status: ConcernStatus | string
+  title?: string
+  summary?: string
+  distance_meters?: number | null
+}
+
 export interface ConcernResolvedAddress {
   address: string
   address_primary: string
@@ -731,6 +740,8 @@ export interface ConcernActiveDuplicate {
   reporter_count: number
   distance_meters: number | null
   status: string
+  photo_duplicate?: boolean
+  view_report_url?: string
 }
 
 export interface ConcernPrecheckResult {
@@ -790,6 +801,7 @@ export interface ConcernMediaCheckFile {
   authenticity_status: "passed" | "review_required" | "blocked"
   authenticity_verdict: string
   message: string
+  existing_match?: ConcernPhotoDuplicateMatch | null
 }
 
 export interface ConcernMediaCheckResult {

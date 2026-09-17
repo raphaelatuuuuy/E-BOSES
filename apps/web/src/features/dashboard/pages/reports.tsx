@@ -883,6 +883,7 @@ export default function ReportsPage() {
   const [nextReportPage, setNextReportPage] = useState<number | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [detailCache, setDetailCache] = useState<Record<string, Concern>>({})
+  const [routeDetailFailed, setRouteDetailFailed] = useState<string | null>(null)
   const [error, setError] = useState("")
   const [residentSearch, setResidentSearch] = useState("")
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([])
@@ -1047,11 +1048,14 @@ export default function ReportsPage() {
         if (!cancelled)
           setDetailCache((prev) => ({ ...prev, [reportIdToLoad]: full }))
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled && reportIdToLoad === routeReportId)
+          queueMicrotask(() => setRouteDetailFailed(reportIdToLoad))
+      })
     return () => {
       cancelled = true
     }
-  }, [detailCache, initialVisibleReport, selectedReport])
+  }, [detailCache, initialVisibleReport, selectedReport, routeReportId])
 
   const eventRefresh = useDebouncedCallback(
     () => void refreshSelectedReport(),
@@ -1074,6 +1078,7 @@ export default function ReportsPage() {
   const [prevRouteId, setPrevRouteId] = useState(routeReportId)
   if (prevRouteId !== routeReportId) {
     setPrevRouteId(routeReportId)
+    setRouteDetailFailed(null)
     if (routeReportId) setSelectedReport(routeReportId)
     else setSelectedReport(null)
   }
@@ -1094,6 +1099,13 @@ export default function ReportsPage() {
 
   useEffect(() => {
     if (!loaded || !selectedReport || reports.length === 0) return
+    if (routeReportId && routeReportId === selectedReport) {
+      if (routeDetailFailed === selectedReport) {
+        queueMicrotask(() => setSelectedReport(null))
+        navigate("/dashboard/reports", { replace: true })
+      }
+      return
+    }
     const inFilter = filterResidentReports(reports, activeFilter).some(
       (report) =>
         report.public_id === selectedReport ||
@@ -1103,7 +1115,7 @@ export default function ReportsPage() {
       queueMicrotask(() => setSelectedReport(null))
       if (routeReportId) navigate("/dashboard/reports", { replace: true })
     }
-  }, [activeFilter, reports, selectedReport, routeReportId, navigate, loaded])
+  }, [activeFilter, reports, selectedReport, routeReportId, routeDetailFailed, navigate, loaded])
 
   const closeReportDetails = useCallback(() => {
     setSelectedReport(null)

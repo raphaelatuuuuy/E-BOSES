@@ -14,6 +14,7 @@ const OPTIONS = [
     selectedBg: "bg-blue-50",
     selectedBorder: "border-blue-500",
     selectedLabel: "text-blue-700",
+    idleLabel: "",
     Icon: MaleIcon,
   },
   {
@@ -25,17 +26,19 @@ const OPTIONS = [
     selectedBg: "bg-rose-50",
     selectedBorder: "border-rose-500",
     selectedLabel: "text-rose-700",
+    idleLabel: "",
     Icon: FemaleIcon,
   },
   {
     value: "prefer_not_to_say",
-    label: "Prefer not to say",
+    label: "Skip",
     iconBg: "bg-neutral-100",
     iconRing: "ring-neutral-200",
     iconColor: "text-neutral-500",
     selectedBg: "bg-neutral-100",
     selectedBorder: "border-neutral-400",
     selectedLabel: "text-neutral-700",
+    idleLabel: "text-neutral-500",
     Icon: PreferNotIcon,
   },
 ] as const
@@ -119,9 +122,13 @@ export function GenderStep({ values, errors, onChange, onContinue }: GenderStepP
 
   return (
     <div className="flex flex-1 flex-col pt-2">
-      <StepTitle>Hi {firstName}, what&apos;s your gender?</StepTitle>
+      <StepTitle className="text-center">
+        Good day, {firstName}.
+        <br />
+        What&apos;s your gender?
+      </StepTitle>
 
-      <div className="mt-8 flex flex-col gap-3">
+      <div className="mt-8 grid grid-cols-3 gap-3">
         {OPTIONS.map((option) => {
           const selected = values.gender === option.value
           const Icon = option.Icon
@@ -131,7 +138,7 @@ export function GenderStep({ values, errors, onChange, onContinue }: GenderStepP
               type="button"
               onClick={() => onChange("gender", option.value)}
               className={cn(
-                "flex h-14 w-full items-center gap-3.5 rounded-[12px] border-2 bg-white px-3.5 text-left text-base font-medium text-foreground transition-[border-width,border-color,background-color,box-shadow]",
+                "flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded-[12px] border-2 bg-white px-2 py-4 text-center text-sm font-medium text-foreground transition-[border-width,border-color,background-color,box-shadow]",
                 selected
                   ? cn("border-[3px] shadow-sm", option.selectedBorder, option.selectedBg)
                   : "border-input hover:bg-neutral-50 focus-visible:border-[3px] focus-visible:border-primary",
@@ -148,7 +155,7 @@ export function GenderStep({ values, errors, onChange, onContinue }: GenderStepP
               >
                 <Icon className="size-5" />
               </span>
-              <span className={selected ? cn("font-semibold", option.selectedLabel) : ""}>
+              <span className={selected ? cn("font-semibold", option.selectedLabel) : option.idleLabel}>
                 {option.label}
               </span>
             </button>

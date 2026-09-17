@@ -75,6 +75,7 @@ export function SheetDialog({
   bodyClassName,
   draggable = false,
   showClose = true,
+  bodyScrollable = true,
 }: {
   open: boolean
   onClose: () => void
@@ -103,6 +104,7 @@ export function SheetDialog({
   bodyClassName?: string
   draggable?: boolean
   showClose?: boolean
+  bodyScrollable?: boolean
 }) {
   const [dragY, setDragY] = useState(0)
   const [dragging, setDragging] = useState(false)
@@ -306,11 +308,14 @@ export function SheetDialog({
                   <XIcon className="size-6" strokeWidth={2} />
                 </SheetIconButton>
               ) : null}
+              {!actions && !showClose && onBack ? (
+                <span className="size-10 shrink-0" aria-hidden />
+              ) : null}
             </div>
           </div>
         </div>
 
-        <div className={cn("scrollbar-hide min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] [-webkit-overflow-scrolling:touch]", bodyClassName)}>
+        <div className={cn("scrollbar-hide min-h-0 flex-1 overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] [-webkit-overflow-scrolling:touch]", bodyScrollable ? "overflow-y-auto" : "overflow-visible", bodyClassName)}>
           {children}
         </div>
 

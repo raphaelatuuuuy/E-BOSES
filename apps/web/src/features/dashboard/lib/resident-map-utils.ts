@@ -186,12 +186,6 @@ export function mapConcernToFeedPost(
   c: ResidentMapConcern,
   homeCommunityId?: string | null
 ): Concern {
-  const severityBand = {
-    low: 0,
-    moderate: 1000,
-    high: 2000,
-    critical: 3000,
-  } as const
   const severity = c.severity ?? (c.priority === "normal" ? "low" : c.priority)
   return {
     id: c.id,
@@ -278,7 +272,6 @@ export function mapConcernToFeedPost(
     comments: [],
     vote_count: 0,
     comment_count: 0,
-    priority_score: severityBand[severity as keyof typeof severityBand] ?? 0,
     user_vote: 0,
     created_at: c.created_at,
     updated_at: c.updated_at,

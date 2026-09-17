@@ -57,7 +57,7 @@ def integrity_feedback(result: dict | None) -> str:
     if verdict in {"suspected_edit", "suspected_ai"}:
         return "Please upload an unedited photo of the original document."
     if verdict == "impossible_content":
-        return "Upload a clear photo of the complete original document."
+        return "Please upload a genuine photo of your ID."
     if result.get("signals"):
         return "Please upload a clear photo of the original document."
     return "Please upload a clear photo of the original document."

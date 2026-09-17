@@ -1,6 +1,7 @@
 import * as React from "react"
 import { flushSync } from "react-dom"
 import {
+  CircleXIcon,
   CreditCardIcon,
   IdCardIcon,
   LoaderCircleIcon,
@@ -148,7 +149,9 @@ export function ProofStep({
 
   const allSidesAccepted =
     requiredSides.length > 0 &&
-    requiredSides.every((_, i) => acceptedFiles[i] instanceof File)
+    requiredSides.every(
+      (_, i) => acceptedFiles[i] instanceof File && !sideErrors[i],
+    )
 
   const isApproved =
     typeStatus === "approved" &&
@@ -228,16 +231,52 @@ export function ProofStep({
     setFullPreviewUrl(null)
   }
 
+  const sheetDrag = React.useRef<{ y: number; lastY: number; lastT: number; v: number } | null>(null)
+
+  function sheetRoot(el: HTMLElement | null) {
+    return el?.parentElement?.parentElement ?? null
+  }
+
+  function onSheetDragStart(event: React.PointerEvent<HTMLDivElement>) {
+    if (busy) return
+    sheetDrag.current = { y: event.clientY, lastY: event.clientY, lastT: performance.now(), v: 0 }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const root = sheetRoot(event.currentTarget)
+    if (root) root.style.transition = "none"
+  }
+
+  function onSheetDragMove(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = sheetDrag.current
+    if (!drag) return
+    const now = performance.now()
+    const dt = Math.max(now - drag.lastT, 1)
+    drag.v = (event.clientY - drag.lastY) / dt
+    drag.lastY = event.clientY
+    drag.lastT = now
+    const root = sheetRoot(event.currentTarget)
+    if (root) root.style.transform = `translateY(${Math.max(event.clientY - drag.y, 0)}px)`
+  }
+
+  function onSheetDragEnd(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = sheetDrag.current
+    sheetDrag.current = null
+    const root = sheetRoot(event.currentTarget)
+    if (!drag || !root) return
+    const dy = event.clientY - drag.y
+    const fresh = performance.now() - drag.lastT < 120
+    const velocity = fresh ? drag.v : 0
+    root.style.transition = "transform 200ms ease-out"
+    root.style.transform = ""
+    if (dy > Math.min(140, root.offsetHeight * 0.25) || (velocity > 0.6 && dy > 40)) {
+      closeDialog()
+    }
+  }
+
   function pickSide(sideIndex: number) {
     if (verifyingOcr || checkingSide !== null) return
     setActiveSide(sideIndex)
     setDialogError(null)
     setTypeStatus((s) => (s === "rejected" ? "idle" : s))
-    setSideErrors((prev) => {
-      const next = [...prev]
-      next[sideIndex] = null
-      return next
-    })
     requestAnimationFrame(() => fileInputRef.current?.click())
   }
 
@@ -276,22 +315,25 @@ export function ProofStep({
     })
 
     if (!result.ok) {
-      // Error state only on the side that failed (not both Front and Back).
+      // Keep the failed photo visible under its error instead of wiping it,
+      // so the resident can see what was rejected.
       setSideErrors((prev) => {
         const next = [...prev]
         next[sideIndex] = result.message
         return next
       })
       setDialogError(null)
+      const viewable =
+        raw.type === "" || raw.type.startsWith("image/")
       setAcceptedFiles((prev) => {
         const next = [...prev]
-        next[sideIndex] = null
+        next[sideIndex] = viewable ? raw : null
         return next
       })
       setPreviewUrls((prev) => {
         const next = [...prev]
         if (next[sideIndex]) URL.revokeObjectURL(next[sideIndex]!)
-        next[sideIndex] = null
+        next[sideIndex] = viewable ? URL.createObjectURL(raw) : null
         return next
       })
       setCheckStatus("")
@@ -354,7 +396,9 @@ export function ProofStep({
 
     const files = requiredSides
       .map((_, i) => acceptedFiles[i])
-      .filter((f): f is File => f instanceof File)
+      .filter(
+        (f, i): f is File => f instanceof File && !sideErrors[i],
+      )
     if (files.length < requiredSides.length) {
       setDialogError(
         requiredSides.length > 1
@@ -548,35 +592,30 @@ export function ProofStep({
         >
           <div className="mx-auto w-full px-6 pb-8 pt-3 sm:px-7 sm:pb-7 sm:pt-7">
             <div
-              className="mx-auto mb-5 h-1 w-10 rounded-full bg-neutral-300 sm:hidden"
+              onPointerDown={onSheetDragStart}
+              onPointerMove={onSheetDragMove}
+              onPointerUp={onSheetDragEnd}
+              onPointerCancel={onSheetDragEnd}
+              className="mx-auto mb-5 h-1 w-10 cursor-grab touch-none rounded-full bg-neutral-300 select-none active:cursor-grabbing sm:hidden"
               aria-hidden
             />
 
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="text-xl font-semibold leading-snug tracking-tight text-neutral-900">
-                {dialogOption ? `Upload your ${dialogOption.name}` : "Upload document"}
-              </h2>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={closeDialog}
-                className="-mr-1 -mt-1 flex size-9 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-50"
-                aria-label="Close"
+            {verifyingOcr ? (
+              <div
+                role="status"
+                aria-label="Verifying document"
+                className="flex min-h-44 flex-col items-center justify-center gap-3 px-3 py-8 text-center"
               >
-                <XIcon className="size-5" />
-              </button>
-            </div>
-            <p className="mt-2 flex items-start gap-2 text-sm leading-snug text-neutral-500">
-              <ShieldCheckIcon
-                className="mt-0.5 size-4 shrink-0 text-neutral-400"
-                strokeWidth={2}
-              />
-              <span>
-                {requiredSides.length > 1
-                  ? "Add clear photos of both sides. We’ll review them before you continue."
-                  : "Add a clear photo of your ID. We’ll review it before you continue."}
-              </span>
-            </p>
+                <LoaderCircleIcon className="size-12 animate-spin text-primary" />
+                <p className="text-sm text-neutral-900">
+                  It could take up to a minute…
+                </p>
+              </div>
+            ) : (
+              <>
+            <h2 className="text-center text-xl font-semibold leading-snug tracking-tight text-neutral-900">
+              {dialogOption ? `Upload your ${dialogOption.name}` : "Upload document"}
+            </h2>
 
             <div className="mt-5 space-y-2">
               {requiredSides.map((side, index) => {
@@ -591,17 +630,22 @@ export function ProofStep({
                 const hasFile = Boolean(file && preview && !isChecking)
                 // Only this row’s own error — never paint Front+Back red from one failure.
                 const showError = Boolean(err)
+                if (isChecking) {
+                  return (
+                    <div key={side}>
+                      <div
+                        role="status"
+                        aria-label={checkStatus || "Running checks…"}
+                        className="flex min-h-36 flex-col items-center justify-center px-3 py-8"
+                      >
+                        <LoaderCircleIcon className="size-10 animate-spin text-primary" />
+                      </div>
+                    </div>
+                  )
+                }
                 if (hasFile) {
                   return (
                     <div key={side}>
-                      <p
-                        className={cn(
-                          "mb-1.5 text-center text-sm font-semibold",
-                          showError ? "text-destructive" : "text-foreground",
-                        )}
-                      >
-                        {label}
-                      </p>
                       <div className="relative overflow-hidden rounded-2xl border border-input">
                         <button
                           type="button"
@@ -628,7 +672,23 @@ export function ProofStep({
                           </div>
                         ) : null}
                       </div>
-                      {err ? <FieldError className="mt-1.5 text-left">{err}</FieldError> : null}
+                      {err ? (
+                        <div
+                          role="alert"
+                          className="mt-1.5 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2.5"
+                        >
+                          <div className="flex items-center gap-2">
+                            <CircleXIcon
+                              className="size-5 shrink-0 text-destructive"
+                              strokeWidth={2}
+                              aria-hidden
+                            />
+                            <p className="min-w-0 flex-1 text-[13px] leading-snug font-medium text-destructive">
+                              {err}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   )
                 }
@@ -694,7 +754,23 @@ export function ProofStep({
                         )}
                       </div>
                     </div>
-                    {err ? <FieldError className="mt-1.5 text-left">{err}</FieldError> : null}
+                    {err ? (
+                      <div
+                        role="alert"
+                        className="mt-1.5 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2.5"
+                      >
+                        <div className="flex items-center gap-2">
+                          <CircleXIcon
+                            className="size-5 shrink-0 text-destructive"
+                            strokeWidth={2}
+                            aria-hidden
+                          />
+                          <p className="min-w-0 flex-1 text-[13px] leading-snug font-medium text-destructive">
+                            {err}
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 )
               })}
@@ -704,6 +780,18 @@ export function ProofStep({
             {dialogError && !sideErrors.some(Boolean) ? (
               <FieldError className="mt-3 text-left">{dialogError}</FieldError>
             ) : null}
+
+            <p className="mt-3 flex items-start gap-2 text-sm leading-snug text-neutral-500">
+              <ShieldCheckIcon
+                className="mt-0.5 size-4 shrink-0 text-neutral-400"
+                strokeWidth={2}
+              />
+              <span>
+                {requiredSides.length > 1
+                  ? "Add clear photos of both sides. We’ll review them before you continue."
+                  : "Add a clear photo of your ID. We’ll review it before you continue."}
+              </span>
+            </p>
 
             <input
               ref={fileInputRef}
@@ -729,6 +817,8 @@ export function ProofStep({
                 )}
               </button>
             </div>
+              </>
+            )}
           </div>
         </DialogContent>
       </Dialog>

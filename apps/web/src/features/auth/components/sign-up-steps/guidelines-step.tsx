@@ -57,11 +57,12 @@ export function GuidelinesStep({
   onUnderstand,
 }: GuidelinesStepProps) {
   return (
-    <div className="flex flex-1 flex-col pt-2">
+    <div className="-mt-2 -mb-12 flex flex-1 flex-col pt-0 md:-mt-3 md:-mb-16">
       <StepTitle className="max-w-[34rem] text-[1.625rem] font-semibold leading-[1.25] tracking-tight text-foreground md:text-[1.75rem]">
-        One last thing! Let&apos;s all do our part to keep
-        <br />
-        E-Boses safe and fun.
+        <span className="block text-center">One last thing!</span>
+        <span className="mt-1 block text-center">
+          Let&apos;s all do our part to keep E-Boses safe and fun.
+        </span>
       </StepTitle>
 
       <div className="mt-10 space-y-7">
@@ -84,7 +85,7 @@ export function GuidelinesStep({
 
       {submitError ? <FieldError className="mt-6">{submitError}</FieldError> : null}
 
-      <StepContinueButton onClick={onUnderstand} loading={isSubmitting} disabled={isSubmitting}>
+      <StepContinueButton onClick={onUnderstand} loading={isSubmitting} disabled={isSubmitting} align="start">
         I understand
       </StepContinueButton>
     </div>

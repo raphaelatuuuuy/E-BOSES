@@ -5,6 +5,7 @@ import { createPortal } from "react-dom"
 import { toast } from "sonner"
 import {
   ArrowLeftIcon,
+  CircleAlertIcon,
   FootprintsIcon,
   HomeIcon,
   LocateFixedIcon,
@@ -19,13 +20,21 @@ import {
   validateLocation,
   type LocationClassification,
 } from "@/lib/location-validation"
-import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
+import {
+  addBaseTiles,
+  warmTileCacheForBounds,
+} from "@/features/dashboard/components/map/tile-layers"
 import {
   formatNominatimParts,
   reverseGeocode,
   type AddressParts,
 } from "@/lib/geocode"
-import { refreshOfflineSosConfig } from "@/features/dashboard/components/sos/offline-sos-config"
+import {
+  loadOfflineSosConfig,
+  offlineCommunityOutline,
+  refreshOfflineSosConfig,
+  type OfflineSosConfig,
+} from "@/features/dashboard/components/sos/offline-sos-config"
 import {
   GLYPHS,
   glyphPinHtml,
@@ -166,6 +175,7 @@ interface LocationPickerModalProps {
    * picker UI but accepts and searches every active E-Boses community.
    */
   coverageScope?: "home" | "served"
+  strictBoundary?: boolean
   /**
    * Live pin state, so a host screen can drive its own Continue button instead
    * of making the resident hunt for the pill on the map.
@@ -184,6 +194,9 @@ interface LocationPickerModalProps {
   /** Public browse mode has no center pin; reporting starts in the form instead. */
   publicBrowse?: boolean
   onReportRequest?: () => void
+  onBackRequest?: () => void
+  onAlertsRequest?: () => void
+  showAlertsButton?: boolean
 }
 
 export interface PinState {
@@ -230,6 +243,65 @@ type MapContext = {
   dispatch_policy: CoverageInput["policy"]
   soft_buffer_meters: number
   hard_reject_meters: number
+}
+
+function acceptancePolicy(
+  acceptance: OfflineSosConfig["community"]["acceptance"] | undefined
+): CoverageInput["policy"] {
+  const geometry = acceptance?.geometry as GeoJsonPolygon | null
+  const hasGeometry = geometry?.type === "Polygon" || geometry?.type === "MultiPolygon"
+  const centerLat = Number(acceptance?.centerLatitude)
+  const centerLng = Number(acceptance?.centerLongitude)
+  const radius = Number(acceptance?.radiusMeters)
+  const hasCircle =
+    Number.isFinite(centerLat) &&
+    Number.isFinite(centerLng) &&
+    Number.isFinite(radius) &&
+    radius > 0
+  if (!acceptance || (!hasGeometry && !hasCircle)) return null
+  return {
+    acceptance_center_latitude: hasCircle ? centerLat : null,
+    acceptance_center_longitude: hasCircle ? centerLng : null,
+    acceptance_radius_meters: hasCircle ? radius : 0,
+    acceptance_geometry: hasGeometry ? geometry : null,
+  }
+}
+
+function offlineMapContext(): MapContext | null {
+  const config = loadOfflineSosConfig()
+  const communities = config.communities?.length
+    ? config.communities
+    : [config.community]
+  const community =
+    communities.find(
+      (entry) =>
+        entry.name.trim().toLowerCase() === PRIMARY_COMMUNITY_NAME.toLowerCase()
+    ) ?? communities[0]
+  if (!community) return null
+  const geometry = offlineCommunityOutline(community)
+  if (!geometry) return null
+  const acceptance = community.acceptance
+  const centerLat = Number(acceptance?.centerLatitude)
+  const centerLng = Number(acceptance?.centerLongitude)
+  return {
+    center: {
+      latitude: Number.isFinite(centerLat) ? centerLat : DEFAULT_CENTER[0],
+      longitude: Number.isFinite(centerLng) ? centerLng : DEFAULT_CENTER[1],
+      zoom: 15,
+    },
+    bounds: {
+      min_latitude: community.bounds.minLatitude,
+      max_latitude: community.bounds.maxLatitude,
+      min_longitude: community.bounds.minLongitude,
+      max_longitude: community.bounds.maxLongitude,
+    },
+    boundary: { name: community.name, geometry },
+    recenter_boundary: acceptance?.geometry ?? geometry,
+    home_boundary: geometry,
+    dispatch_policy: acceptancePolicy(acceptance),
+    soft_buffer_meters: 0,
+    hard_reject_meters: 0,
+  }
 }
 
 type LocationClass = LocationClassification
@@ -281,12 +353,16 @@ export default function LocationPickerModal({
   signup = false,
   guestReport = false,
   coverageScope = "home",
+  strictBoundary = false,
   onPinStateChange,
   publicAlerts = EMPTY_ALERTS,
   selectedAlert = null,
   onAlertSelect,
   publicBrowse = false,
   onReportRequest,
+  onBackRequest,
+  onAlertsRequest,
+  showAlertsButton = false,
 }: LocationPickerModalProps) {
   const usesServedCoverage = signup || coverageScope === "served"
   const containerRef = useRef<HTMLDivElement>(null)
@@ -382,14 +458,10 @@ export default function LocationPickerModal({
         lastLookupAtRef.current = Date.now()
         setGeocoding(true)
         if (usesServedCoverage) {
-          // Address lookup and the shared coverage classifier are both public,
-          // so sign-up and guest reports receive the same boundary/radius
-          // decision as authenticated SOS and concern reports.
-          void Promise.all([
-            lookupRegistrationPinAddress(lat, lng),
-            validateLocation(lat, lng),
-          ])
-            .then(([result, classification]) => {
+          const addressRequest = lookupRegistrationPinAddress(lat, lng)
+          const validationRequest = validateLocation(lat, lng)
+          void addressRequest
+            .then((result) => {
               setPreviewParts({
                 primary: result.label || result.street || "Finding street…",
                 secondary: result.community,
@@ -397,10 +469,6 @@ export default function LocationPickerModal({
                   .filter(Boolean)
                   .join(", "),
               })
-              setLocationClass(classification)
-              setOutOfScope(
-                classification.status === "far" || !classification.accepted
-              )
             })
             .catch(() => {
               setPreviewParts({
@@ -408,17 +476,28 @@ export default function LocationPickerModal({
                 secondary: mapContext?.boundary?.name || "",
                 full: "",
               })
-              setLocationClass({
-                status: "far",
-                zone: "unknown",
-                accepted: false,
-                warning: null,
-                message: "Could not validate this location. Try again.",
-                distance_meters: null,
-              })
-              setOutOfScope(true)
             })
-            .finally(() => setGeocoding(false))
+          void validationRequest
+            .then((classification) => {
+              setLocationClass(classification)
+              setOutOfScope(
+                classification.status === "far" ||
+                  !classification.accepted ||
+                  (strictBoundary &&
+                    !insideCoverage(lat, lng, {
+                      boundary: coverageRef.current.boundary,
+                    }))
+              )
+            })
+            .catch(() => {
+              setLocationClass(null)
+              setOutOfScope(
+                !insideCoverage(lat, lng, coverageRef.current)
+              )
+            })
+          void Promise.allSettled([addressRequest, validationRequest]).then(
+            () => setGeocoding(false)
+          )
           return
         }
         void Promise.all([
@@ -426,30 +505,38 @@ export default function LocationPickerModal({
             lat,
             lng,
             mapContext?.boundary?.name || "Your community"
-          ),
-          validateLocation(lat, lng).catch(
+          ).catch(
             () =>
               ({
-                status: "far",
-                zone: "unknown",
-                accepted: false,
-                warning: null,
-                message: "Could not validate this location. Try again.",
-                distance_meters: null,
-              }) as LocationClass
+                primary: "Finding street…",
+                secondary: mapContext?.boundary?.name || "",
+                full: "",
+              }) as never
           ),
+          validateLocation(lat, lng).catch(() => null),
         ]).then(([parts, classification]) => {
           setPreviewParts(parts)
+          if (!classification) {
+            setLocationClass(null)
+            setOutOfScope(!insideCoverage(lat, lng, coverageRef.current))
+            setGeocoding(false)
+            return
+          }
           setLocationClass(classification)
           setOutOfScope(
-            classification.status === "far" || !classification.accepted
+            classification.status === "far" ||
+              !classification.accepted ||
+              (strictBoundary &&
+                !insideCoverage(lat, lng, {
+                  boundary: coverageRef.current.boundary,
+                }))
           )
           setGeocoding(false)
         })
       }
       reverseTimer.current = window.setTimeout(run, LOCATION_LOOKUP_DEBOUNCE_MS)
     },
-    [mapContext?.boundary?.name, usesServedCoverage]
+    [mapContext?.boundary?.name, strictBoundary, usesServedCoverage]
   )
   const scheduleReverseAndValidateRef = useRef(scheduleReverseAndValidate)
   useEffect(() => {
@@ -464,17 +551,16 @@ export default function LocationPickerModal({
         ? Promise.resolve<MapContext | null>(null)
         : apiRequest<MapContext>("/locations/map-context/").catch(() => null)
       void Promise.all([
-        fetchRegistrationCommunities(),
+        fetchRegistrationCommunities().catch(() => null),
         homeContextRequest,
         refreshOfflineSosConfig(),
       ])
         .then(([data, homeContext, sosConfig]) => {
-          const areas = (data.results ?? []).filter(
+          const areas = (data?.results ?? []).filter(
             (area) =>
               area.name.trim().toLowerCase() ===
               PRIMARY_COMMUNITY_NAME.toLowerCase()
           )
-          const boundary = mergeBoundaries(areas)
           const first = areas[0]
           const homeArea = first
           const sosCommunity =
@@ -483,34 +569,27 @@ export default function LocationPickerModal({
                 community.name.trim().toLowerCase() ===
                 PRIMARY_COMMUNITY_NAME.toLowerCase()
             ) ?? sosConfig.community
-          const acceptance = sosCommunity?.acceptance
-          const centerLat = Number(acceptance?.centerLatitude)
-          const centerLng = Number(acceptance?.centerLongitude)
-          const radius = Number(acceptance?.radiusMeters)
-          const dispatch_policy: CoverageInput["policy"] =
-            acceptance &&
-            Number.isFinite(centerLat) &&
-            Number.isFinite(centerLng) &&
-            Number.isFinite(radius) &&
-            radius > 0
-              ? {
-                  acceptance_center_latitude: centerLat,
-                  acceptance_center_longitude: centerLng,
-                  acceptance_radius_meters: radius,
-                  acceptance_geometry:
-                    (acceptance.geometry as GeoJsonPolygon | null) ?? null,
-                }
-              : null
+          const boundary =
+            mergeBoundaries(areas) ?? offlineCommunityOutline(sosCommunity)
+          const offlineCenter = {
+            lat: Number(sosCommunity?.acceptance?.centerLatitude),
+            lng: Number(sosCommunity?.acceptance?.centerLongitude),
+          }
+          const dispatch_policy = acceptancePolicy(sosCommunity?.acceptance)
           setMapContext({
             center: {
               latitude:
                 homeContext?.center.latitude ??
                 first?.center.latitude ??
-                DEFAULT_CENTER[0],
+                (Number.isFinite(offlineCenter.lat)
+                  ? offlineCenter.lat
+                  : DEFAULT_CENTER[0]),
               longitude:
                 homeContext?.center.longitude ??
                 first?.center.longitude ??
-                DEFAULT_CENTER[1],
+                (Number.isFinite(offlineCenter.lng)
+                  ? offlineCenter.lng
+                  : DEFAULT_CENTER[1]),
               zoom: homeContext?.center.zoom ?? 15,
             },
             bounds: {
@@ -531,7 +610,7 @@ export default function LocationPickerModal({
             hard_reject_meters: 0,
           })
         })
-        .catch(() => setMapContext(null))
+        .catch(() => setMapContext(offlineMapContext()))
       return
     }
     void apiRequest<MapContext>("/locations/map-context/")
@@ -582,6 +661,17 @@ export default function LocationPickerModal({
           width: 256px !important;
           height: 256px !important;
           mix-blend-mode: normal !important;
+        }
+        .eboses-location-picker-map .eboses-pin__disc {
+          background: color-mix(in srgb, var(--pin) 16%, white);
+          color: var(--pin);
+        }
+        .eboses-location-picker-map .eboses-pin--glyph.is-alert .eboses-pin__disc {
+          background: #fef2f2;
+          color: #dc2626;
+        }
+        .eboses-location-picker-map .eboses-pin__disc svg {
+          display: block;
         }
       `
       document.head.appendChild(styleEl)
@@ -751,7 +841,10 @@ export default function LocationPickerModal({
     const map = mapRef.current
     if (!open || !map || !mapContext) return
     const boundary = (mapContext.boundary?.geometry ?? null) as never
-    coverageRef.current = { boundary, policy: mapContext.dispatch_policy }
+    coverageRef.current = {
+      boundary,
+      policy: strictBoundary ? null : mapContext.dispatch_policy,
+    }
     const center = pinLatLng(map)
     setOutOfScope(!insideCoverage(center.lat, center.lng, coverageRef.current))
     const initialBoundary = (mapContext.recenter_boundary ?? boundary) as never
@@ -776,6 +869,14 @@ export default function LocationPickerModal({
         if (cancelled || fittedBoundaryRef.current || !mapRef.current) return
         try {
           const bounds = L.geoJSON(initialBoundary).getBounds()
+          if (bounds.isValid()) {
+            warmTileCacheForBounds("light", {
+              minLat: bounds.getSouth(),
+              maxLat: bounds.getNorth(),
+              minLng: bounds.getWest(),
+              maxLng: bounds.getEast(),
+            })
+          }
           const currentSize = map.getSize()
           if (!bounds.isValid() || currentSize.x <= 0 || currentSize.y <= 0)
             return
@@ -794,7 +895,7 @@ export default function LocationPickerModal({
       cancelled = true
       if (frame) window.cancelAnimationFrame(frame)
     }
-  }, [open, mapContext, initialLat, initialLng, mapReady, recenterOnOpen])
+  }, [open, mapContext, initialLat, initialLng, mapReady, recenterOnOpen, strictBoundary])
 
   // Public report-map pins share the resident map's glyphs and sizing. The
   // picker still owns the fixed report pin, so moving the map never creates a
@@ -864,7 +965,7 @@ export default function LocationPickerModal({
                 severity: alert.severity,
                 selected,
                 hoverGrow: true,
-                tint: true,
+                tint: (alert.severity ?? "").toLowerCase() !== "critical",
               })
             : alert.kind === "announcement"
               ? advisoryMarkerHtml(
@@ -1255,8 +1356,15 @@ export default function LocationPickerModal({
     streetPrimary !== "Selected location" &&
     !/^lat\b/i.test(streetPrimary) &&
     !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(streetPrimary)
+  const strictOutside =
+    strictBoundary &&
+    previewLatLng != null &&
+    !insideCoverage(previewLatLng.lat, previewLatLng.lng, {
+      boundary: coverageRef.current.boundary,
+    })
   const canConfirm =
     !outOfScope &&
+    !strictOutside &&
     Boolean(locationClass?.accepted && locationClass.status !== "far") &&
     hasUsableStreet &&
     !geocoding
@@ -1414,18 +1522,51 @@ export default function LocationPickerModal({
             )}
           >
             {publicBrowse ? (
-              <button
-                type="button"
-                onClick={onReportRequest}
-                className="pointer-events-auto flex max-w-[min(100%,340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
-              >
-                <span className="text-[16px] leading-none font-semibold text-neutral-900">
-                  Report a concern
-                </span>
-                <span className="mt-1.5 text-[14px] leading-snug font-medium text-neutral-500">
-                  Make one
-                </span>
-              </button>
+              <div className="pointer-events-none flex w-full items-center justify-center">
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={onReportRequest}
+                    className="pointer-events-auto flex max-w-[min(calc(100vw-125px),340px)] flex-col items-center rounded-full border border-neutral-200 bg-white px-7 py-3.5 text-center shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
+                  >
+                    <span className="text-[16px] leading-none font-semibold text-neutral-900">
+                      Report a concern
+                    </span>
+                    <span className="mt-1.5 text-[14px] leading-snug font-medium text-neutral-500">
+                      Make one
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={
+                      onBackRequest ??
+                      (() => window.history.back())
+                    }
+                    aria-label="Go back"
+                    title="Go back"
+                    className="pointer-events-auto absolute top-1/2 right-full mr-2 flex size-[69px] shrink-0 -translate-y-1/2 items-center justify-center rounded-full border border-neutral-200 bg-white shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
+                  >
+                    <ArrowLeftIcon
+                      className="size-6 text-neutral-900"
+                      strokeWidth={2}
+                    />
+                  </button>
+                  {showAlertsButton ? (
+                    <button
+                      type="button"
+                      onClick={onAlertsRequest}
+                      aria-label="Open alerts"
+                      title="Open alerts"
+                      className="pointer-events-auto absolute top-1/2 left-full ml-2 flex size-[69px] shrink-0 -translate-y-1/2 items-center justify-center rounded-full border border-neutral-200 bg-white shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
+                    >
+                      <CircleAlertIcon
+                        className="size-6 text-neutral-900"
+                        strokeWidth={2}
+                      />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
             ) : outOfScope ? (
               <p
                 role="status"
@@ -1435,7 +1576,7 @@ export default function LocationPickerModal({
                   {OUT_OF_SCOPE_MESSAGE}
                 </span>
                 <span className="mt-1.5 text-[13px] leading-snug font-medium text-neutral-500">
-                  Drag the map back inside the service area.
+                  Drag the pin within the barangay only.
                 </span>
               </p>
             ) : (

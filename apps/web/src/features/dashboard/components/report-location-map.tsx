@@ -558,6 +558,10 @@ export function ReportLocationMap({
           border: none !important;
           box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15) !important;
         }
+        .eboses-report-map .eboses-pin--glyph.is-alert .eboses-pin__disc {
+          background: #fef2f2 !important;
+          color: #dc2626 !important;
+        }
         .eboses-report-map .eboses-pin__disc svg {
           display: block;
         }

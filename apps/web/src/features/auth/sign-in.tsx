@@ -1,6 +1,3 @@
-import { Link } from "react-router-dom"
-import { CircleQuestionMarkIcon } from "lucide-react"
-
 import type { AuthUser } from "@/features/auth/api"
 import { AuthPageLogo } from "@/features/auth/components/auth-page-logo"
 import { AuthSidePanel } from "@/features/auth/components/auth-side-panel"
@@ -37,15 +34,6 @@ export default function LoginPage({ onForgotPassword, onSignUp, onSuccess }: Log
               />
             </div>
           </div>
-        </div>
-        <div className="shrink-0 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2 text-center">
-          <Link
-            to="/help"
-            className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground transition-colors hover:text-primary"
-          >
-            <CircleQuestionMarkIcon className="size-4" strokeWidth={2} aria-hidden="true" />
-            Need help?
-          </Link>
         </div>
       </section>
     </main>

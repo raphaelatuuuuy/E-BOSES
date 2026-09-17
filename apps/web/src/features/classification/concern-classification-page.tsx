@@ -31,6 +31,7 @@ import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { RuleMenu } from "./shared"
 import {
   getConcernClassificationConfig,
+  getLlmDecisionLog,
   getValidationActivity,
   saveConcernClassificationConfig,
   type ConcernClassificationConfig,
@@ -1023,6 +1024,21 @@ export default function ConcernClassificationPage() {
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null)
   const [configureOpen, setConfigureOpen] = useState(false)
   const [testOpen, setTestOpen] = useState(false)
+  const [logCount, setLogCount] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    void getLlmDecisionLog({ page_size: 1 })
+      .then((result) => {
+        if (!cancelled) setLogCount(result.count ?? 0)
+      })
+      .catch(() => {
+        if (!cancelled) setLogCount(0)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -1083,6 +1099,7 @@ export default function ConcernClassificationPage() {
       eyebrow="Operations"
       title="System behavior"
       description="Set how E-Boses reads and routes concerns, emergencies, and identity documents. The pages below show what happened, what the system decided, and how staff can correct it."
+      stats={[{ label: "LLM decisions logged", value: logCount }]}
       action={
         <ConfigHeroAction onClick={() => setConfigureOpen(true)}>
           Configure

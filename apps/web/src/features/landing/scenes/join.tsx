@@ -1,6 +1,4 @@
 // apps/web/src/features/landing/scenes/join.tsx
-import { Link } from "react-router-dom"
-import { ArrowRightIcon } from "lucide-react"
 import { useRef } from "react"
 import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
@@ -58,17 +56,9 @@ export function Join() {
           </span>
           .
         </h2>
-        <div className="relative z-10 mt-9 flex flex-wrap items-center justify-center gap-5">
-          <Link
-            to="/sign-up"
-            className="relative z-10 inline-flex min-h-13 items-center gap-3 rounded-full bg-accent px-8 text-lg font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-brand-orange-strong hover:shadow-[0_4px_16px_rgba(255,80,3,0.45)] active:translate-y-0 active:shadow-[0_4px_14px_rgba(255,80,3,0.35)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white motion-reduce:transition-none motion-reduce:hover:translate-y-0"
-          >
-            Get started <ArrowRightIcon aria-hidden className="size-5" strokeWidth={1.5} />
-          </Link>
-        </div>
         <div
           aria-hidden
-          className="pointer-events-none relative z-0 -mt-10 w-[min(34vw,720px)] max-w-none select-none md:-mt-14"
+          className="pointer-events-none relative z-0 mt-4 w-[min(34vw,720px)] max-w-none select-none md:mt-6"
           style={{ aspectRatio: "4764 / 5008" }}
         >
           <img

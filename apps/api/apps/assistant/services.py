@@ -35,6 +35,8 @@ SYSTEM_PROMPT = (
     "- Answer only about E-Boses and barangay services. If asked anything else, say you "
     "can only help with E-Boses and offer a related topic.\n"
     "- Reply in plain text. Never use markdown, asterisks, headings or links.\n"
+    "- Never introduce yourself, greet, or say hello. The chat already greeted "
+    "the user, so begin every reply directly with the answer.\n"
     "- Use short paragraphs. For instructions, use numbered lines like '1. ' on their own line.\n"
     "- Keep the whole reply under 120 words.\n"
     "- Never invent features, prices, office hours or phone numbers. The only numbers you "
@@ -87,6 +89,12 @@ def consume_budget(session_id):
             "You have asked a lot of questions in a short time. "
             "Please wait a few minutes, or choose a topic below."
         )
+
+
+LEADING_SELF_INTRODUCTION = re.compile(
+    r"^(?:hello|hi|hey)[!.]?\s+i(?:'m| am)\s+the\s+e-boses\s+assistant\b[^.!?\n]*[.!?]\s*",
+    re.IGNORECASE,
+)
 
 
 def strip_markdown(text):
@@ -156,7 +164,7 @@ def answer(message="", topic_id="", history=None, session_id=""):
                 return Answer(reply=reply, suggestions=suggestions, source=SOURCE_RULES)
         return _fallback_answer()
 
-    reply = strip_markdown(raw)
+    reply = LEADING_SELF_INTRODUCTION.sub("", strip_markdown(raw)).strip()
     if not reply:
         return _fallback_answer()
 

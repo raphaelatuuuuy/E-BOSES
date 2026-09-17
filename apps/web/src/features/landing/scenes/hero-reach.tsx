@@ -1,7 +1,6 @@
 ﻿// apps/web/src/features/landing/scenes/hero-reach.tsx
 import { Fragment, useRef } from "react"
-import { Link } from "react-router-dom"
-import { ArrowRightIcon } from "lucide-react"
+import { ArrowDownIcon } from "lucide-react"
 import gsap from "gsap"
 import { useGSAP } from "@gsap/react"
 
@@ -114,13 +113,18 @@ export function HeroReach() {
           Every voice, heard. Report local concerns or send an emergency alert with your
           location and follow every update through resolution.
         </p>
-        <div className="hero-ctas mt-7 flex flex-wrap items-center justify-center gap-5">
-          <Link
-            to="/sign-up"
-            className="inline-flex min-h-12 items-center gap-3 rounded-full bg-accent px-7 font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+        <div className="hero-ctas mt-7 flex flex-col items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => document.getElementById("about")?.scrollIntoView({ behavior: "smooth" })}
+            aria-label="Scroll to How E-Boses helps"
+            className="inline-flex size-12 items-center justify-center rounded-full bg-accent text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
           >
-            Create an account to report <ArrowRightIcon aria-hidden className="size-5" strokeWidth={1.5} />
-          </Link>
+            <ArrowDownIcon aria-hidden className="size-5" strokeWidth={1.5} />
+          </button>
+          <p className="text-xs font-medium tracking-wide text-white/50">
+            Scroll to explore
+          </p>
         </div>
       </div>
 
