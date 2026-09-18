@@ -838,6 +838,7 @@ export function MobileEmergencyReportDetailPage({
                 bare
                 disabled={terminal}
                 className="h-full min-h-0 flex-1"
+                smsTo={reporterContactPhone}
               />
             </div>
           ) : (

@@ -1,0 +1,1 @@
+function e(){return new Promise((e,t)=>{if(!navigator.geolocation){t(Error(`Geolocation is not supported on this device.`));return}navigator.geolocation.getCurrentPosition(e,t,{enableHighAccuracy:!0,timeout:2e4,maximumAge:0})})}export{e as t};

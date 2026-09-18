@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CircleCheck, ChevronRightIcon, PencilIcon, PlusIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
@@ -6,8 +6,8 @@ import { apiRequest } from "@/lib/api"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { CAPABILITY_LABEL } from "@/features/dashboard/lib/capabilities"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
-import { ConfigurationInfoRow, ConfigurationTable, ConfigurationTableEmpty } from "@/features/dashboard/components/config/configuration-table"
-import { SheetActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
+import { ConfigurationTable, ConfigurationTableEmpty, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
+import { SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 import {
   ConfigHeroAction,
   ConfigShell,
@@ -113,13 +113,33 @@ export default function OfficialRolesPage({ embedded = false }: { embedded?: boo
   const [draft, setDraft] = useState<Draft | null>(null)
   const [originalDraft, setOriginalDraft] = useState<string | null>(null)
   const [editOpen, setEditOpen] = useState(false)
-  const [deleteOpen, setDeleteOpen] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<Position | null>(null)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState("")
   const [debounced, setDebounced] = useState("")
   const [unitKey, setUnitKey] = useState("all")
   const [offset, setOffset] = useState(0)
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
+  const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null)
+  const [deleteGrown, setDeleteGrown] = useState(false)
+  const removeRef = useRef<() => void>(() => {})
+  useEffect(() => { removeRef.current = () => void removePosition(draft?.id) })
+  useEffect(() => { if (!editOpen) { setConfirmingRemove(false); setDeleteCountdown(null) } }, [editOpen ])
+  useEffect(() => {
+    if (deleteCountdown == null) return
+    if (deleteCountdown === 0) {
+      setDeleteCountdown(null)
+      void removeRef.current()
+      return
+    }
+    const timer = window.setTimeout(() => setDeleteCountdown(deleteCountdown - 1), 1000)
+    return () => window.clearTimeout(timer)
+  }, [deleteCountdown ])
+  useEffect(() => {
+    if (!confirmingRemove) return
+    setDeleteGrown(false)
+    const grow = window.setTimeout(() => setDeleteGrown(true), 30)
+    return () => window.clearTimeout(grow)
+  }, [confirmingRemove ])
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(query.trim()), 250)
@@ -192,13 +212,13 @@ export default function OfficialRolesPage({ embedded = false }: { embedded?: boo
     }
   }
 
-  async function confirmDelete() {
-    if (!deleteTarget) return
+  async function removePosition(id: number | null | undefined) {
+    if (id == null) return
     try {
-      await apiRequest(`/concerns/admin/positions/${deleteTarget.id}/`, { method: "DELETE" })
+      await apiRequest(`/concerns/admin/positions/${id}/`, { method: "DELETE" })
       await refreshUser()
       toast.success("Position removed")
-      setDeleteOpen(false); setDeleteTarget(null); load()
+      setEditOpen(false); setDraft(null); setOriginalDraft(null); load()
     } catch (error) {
       toast.error(describeApiError(error, "Could not remove the position."))
     }
@@ -254,6 +274,7 @@ export default function OfficialRolesPage({ embedded = false }: { embedded?: boo
         </ConfigHeroAction>
       }
     >
+      <div className="space-y-4">
       <ConfigurationListToolbar
         search={query}
         onSearch={(value) => { setQuery(value); setOffset(0) }}
@@ -261,56 +282,86 @@ export default function OfficialRolesPage({ embedded = false }: { embedded?: boo
         filters={[
           { key: "all", label: "All", count: unitCounts.all },
           ...unitsWithPositions.map((unit) => ({ key: String(unit.id), label: unit.short_name || unit.name, count: unitCounts[String(unit.id)] })),
+          { key: "__add", label: "Add a position" },
         ]}
         activeFilter={unitKey}
-        onFilter={(value) => { setUnitKey(value); setOffset(0) }}
+        onFilter={(value) => { if (value === "__add") { openNew(); return } setUnitKey(value); setOffset(0) }}
       />
 
+      <div>
       <ConfigurationTable label="Permissions" hideHeader>
-        {page.map((position) => (
-          <ConfigurationInfoRow
+        {page.map((position) => {
+          const unitName = position.department ? departments.find((d) => d.id === position.department)?.name ?? "Unit" : null
+          const countText = position.permissions.length === 0 ? "No permissions assigned" : `(${position.permissions.length} permission${position.permissions.length === 1 ? "" : "s"})`
+          return (
+          <ConfigurationTableRow
             key={position.id}
-            icon={ShieldCheckIcon}
-            title={position.name}
-            subtext={position.department ? departments.find((d) => d.id === position.department)?.name ?? "Unit" : null}
-            description={
-              position.permissions.length === 0
-                ? "No permissions assigned"
-                : `${position.permissions.length} permission${position.permissions.length === 1 ? "" : "s"}`
-            }
-            actions={<>
-              <SheetIconButton label={`Edit ${position.name}`} onClick={() => { setDraft(position); setOriginalDraft(positionSnapshot(position)); setEditOpen(true) }}>
-                <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
-              </SheetIconButton>
-              <SheetIconButton label={`Delete ${position.name}`} onClick={() => { setDeleteTarget(position); setDeleteOpen(true) }} className="text-neutral-500 hover:text-sos">
-                <Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden />
-              </SheetIconButton>
-            </>}
-          />
-        ))}
+            actions={<SheetIconButton label={`Edit ${position.name}`} onClick={() => { setDraft(position); setOriginalDraft(positionSnapshot(position)); setEditOpen(true) }} className="mr-1 size-8 text-neutral-400 hover:text-neutral-700">
+              <PencilIcon className="size-5" strokeWidth={1.9} aria-hidden />
+            </SheetIconButton>}
+          >
+            <div className="min-w-0 flex-1">
+              <p className="break-words text-[15px] leading-snug font-bold text-neutral-900">
+                {position.name}
+              </p>
+              <p className="mt-1 text-[13px] text-neutral-500">
+                {unitName ? <span className="text-neutral-400">{unitName}</span> : null}
+                {unitName ? " " : null}
+                {countText}
+              </p>
+            </div>
+          </ConfigurationTableRow>
+          )
+        })}
         {page.length === 0 && !loading ? <ConfigurationTableEmpty>No positions found.</ConfigurationTableEmpty> : null}
       </ConfigurationTable>
 
-      <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="positions" />
+      <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="positions" className="py-1" inline />
+      </div>
+      </div>
 
       {/* Edit dialog */}
       {draft && (
         <SheetDialog
           open={editOpen}
           onClose={() => { setEditOpen(false); setDraft(null); setOriginalDraft(null) }}
-          title={draft.id ? `Edit ${draft.name}` : "New position"}
+          onBack={() => { setEditOpen(false); setDraft(null); setOriginalDraft(null) }}
+          showClose={false}
+          titleClassName="text-center"
+          title={<span className="inline-flex items-center gap-2"><ShieldCheckIcon className="size-6" strokeWidth={2} aria-hidden />Position<span className="text-brand-orange">Details</span></span>}
           size="wide"
           footer={
-            <SheetActionRow>
-              <SheetSecondaryButton disabled={saving} onClick={() => { setEditOpen(false); setDraft(null) }}>Cancel</SheetSecondaryButton>
-              <SheetPrimaryButton
-                tone="accent"
-                disabled={saving || !draft.name || Boolean(draft.id && positionSnapshot(draft) === originalDraft)}
-                onClick={() => void save()}
-              >
-                {saving ? "Saving…" : draft.id ? "Save changes" : "Create position"}
-              </SheetPrimaryButton>
-            </SheetActionRow>
+            <div key={confirmingRemove ? "confirm" : "edit"} className="motion-safe:animate-slide-in-right">
+            {confirmingRemove ? (
+              <div className="flex items-center gap-2">
+                <SheetSecondaryButton className="h-11 w-auto flex-none px-6 text-[15px]" onClick={() => { setDeleteCountdown(null); setConfirmingRemove(false) }}>No</SheetSecondaryButton>
+                <SheetPrimaryButton tone="danger" onClick={() => { if (deleteCountdown != null) setDeleteCountdown(null); else setDeleteCountdown(3) }} className={`h-11 min-w-0 flex-1 gap-2 overflow-hidden whitespace-nowrap text-[15px] transition-[max-width] duration-500 ease-out ${deleteGrown ? "max-w-[999px]" : "max-w-11 px-0"}`}>
+                  <Trash2Icon className="size-5 shrink-0" strokeWidth={2} aria-hidden />
+                  <span className={`overflow-hidden tabular-nums transition-[max-width,opacity] delay-150 duration-300 ${deleteGrown ? "max-w-32 opacity-100" : "max-w-0 opacity-0"}`}>
+                    {deleteCountdown != null ? `Cancel ${deleteCountdown}s` : "Delete"}
+                  </span>
+                </SheetPrimaryButton>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <SheetPrimaryButton
+                  tone="accent"
+                  disabled={saving || !draft.name || Boolean(draft.id && positionSnapshot(draft) === originalDraft)}
+                  onClick={() => void save()}
+                  className="h-11 min-w-0 flex-1 text-[15px]"
+                >
+                  {saving ? "Saving…" : draft.id ? "Save changes" : "Create position"}
+                </SheetPrimaryButton>
+                {draft.id ? (
+                  <SheetPrimaryButton tone="danger" aria-label="Remove position" onClick={() => setConfirmingRemove(true)} disabled={saving} className="h-11 w-11 flex-none px-0 text-[15px]">
+                    <Trash2Icon className="size-5" strokeWidth={2} aria-hidden />
+                  </SheetPrimaryButton>
+                ) : (
+                  <SheetSecondaryButton disabled={saving} onClick={() => { setEditOpen(false); setDraft(null) }} className="h-11 w-auto flex-none px-6 text-[15px]">Cancel</SheetSecondaryButton>
+                )}
+              </div>
+            )}
+            </div>
           }
         >
           <div className="space-y-6 pb-4">
@@ -349,19 +400,6 @@ export default function OfficialRolesPage({ embedded = false }: { embedded?: boo
         </SheetDialog>
       )}
 
-      {/* Delete dialog */}
-      <SheetDialog
-        open={deleteOpen}
-        onClose={() => { setDeleteOpen(false); setDeleteTarget(null) }}
-        title={deleteTarget ? `Delete ${deleteTarget.name}?` : ""}
-        description="This position will be removed. People assigned to it will lose these permissions."
-        footer={
-          <SheetActionRow>
-            <SheetSecondaryButton onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }}>Cancel</SheetSecondaryButton>
-            <SheetPrimaryButton tone="danger" onClick={() => void confirmDelete()}>Delete position</SheetPrimaryButton>
-          </SheetActionRow>
-        }
-      />
     </ConfigShell>
   )
 }

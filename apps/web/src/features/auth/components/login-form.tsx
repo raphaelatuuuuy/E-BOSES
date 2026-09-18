@@ -278,20 +278,26 @@ export function LoginForm({
           Create an account
         </Button>
 
-        <div className="mt-2 flex items-center gap-3" aria-hidden="true">
-          <span className="h-px flex-1 bg-border" />
-          <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            or
-          </span>
-          <span className="h-px flex-1 bg-border" />
-        </div>
+        <>
+          <div className="mt-2 flex items-center gap-3" aria-hidden="true">
+            <span className="h-px flex-1 bg-border" />
+            <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              or
+            </span>
+            <span className="h-px flex-1 bg-border" />
+          </div>
 
-        <Link
-          to="/report-issue"
-          className="mt-1 flex h-12 w-full items-center justify-center rounded-full border border-foreground bg-white text-base font-semibold text-foreground transition-colors hover:bg-foreground hover:text-white"
-        >
-          Continue as guest
-        </Link>
+          <Link
+            to={
+              import.meta.env.MODE === "capacitor"
+                ? "/guest-report"
+                : "/report-issue"
+            }
+            className="mt-1 flex h-12 w-full items-center justify-center rounded-full border border-foreground bg-white text-base font-semibold text-foreground transition-colors hover:bg-foreground hover:text-white"
+          >
+            Continue as guest
+          </Link>
+        </>
       </form>
     </div>
   )

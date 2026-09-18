@@ -183,7 +183,7 @@ export function ListDropdown({
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="flex min-h-11 w-full items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-left text-read text-brand-navy transition-colors hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy/20"
+        className="flex min-h-11 w-full items-center gap-3 rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-left text-read text-neutral-900 transition-colors hover:border-neutral-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy/20"
       >
         <span className="min-w-0 flex-1 truncate">{selected?.label ?? "Choose"}</span>
         <ChevronDownIcon className={cn("size-4 shrink-0 text-neutral-400 transition-transform", open && "rotate-180")} strokeWidth={1.8} aria-hidden />
@@ -200,7 +200,7 @@ export function ListDropdown({
               className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-neutral-50"
             >
               <span className="min-w-0 flex-1">
-                <span className="block text-read font-medium text-brand-navy">{option.label}</span>
+                <span className="block text-read font-medium text-neutral-900">{option.label}</span>
                 {option.description ? <span className="mt-0.5 block text-meta text-neutral-500">{option.description}</span> : null}
               </span>
               {option.value === value ? <CheckIcon className="size-4 shrink-0 text-accent" strokeWidth={2.2} aria-hidden /> : null}

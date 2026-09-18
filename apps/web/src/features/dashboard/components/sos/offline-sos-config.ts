@@ -4,8 +4,12 @@ import type {
   EmergencyQuickQuestion,
 } from "@/features/dashboard/emergency-api"
 import { defaultQuickQuestionsForCategory } from "./sos-questions.ts"
+import { resolveSosApiBase } from "./offline-sos-network.ts"
+import { GENERATED_OFFLINE_STREETS } from "./offline-streets.generated.ts"
 
 export const SOS_CONFIG_VERSION = 3
+
+const BUNDLE_VERSION_KEY = "eboses:offline-sos:bundle-version"
 
 export type OfflineStreet = {
   name: string
@@ -191,12 +195,48 @@ export function loadOfflineSosConfig(): OfflineSosConfig {
     const stored = window.localStorage.getItem(STORAGE_KEY)
     if (stored) {
       const parsed: unknown = JSON.parse(stored)
-      if (validConfig(parsed)) return parsed
+      if (validConfig(parsed)) return withBundledStreets(parsed)
     }
   } catch {
     // Storage can be disabled in private browsing; the bundled copy still works.
   }
-  return BASELINE_OFFLINE_SOS_CONFIG
+  return withBundledStreets(BASELINE_OFFLINE_SOS_CONFIG)
+}
+
+type OfflineCommunity = OfflineSosConfig["community"]
+
+function mergeBundledStreets(
+  existing: OfflineStreet[]
+): OfflineStreet[] {
+  if (!GENERATED_OFFLINE_STREETS.length) return existing
+  const seen = new Set(
+    existing.map((street) => street.name.trim().toLowerCase())
+  )
+  const extra: OfflineStreet[] = []
+  for (const street of GENERATED_OFFLINE_STREETS) {
+    const name = street.name.trim()
+    const key = name.toLowerCase()
+    if (!name || seen.has(key) || street.points.length < 2) continue
+    seen.add(key)
+    extra.push({ name, points: street.points })
+  }
+  return extra.length ? [...existing, ...extra] : existing
+}
+
+function withBundledStreets(config: OfflineSosConfig): OfflineSosConfig {
+  const community: OfflineCommunity = {
+    ...config.community,
+    streets: mergeBundledStreets(config.community.streets ?? []),
+  }
+  if (community.streets === config.community.streets) return config
+  if (!config.communities?.length) return { ...config, community }
+  return {
+    ...config,
+    community,
+    communities: config.communities.map((item) =>
+      item.name === config.community.name ? community : item
+    ),
+  }
 }
 
 export function offlineCommunityOutline(
@@ -382,11 +422,7 @@ export function nearestOfflineStreet(
 export async function refreshOfflineSosConfig() {
   if (!navigator.onLine) return loadOfflineSosConfig()
   try {
-    const rawApiBase = (import.meta.env?.VITE_API_BASE_URL ?? "/api").trim()
-    const apiBase =
-      !rawApiBase || rawApiBase === "/" || rawApiBase === "/api"
-        ? "/api"
-        : rawApiBase.replace(/\/$/, "")
+    const apiBase = resolveSosApiBase()
     const response = await fetch(`${apiBase}/public/offline-sos-config/`, {
       credentials: "omit",
       cache: "no-store",
@@ -398,4 +434,11 @@ export async function refreshOfflineSosConfig() {
     // The bundled/cached copy is the guaranteed path.
   }
   return loadOfflineSosConfig()
+}
+
+export async function checkOfflineSosBundleUpdate() {
+  const stored = window.localStorage.getItem(BUNDLE_VERSION_KEY)
+  if (stored === String(SOS_CONFIG_VERSION)) return
+  window.localStorage.setItem(BUNDLE_VERSION_KEY, String(SOS_CONFIG_VERSION))
+  await refreshOfflineSosConfig()
 }

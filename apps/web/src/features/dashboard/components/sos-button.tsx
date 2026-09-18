@@ -22,6 +22,50 @@ function isActiveAlert(alert: EmergencyAlert | null) {
   return Boolean(alert && isEmergencyActive(alert.status))
 }
 
+const SOS_ACTIVE_CACHE_KEY = "eboses:sos-active-alert:v1"
+const SOS_ACTIVE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+function sosActiveCacheKey(userId: number | null) {
+  return `${SOS_ACTIVE_CACHE_KEY}:${userId ?? "guest"}`
+}
+
+function readCachedSosAlert(userId: number | null): EmergencyAlert | null {
+  try {
+    const raw = window.localStorage.getItem(sosActiveCacheKey(userId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as {
+      userId?: number | null
+      alert?: EmergencyAlert | null
+      savedAt?: number
+    }
+    if ((parsed.userId ?? null) !== (userId ?? null)) return null
+    if (
+      !Number.isFinite(parsed.savedAt) ||
+      Date.now() - (parsed.savedAt as number) > SOS_ACTIVE_CACHE_MAX_AGE_MS
+    )
+      return null
+    return isActiveAlert(parsed.alert ?? null)
+      ? (parsed.alert as EmergencyAlert)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function writeCachedSosAlert(
+  userId: number | null,
+  alert: EmergencyAlert | null
+) {
+  try {
+    window.localStorage.setItem(
+      sosActiveCacheKey(userId),
+      JSON.stringify({ userId: userId ?? null, alert, savedAt: Date.now() })
+    )
+  } catch {
+    // Cache is a hint only; the server stays authoritative.
+  }
+}
+
 export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   const { user } = useAuthSession()
   const apiOnline = useApiReachability()
@@ -34,6 +78,31 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   const [dutyDialogOpen, setDutyDialogOpen] = useState(false)
   const [veilArmed, setVeilArmed] = useState(false)
   const veilTimer = useRef<number | undefined>(undefined)
+  const loginCheckedRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    const id = user?.id ?? null
+    if (id == null || loginCheckedRef.current === id) return
+    loginCheckedRef.current = id
+    let cancelled = false
+    let retries = 0
+    async function checkNow() {
+      if (cancelled || !navigator.onLine) return
+      try {
+        const active = await getActiveEmergency()
+        if (!cancelled) setTrackingAlert(active ?? null)
+      } catch {
+        if (!cancelled && retries < 2) {
+          retries += 1
+          window.setTimeout(checkNow, 5000)
+        }
+      }
+    }
+    void checkNow()
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id])
 
   useEffect(() => {
     if (!user || !apiOnline) return
@@ -54,13 +123,18 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
 
   const offDuty = dutyHours ? !dutyHours.within_duty_hours : false
 
+  const prevUserIdRef = useRef<number | null | undefined>(undefined)
   useEffect(() => {
-    // Resetting cross-account emergency state is intentional here.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    const id = user?.id ?? null
+    if (prevUserIdRef.current === id) return
+    prevUserIdRef.current = id
     setTrackingAlert(null)
     setShellOpen(false)
     setShellMode("wizard")
-    if (!user) return
+  }, [user?.id])
+
+  useEffect(() => {
+    if (!user || !apiOnline) return
     let cancelled = false
     let loading = false
     async function loadActive() {
@@ -93,7 +167,8 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
     window.dispatchEvent(
       new CustomEvent("eboses:sos-active-change", { detail: { active } })
     )
-  }, [trackingAlert])
+    writeCachedSosAlert(user?.id ?? null, trackingAlert)
+  }, [trackingAlert, user?.id])
 
   useEffect(() => {
     window.dispatchEvent(
@@ -116,7 +191,22 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
       setShellOpen(true)
       return
     }
-    if (!user || !apiOnline) {
+    const resident = !user || user.role === "resident"
+    if (!apiOnline) {
+      const cached = readCachedSosAlert(user?.id ?? null)
+      if (cached) {
+        setTrackingAlert(cached)
+        setShellMode("tracking")
+        setShellOpen(true)
+        return
+      }
+      if (resident) {
+        openWizard()
+        return
+      }
+      return
+    }
+    if (!user) {
       openWizard()
       return
     }
@@ -129,13 +219,16 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         setShellOpen(true)
         return
       }
+      if (!resident) {
+        return
+      }
       if (offDuty && hotlines.length) {
         setDutyDialogOpen(true)
         return
       }
       openWizard()
     } catch {
-      openWizard()
+      if (resident) openWizard()
     } finally {
       setCheckingActive(false)
     }
@@ -192,6 +285,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   }, [])
 
   const hasActiveEmergency = isActiveAlert(trackingAlert)
+  const residentShell = !user || user.role === "resident"
 
   function armVeil() {
     if (suppressed || checkingActive || shellOpen || dutyDialogOpen) return
@@ -240,7 +334,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   }
   return (
     <>
-      {veilArmed && !shellOpen && !dutyDialogOpen ? (
+      {veilArmed && residentShell && !shellOpen && !dutyDialogOpen ? (
         <div
           role="button"
           tabIndex={0}

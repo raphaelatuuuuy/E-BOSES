@@ -1,0 +1,1 @@
+function e(e,t=`U`){let n=(e??``).split(/\s+/).filter(Boolean).filter(e=>!/^(jr|sr|ii|iii|iv|v)\.?$/i.test(e));return[n[0],n[n.length-1]].filter((e,t,n)=>!!e&&(t===0||e!==n[0])).map(e=>e[0]?.toUpperCase()??``).join(``)||t}export{e as t};

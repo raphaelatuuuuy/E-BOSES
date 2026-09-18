@@ -12,7 +12,8 @@ import {
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { getAccessToken } from "@/lib/api"
+import { apiOrigin, getAccessToken } from "@/lib/api"
+import { resolveMediaUrl } from "@/lib/media-url"
 import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 
 const blobCache = new Map<string, string>()
@@ -69,16 +70,17 @@ function useAuthenticatedBlob(src: string) {
     let cancelled = false
     let retryTimer: number | undefined
     const token = getAccessToken()
+    const target = resolveMediaUrl(src, apiOrigin())
 
     async function load() {
-      const cached = cacheGet(src)
+      const cached = cacheGet(target)
       if (cached) {
         setObjectUrl(cached)
         return
       }
       setFailed(false)
       try {
-        const response = await fetch(src, {
+        const response = await fetch(target, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
         })
@@ -92,7 +94,7 @@ function useAuthenticatedBlob(src: string) {
           return
         }
         const url = URL.createObjectURL(blob)
-        cachePut(src, url)
+        cachePut(target, url)
         if (!cancelled) setObjectUrl(url)
       } catch {
         if (!cancelled) setFailed(true)

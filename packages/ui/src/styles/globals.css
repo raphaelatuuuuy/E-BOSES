@@ -514,6 +514,7 @@
     monospace;
   --animate-fade-in: fadeIn 0.7s ease-out both;
   --animate-fade-slide-up: fadeSlideUp 0.5s ease-out both;
+  --animate-slide-in-right: slideInRight 0.25s cubic-bezier(0.23, 1, 0.32, 1) both;
   --animate-sos-drop: sosDrop 0.6s ease-out both;
   --animate-sos-ping: sosPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
   --animate-sos-ping-delayed: sosPing 2s cubic-bezier(0, 0, 0.2, 1) infinite
@@ -653,6 +654,18 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
 

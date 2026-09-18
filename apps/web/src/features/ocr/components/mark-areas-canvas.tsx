@@ -51,6 +51,7 @@ export function MarkAreasCanvas(props: {
   onSelectField: (key: string) => void
   onSetFieldRegion: (fieldKey: string, region: FieldRegion) => void
   onRequestUpload?: () => void
+  onBackgroundClick?: () => void
 }) {
   const {
     imageUrl,
@@ -62,6 +63,7 @@ export function MarkAreasCanvas(props: {
     onSelectField,
     onSetFieldRegion,
     onRequestUpload,
+    onBackgroundClick,
   } = props
 
   const canvasFrameRef = useRef<HTMLDivElement>(null)
@@ -167,7 +169,13 @@ export function MarkAreasCanvas(props: {
   const ink = "#171717"
 
   return (
-    <div className="relative flex min-h-[16rem] w-full items-center justify-center overflow-hidden rounded-[18px] bg-white">
+    <div
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest('[role="button"],button')) return
+        onBackgroundClick?.()
+      }}
+      className="relative flex min-h-[16rem] w-full cursor-zoom-in items-center justify-center overflow-hidden rounded-[18px] bg-white"
+    >
       <div
         className="relative origin-center"
         style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}

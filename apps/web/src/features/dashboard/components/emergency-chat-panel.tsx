@@ -24,6 +24,16 @@ import {
   MessageFooter,
 } from "@/components/ui/message"
 import { websocketTicket, websocketUrl } from "@/lib/api"
+import { useApiReachability } from "@/lib/api-reachability"
+import {
+  canSendSms,
+  openSmsApp,
+  sendSmsText,
+} from "@/lib/native-sms-inbox"
+import {
+  normalizeSmsRecipient,
+  smsBodyTooLong,
+} from "@/lib/sms-recipient"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { checkConcernMedia } from "@/features/dashboard/api"
 import {
@@ -63,6 +73,7 @@ export function EmergencyChatPanel({
   bare = false,
   variant = "classic",
   className,
+  smsTo,
 }: {
   alertId: number
   open: boolean
@@ -81,13 +92,20 @@ export function EmergencyChatPanel({
   /** modern = report-details styling: pill input, thumb preview, waveform pill. */
   variant?: "classic" | "modern"
   className?: string
+  /** Direct number for offline SMS fallback. Absent = no offline sending. */
+  smsTo?: string | null
 }) {
   const modern = variant === "modern"
   const { user } = useAuthSession()
+  const apiOnline = useApiReachability()
+  const smsOffline = !apiOnline
   // "Message your responder…" speaks to the resident who raised the alert;
   // officials and responders answer, so they get the neutral follow-up prompt.
-  const placeholder =
-    user?.role === "resident" ? "Message your responder…" : "Ask a follow-up…"
+  const placeholder = smsOffline
+    ? "Send message"
+    : user?.role === "resident"
+      ? "Message your responder…"
+      : "Ask a follow-up…"
   const [messages, setMessages] = useState<EmergencyChatMessage[]>([])
   const [draft, setDraft] = useState("")
   const [loading, setLoading] = useState(false)
@@ -104,6 +122,9 @@ export function EmergencyChatPanel({
   )
   const [socketLive, setSocketLive] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const composerRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(
+    null
+  )
   const isDark = theme === "dark"
   const userId = user?.id
   const isMine = useCallback(
@@ -137,11 +158,11 @@ export function EmergencyChatPanel({
       const message =
         error instanceof Error ? error.message : "Could not load chat."
       setLoadError(message)
-      toast.error(message)
+      if (!smsOffline) toast.error(message)
     } finally {
       setLoading(false)
     }
-  }, [alertId, open, scrollToBottom])
+  }, [alertId, open, scrollToBottom, smsOffline])
 
   const loadOlder = useCallback(async () => {
     if (!messages.length || loadingOlder) return
@@ -293,6 +314,7 @@ export function EmergencyChatPanel({
       disabled
     )
       return false
+    if (smsOffline) return sendSmsFallback(bodyText, file)
     setSending(true)
     setSendFeedback(null)
     try {
@@ -326,6 +348,96 @@ export function EmergencyChatPanel({
     await sendMessage(draft, attachment)
   }
 
+  function smsEcho(body: string, failed: boolean): EmergencyChatMessage {
+    return {
+      id: -Date.now(),
+      alert: alertId,
+      sender: {
+        id: user?.id ?? 0,
+        full_name: user?.full_name?.trim() || "You",
+        initials: "",
+        role: user?.role ?? "resident",
+        last_seen_at: null,
+      },
+      body,
+      attachment: null,
+      created_at: new Date().toISOString(),
+      is_mine: true,
+      viaSms: true,
+      sendFailed: failed,
+    }
+  }
+
+  async function sendSmsFallback(
+    bodyText: string,
+    file: File | null
+  ): Promise<boolean> {
+    if (file) {
+      toast.error("Attachments need a connection.")
+      return false
+    }
+    if (!bodyText.trim()) return false
+    const to = normalizeSmsRecipient(smsTo ?? "")
+    if (!to) {
+      setSendFeedback("Recipient number unavailable while offline.")
+      toast.error("Recipient number unavailable while offline.")
+      return false
+    }
+    if (smsBodyTooLong(bodyText)) {
+      toast.error("Message too long for SMS.")
+      return false
+    }
+    setSending(true)
+    setSendFeedback(null)
+    const text = bodyText.trim()
+    try {
+      if (canSendSms()) {
+        await sendSmsText(to, text)
+      } else {
+        openSmsApp(to, text)
+      }
+      setDraft("")
+      setLoadError("")
+      setMessages((prev) => [...prev, smsEcho(text, false)])
+      scrollToBottom()
+      return true
+    } catch (error) {
+      setDraft("")
+      setMessages((prev) => [...prev, smsEcho(text, true)])
+      scrollToBottom()
+      setSendFeedback("Message not sent. Retry when ready.")
+      toast.error(
+        error instanceof Error ? error.message : "Could not send SMS."
+      )
+      return false
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function retrySms(id: number) {
+    const target = messages.find((item) => item.id === id)
+    if (!target || !target.sendFailed || sending) return
+    const to = normalizeSmsRecipient(smsTo ?? "")
+    if (!to || !canSendSms()) {
+      toast.error("Reconnect or open the SMS app to retry.")
+      return
+    }
+    setSending(true)
+    try {
+      await sendSmsText(to, target.body)
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, sendFailed: false } : item
+        )
+      )
+    } catch {
+      toast.error("Still not sent.")
+    } finally {
+      setSending(false)
+    }
+  }
+
   const {
     recording,
     recordSeconds,
@@ -345,6 +457,10 @@ export function EmergencyChatPanel({
 
   async function chooseAttachment(file: File | null) {
     if (!file) return
+    if (smsOffline) {
+      toast.error("Attachments need a connection.")
+      return
+    }
     if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
       const message = "Only image or video files can be attached."
       setAttachmentError(message)
@@ -426,7 +542,7 @@ export function EmergencyChatPanel({
             </button>
           </div>
         ) : null}
-        {loadError && messages.length === 0 && !loading ? (
+        {loadError && messages.length === 0 && !loading && !smsOffline ? (
           <div className="py-6 text-center">
             <p className={cn("text-[12px]", "text-sos")}>{loadError}</p>
             <button
@@ -444,9 +560,14 @@ export function EmergencyChatPanel({
           </div>
         ) : messages.length === 0 && !loading ? (
           <div className="flex flex-col items-center px-1 py-6 text-center">
-            <span className="flex size-12 items-center justify-center rounded-full bg-neutral-100 text-neutral-500">
-              <MessageCircleIcon className="size-5" aria-hidden />
-            </span>
+            <button
+              type="button"
+              onClick={() => composerRef.current?.focus()}
+              aria-label="Start a conversation"
+              className="text-neutral-300 transition-colors hover:text-neutral-500 focus-visible:outline-none"
+            >
+              <MessageCircleIcon className="size-10" aria-hidden />
+            </button>
             <p
               className={cn(
                 "mt-3 max-w-xs text-[12px] leading-5",
@@ -458,9 +579,11 @@ export function EmergencyChatPanel({
               )}
             >
               {modern
-                ? user?.role === "resident"
-                  ? "Chat with your responder here. Status updates land in this thread as they happen."
-                  : "No conversation yet. Messages with the resident appear here."
+                ? smsOffline
+                  ? "You are currently offline. Start a conversation — messages send via SMS."
+                  : user?.role === "resident"
+                    ? "Chat with your responder here. Status updates land in this thread as they happen."
+                    : "No conversation yet. Messages with the resident appear here."
                 : "Group chat is open. Status updates (en route, nearby, arrived) appear here automatically. Everyone assigned to this alert can read and reply."}
             </p>
           </div>
@@ -585,7 +708,20 @@ export function EmergencyChatPanel({
                   )}
                 >
                   {footer}
+                  {msg.viaSms ? " · Sent via SMS" : ""}
                 </MessageFooter>
+                {msg.sendFailed && mine ? (
+                  <button
+                    type="button"
+                    onClick={() => void retrySms(msg.id)}
+                    className={cn(
+                      "mt-1 text-[11px] font-semibold text-red-500 hover:underline",
+                      mine ? "text-right" : "text-left"
+                    )}
+                  >
+                    Unsuccessful sent. Retry.
+                  </button>
+                ) : null}
               </MessageContent>
             </Message>
           )
@@ -629,7 +765,7 @@ export function EmergencyChatPanel({
                 {sendFeedback}
               </p>
             ) : null}
-            {recording || readyFile ? (
+            {!smsOffline && (recording || readyFile) ? (
               <div className="mx-auto flex w-fit items-center gap-2.5 rounded-full border border-neutral-200 bg-white py-2 pr-2 pl-4">
                 {recording ? (
                   <span
@@ -691,6 +827,8 @@ export function EmergencyChatPanel({
               </div>
             ) : (
               <div className="relative flex items-center gap-2 rounded-full border border-transparent bg-neutral-100 py-1.5 pr-1.5 pl-4 transition-colors focus-within:border-neutral-200">
+                {!smsOffline ? (
+                  <>
                 <button
                   type="button"
                   onClick={() => void startRecording()}
@@ -715,6 +853,8 @@ export function EmergencyChatPanel({
                     }}
                   />
                 </label>
+                  </>
+                ) : null}
                 {attachment ? (
                   <LocalAttachmentPreview
                     file={attachment}
@@ -725,6 +865,9 @@ export function EmergencyChatPanel({
                 <input
                   type="text"
                   value={draft}
+                  ref={(el) => {
+                    composerRef.current = el
+                  }}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
@@ -778,7 +921,7 @@ export function EmergencyChatPanel({
               isDark ? "border-white/10" : "border-slate-100"
             )}
           >
-            {recording || readyFile ? (
+            {!smsOffline && (recording || readyFile) ? (
               <>
                 <div
                   className={cn(
@@ -883,6 +1026,9 @@ export function EmergencyChatPanel({
                 <div className="relative min-w-0 flex-1">
                   <textarea
                     value={draft}
+                    ref={(el) => {
+                      composerRef.current = el
+                    }}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
@@ -910,6 +1056,8 @@ export function EmergencyChatPanel({
                     </div>
                   ) : null}
                 </div>
+                {!smsOffline ? (
+                  <>
                 <button
                   type="button"
                   onClick={() => void startRecording()}
@@ -947,6 +1095,8 @@ export function EmergencyChatPanel({
                 >
                   <PaperclipIcon className="size-4" />
                 </label>
+                  </>
+                ) : null}
                 {sendFeedback ? (
                   <span
                     role="status"

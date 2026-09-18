@@ -159,6 +159,8 @@ class UserSummarySerializer(serializers.ModelSerializer):
     lastName = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
     address = serializers.SerializerMethodField()
+    home_latitude = serializers.SerializerMethodField()
+    home_longitude = serializers.SerializerMethodField()
     barangay = serializers.SerializerMethodField()
     community = serializers.SerializerMethodField()
     date_of_birth = serializers.SerializerMethodField()
@@ -195,6 +197,8 @@ class UserSummarySerializer(serializers.ModelSerializer):
             "lastName",
             "full_name",
             "address",
+            "home_latitude",
+            "home_longitude",
             "barangay",
             "community",
             "date_of_birth",
@@ -249,6 +253,16 @@ class UserSummarySerializer(serializers.ModelSerializer):
     def get_address(self, obj):
         profile = self.profile(obj)
         return profile.address if profile else ""
+
+    def get_home_latitude(self, obj):
+        profile = self.profile(obj)
+        value = getattr(profile, "home_latitude", None) if profile else None
+        return float(value) if value is not None else None
+
+    def get_home_longitude(self, obj):
+        profile = self.profile(obj)
+        value = getattr(profile, "home_longitude", None) if profile else None
+        return float(value) if value is not None else None
 
     def get_barangay(self, obj):
         profile = self.profile(obj)

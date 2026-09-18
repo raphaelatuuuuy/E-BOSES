@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from "react"
 import {
   AlertTriangleIcon,
   ChevronRightIcon,
+  Building2Icon,
   FolderOpenIcon,
   IdCardLanyard,
   MapIcon,
   MegaphoneIcon,
   ShieldCheckIcon,
   UserCogIcon,
-  UsersIcon,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { apiRequest } from "@/lib/api"
@@ -60,7 +60,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
   {
     title: "User management",
     sections: [
-      { key: "units", label: "Units", description: "Barangay units, desks and committees", icon: UsersIcon, to: "/dashboard/configuration/units", group: "User management", capability: CAPABILITIES.manageUnits },
+      { key: "units", label: "Units", description: "Barangay units, desks and committees", icon: Building2Icon, to: "/dashboard/configuration/units", group: "User management", capability: CAPABILITIES.manageUnits },
       { key: "roles", label: "Permissions", description: "What each position is allowed to do", icon: ShieldCheckIcon, to: "/dashboard/configuration/roles", group: "User management", capability: CAPABILITIES.manageRoles },
       { key: "users", label: "Users", description: "Accounts, unit assignments and status", icon: UserCogIcon, to: "/dashboard/configuration/users", group: "User management", capability: CAPABILITIES.manageUsers },
     ],

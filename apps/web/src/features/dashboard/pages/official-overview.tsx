@@ -32,7 +32,6 @@ import { OverviewReportsSheet } from "@/features/dashboard/components/resident-o
 import { OverviewReportDetailSheet } from "@/features/dashboard/components/resident-overview/report-detail-sheet"
 import { MobileEmergencyReportDetailPage } from "@/features/dashboard/components/concerns/mobile-report-detail"
 import { useOfficialUnitScope } from "@/features/dashboard/hooks/use-official-unit"
-import { formatCount } from "@/features/dashboard/lib/overview-chart"
 import { emergencyTitleText } from "@/features/dashboard/lib/emergency-description"
 import { usePageTitle } from "@/hooks/use-page-title"
 
@@ -395,9 +394,6 @@ export default function OfficialOverviewPage({
     `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() ||
     user?.full_name ||
     "Official"
-  const community =
-    analytics?.community_name ||
-    (user?.barangay || "Your community").replace(/^Barangay\s+/i, "")
   const unitName =
     analytics?.unit?.name ||
     selectedUnit?.name ||
@@ -511,11 +507,6 @@ export default function OfficialOverviewPage({
             resolved={unitTotals.resolved}
             copy={unitTileCopy}
           />
-
-          <p className="px-1 text-[12px] font-medium text-neutral-500">
-            {formatCount(analytics?.community_totals.total ?? 0)} reports across{" "}
-            {community}
-          </p>
 
           <WeekChart
             overview={reportOverview}

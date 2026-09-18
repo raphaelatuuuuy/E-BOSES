@@ -1,5 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom"
-import { MailIcon, PhoneIcon } from "lucide-react"
+import { DownloadIcon } from "lucide-react"
+import { APK_DOWNLOAD_URL } from "../constants"
 
 type PlatformLink = { label: string; href?: string; to?: string }
 
@@ -99,22 +100,21 @@ export function Footer() {
             </div>
           </div>
 
-          <div>
-            <h4 className="mb-6 font-bold text-white">Contact</h4>
-            <ul className="space-y-4 text-sm text-white/50">
-              <li className="flex items-start gap-3">
-                <MailIcon className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-                <a className="break-all transition-colors hover:text-primary" href="mailto:eboses@gmail.com">
-                  eboses@gmail.com
-                </a>
-              </li>
-              <li className="flex items-start gap-3">
-                <PhoneIcon className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-                <a className="transition-colors hover:text-primary" href="tel:09613065905">
-                  09613065905
-                </a>
-              </li>
-            </ul>
+          <div className="text-center md:text-left">
+            <h4 className="mb-6 text-left font-bold text-white">Get the app</h4>
+            <p className="mb-5 text-sm leading-relaxed text-white/50">
+              Faster reporting and SOS alerts with the E-Boses Android app.
+            </p>
+            <a
+              href={APK_DOWNLOAD_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-accent px-6 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:w-auto"
+            >
+              <DownloadIcon className="size-4" strokeWidth={2} aria-hidden="true" />
+              Download the app
+            </a>
+            <p className="mt-3 text-xs text-white/40">Free for Android</p>
           </div>
         </div>
 

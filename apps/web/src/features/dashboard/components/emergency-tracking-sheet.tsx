@@ -115,6 +115,16 @@ const RESPONDER_STATUS_HEADLINES: Record<string, string> = {
   assisting: "Responder is assisting at your location",
 }
 
+const ASSIGNMENT_STATUS_LABELS: Record<string, string> = {
+  assigned: "Assigned",
+  acknowledged: "Responding",
+  en_route: "En route",
+  nearby: "Nearby",
+  arrived: "On scene",
+  assisting: "Assisting",
+  in_progress: "In progress",
+}
+
 function hasActiveResponder(alert: EmergencyAlert) {
   return Boolean(activeResponderAssignment(alert))
 }
@@ -780,7 +790,7 @@ function EmergencyTrackingMap({
         style={expandStyle}
         className={cn("relative h-full w-full", className)}
       >
-      <div ref={containerRef} className="h-full w-full bg-tint" />
+      <div ref={containerRef} className="h-full w-full bg-ink" />
       <button
         type="button"
         onClick={onBack}
@@ -1389,6 +1399,7 @@ export function EmergencyTrackingSheet({
     error: boolean
   } | null>(null)
   const responderContactKeyRef = useRef<string | null>(null)
+  const [responderIndex, setResponderIndex] = useState(0)
 
   const adoptAlert = useCallback(
     (nextAlert: EmergencyAlert) => {
@@ -1410,11 +1421,11 @@ export function EmergencyTrackingSheet({
     setAlert(initialAlert)
     if (switchedAlert) setChatView(false)
     if (switchedAlert) setAppealView(false)
+    if (switchedAlert) setResponderIndex(0)
   }
 
   const [prevOpen, setPrevOpen] = useState(open)
-  if (prevOpen !== open) {
-    setPrevOpen(open)
+  if (prevOpen !== open) {    setPrevOpen(open)
     if (!open) {
       setChatMessage(null)
       setChatView(false)
@@ -1451,6 +1462,17 @@ export function EmergencyTrackingSheet({
     alertId && responderAssignmentId
       ? `${alertId}:${responderAssignmentId}`
       : null
+  const activeAssignments = alert
+    ? (alert.assignments ?? []).filter((a) =>
+        [
+          "assigned",
+          "acknowledged",
+          "en_route",
+          "arrived",
+          "assisting",
+        ].includes(a.status)
+      )
+    : []
 
   useEffect(() => {
     if (!open || !alertId || !alertStatus || !isEmergencyActive(alertStatus))
@@ -1685,6 +1707,7 @@ export function EmergencyTrackingSheet({
       theme="light"
       variant="modern"
       className="h-full"
+      smsTo={responderPhone}
     />
   )
 
@@ -1789,7 +1812,143 @@ export function EmergencyTrackingSheet({
       footer={
         !chatView && !appealView && isLive ? (
           <div className="space-y-3">
-            {responderAssignment ? (
+            {activeAssignments.length > 1 ? (
+              <>
+                <div className="flex items-center gap-3 border-b border-neutral-100 pb-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent("eboses:focus-responder", {
+                          detail: {
+                            assignmentId: activeAssignments[
+                              Math.min(
+                                responderIndex,
+                                activeAssignments.length - 1
+                              )
+                            ].id,
+                          },
+                        })
+                      )
+                    }
+                    title="Show responder on map"
+                    aria-label="Show responder on map"
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left"
+                  >
+                    <UserAvatar
+                      user={
+                        activeAssignments[
+                          Math.min(
+                            responderIndex,
+                            activeAssignments.length - 1
+                          )
+                        ].responder
+                      }
+                      size="sm"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] font-semibold text-neutral-900">
+                        {
+                          activeAssignments[
+                            Math.min(
+                              responderIndex,
+                              activeAssignments.length - 1
+                            )
+                          ].responder.full_name
+                        }
+                        {"  "}
+                        <span className="text-[12px] font-normal text-neutral-500">
+                          {
+                            ASSIGNMENT_STATUS_LABELS[
+                              activeAssignments[
+                                Math.min(
+                                  responderIndex,
+                                  activeAssignments.length - 1
+                                )
+                              ].status
+                            ] ??
+                              activeAssignments[
+                                Math.min(
+                                  responderIndex,
+                                  activeAssignments.length - 1
+                                )
+                              ].status
+                          }
+                        </span>
+                      </p>
+                      <p className="mt-0.5 truncate text-[12px] text-neutral-600">
+                        {responderPhoneLoading
+                          ? "Loading phone…"
+                          : responderPhone || "Phone unavailable"}
+                      </p>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void callResponder()}
+                    disabled={callingResponder}
+                    aria-label="Call responder"
+                    title="Call responder"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-50"
+                  >
+                    <PhoneIcon className="size-4 text-neutral-500" aria-hidden />
+                    <span>Call</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setChatView(true)}
+                    aria-label="Chat"
+                    title="Chat"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none"
+                  >
+                    <MessageCircleIcon className="size-4" aria-hidden />
+                    <span>Chat</span>
+                  </button>
+                </div>
+                <div className="flex items-center justify-between px-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setResponderIndex((i) => Math.max(0, i - 1))
+                    }
+                    disabled={responderIndex === 0}
+                    aria-label="Previous responder"
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-200 text-neutral-600 transition-colors hover:bg-neutral-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <span className="text-sm font-semibold">{"<"}</span>
+                  </button>
+                  <div className="flex gap-1.5 items-center">
+                    {activeAssignments.map((_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setResponderIndex(i)}
+                        aria-label={`Responder ${i + 1}`}
+                        className={cn(
+                          "h-1.5 rounded-full transition-all duration-200",
+                          i === responderIndex
+                            ? "w-4 bg-neutral-800"
+                            : "w-1.5 bg-neutral-300 hover:bg-neutral-400"
+                        )}
+                      />
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setResponderIndex((i) =>
+                        Math.min(activeAssignments.length - 1, i + 1)
+                      )
+                    }
+                    disabled={responderIndex === activeAssignments.length - 1}
+                    aria-label="Next responder"
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-200 text-neutral-600 transition-colors hover:bg-neutral-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <span className="text-sm font-semibold">{">"}</span>
+                  </button>
+                </div>
+              </>
+            ) : responderAssignment ? (
               <div className="flex items-center gap-3 border-b border-neutral-100 pb-3">
                 <button
                   type="button"

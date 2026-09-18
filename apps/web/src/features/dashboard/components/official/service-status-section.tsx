@@ -385,6 +385,9 @@ function AuditLogSheet({
       description="Review configuration changes and sensitive access events."
       size="wide"
       draggable
+      bodyScrollable={false}
+      className="h-[min(720px,92dvh)]"
+      bodyClassName="px-5 sm:px-7"
     >
       <div className="space-y-4">
         <ConfigurationListToolbar
@@ -427,7 +430,7 @@ function AuditLogSheet({
 
         {!loading && entries.length > 0 ? (
           <>
-            <ConfigurationPager key={offset} offset={offset} total={entries.length} onChange={setOffset} noun="audit events" />
+            <ConfigurationPager key={offset} offset={offset} total={entries.length} onChange={setOffset} noun="audit events" className="py-1" inline />
             <p className="text-[12px] text-neutral-400">Showing the latest activity from the last 30 days.</p>
           </>
         ) : null}
@@ -442,7 +445,7 @@ function fetchStatus(refresh = false) {
   return apiRequest<ServiceStatus>(`/config/service-status/${refresh ? "?refresh=1" : ""}`)
 }
 
-export function ServiceStatusSection({ initialOpen }: { initialOpen?: "system" | "audit" }) {
+export function ServiceStatusSection({ initialOpen, embedded = false }: { initialOpen?: "system" | "audit"; embedded?: boolean }) {
   const [status, setStatus] = useState<ServiceStatus | null>(null)
   const [error, setError] = useState("")
   const [checking, setChecking] = useState(false)
@@ -523,37 +526,40 @@ export function ServiceStatusSection({ initialOpen }: { initialOpen?: "system" |
   }
 
   return (
-    <PageSection title="Monitoring" className="mt-7 [&>div]:mb-3">
-      <ul className="grid grid-cols-2 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_3px_16px_rgba(15,23,42,0.04)]">
-        {/* System status row */}
-        <li className="min-w-0 border-r border-neutral-200 last:border-r-0">
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            className="group relative flex min-h-[150px] w-full flex-col items-start px-3 py-3 pb-12 text-left transition-colors hover:bg-neutral-100"
-          >
-            <div className="min-w-0 pr-1">
-              <p className="text-[12.5px] font-bold text-neutral-900 transition-colors group-hover:text-accent">
-                System status
-              </p>
-              <p className="mt-1 break-words text-[10.5px] leading-relaxed text-neutral-500">
-                Records, messaging, ID checks and map services
-              </p>
-            </div>
-            <span className="absolute right-2.5 bottom-2.5 flex size-[30px] items-center justify-center rounded-full bg-brand-navy text-white transition-colors group-hover:bg-brand-orange">
-              <ActivityIcon className="size-4" strokeWidth={1.9} aria-hidden />
-            </span>
-          </button>
-
-          <SheetDialog
-            open={open}
-            onClose={() => setOpen(false)}
-            title="System status"
-            description="Records, messaging, ID checks and map services"
-            size="wide"
-            draggable
-          >
+    <PageSection title={embedded ? undefined : "Monitoring"} className={embedded ? "mt-0" : "mt-7 [&>div]:mb-3"}>
+      <ConfigurationTable label="Monitoring" hideHeader>
+        <ConfigurationInfoRow
+          icon={ActivityIcon}
+          title="System status"
+          description="Records, messaging, ID checks and map services"
+          actions={
+            <button type="button" onClick={() => setOpen(true)} aria-label="Open System status" className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700">
+              <ChevronRightIcon className="size-5" strokeWidth={2} aria-hidden />
+            </button>
+          }
+        />
+        <ConfigurationInfoRow
+          icon={ScrollTextIcon}
+          title="Audit log"
+          description="Who did what, including who opened private photos"
+          actions={
+            <button type="button" onClick={() => setAuditOpen(true)} aria-label="Open Audit log" className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700">
+              <ChevronRightIcon className="size-5" strokeWidth={2} aria-hidden />
+            </button>
+          }
+        />
+      </ConfigurationTable>
+      <SheetDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title="System status"
+        description="Records, messaging, ID checks and map services"
+        size="wide"
+        draggable
+        bodyScrollable={false}
+        className="h-[min(720px,92dvh)]"
+        bodyClassName="px-5 sm:px-7"
+      >
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-neutral-200 py-5">
               <div className="flex items-center gap-3">
                 <StatusMark severity={error ? 1 : worst} className="size-6" />
@@ -715,29 +721,6 @@ export function ServiceStatusSection({ initialOpen }: { initialOpen?: "system" |
               </div>
             )}
           </SheetDialog>
-        </li>
-
-        {/* Audit log row */}
-        <li className="min-w-0 last:border-r-0">
-          <button
-            type="button"
-            onClick={() => setAuditOpen(true)}
-            className="group relative flex min-h-[150px] w-full flex-col items-start px-3 py-3 pb-12 text-left transition-colors hover:bg-neutral-100"
-          >
-            <div className="min-w-0 pr-1">
-              <p className="text-[12.5px] font-bold text-neutral-900 transition-colors group-hover:text-accent">
-                Audit log
-              </p>
-              <p className="mt-1 break-words text-[10.5px] leading-relaxed text-neutral-500">
-                Who did what, including who opened private photos
-              </p>
-            </div>
-            <span className="absolute right-2.5 bottom-2.5 flex size-[30px] items-center justify-center rounded-full bg-brand-navy text-white transition-colors group-hover:bg-brand-orange">
-              <ScrollTextIcon className="size-4" strokeWidth={1.9} aria-hidden />
-            </span>
-          </button>
-        </li>
-      </ul>
       <AuditLogSheet open={auditOpen} onClose={() => setAuditOpen(false)} />
     </PageSection>
   )

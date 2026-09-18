@@ -4,6 +4,7 @@ import {
   ActivityIcon,
   ArrowLeftIcon,
   BoltIcon,
+  Building2Icon,
   ChevronRightIcon,
   FolderOpenIcon,
   IdCardLanyard,
@@ -15,7 +16,6 @@ import {
   TriangleAlert,
   UserCircleIcon,
   UserCogIcon,
-  UsersIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -63,6 +63,27 @@ import {
   ResponderProfileDialog,
 } from "@/features/dashboard/components/responder/account-dialogs"
 
+const CONFIG_SECTION_ICONS: Record<string, LucideIcon> = {
+  units: Building2Icon,
+  roles: ShieldCheckIcon,
+  users: UserCogIcon,
+  categories: FolderOpenIcon,
+  coverage: MapIcon,
+  verification: IdCardLanyard,
+  announcements: MegaphoneIcon,
+  monitoring: ActivityIcon,
+}
+
+function ConfigSectionTitle({ icon: Icon, label }: { icon: LucideIcon | undefined; label: string }) {
+  if (!Icon) return <>{label}</>
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Icon className="size-6" strokeWidth={2} aria-hidden />
+      {label}
+    </span>
+  )
+}
+
 const CONFIG_SECTION_SHEETS: Record<
   string,
   React.LazyExoticComponent<React.ComponentType<{ embedded?: boolean }>>
@@ -93,7 +114,9 @@ const CONFIG_SECTION_SHEETS: Record<
     import(
       "@/features/dashboard/components/official/service-status-section"
     ).then((module) => ({
-      default: () => <module.ServiceStatusSection />,
+      default: (props: { embedded?: boolean }) => (
+        <module.ServiceStatusSection embedded={props.embedded} />
+      ),
     }))
   ),
 }
@@ -245,10 +268,10 @@ function StaffConfigSheet({ open, onClose, onOpenSection }: { open: boolean; onC
   }
 
   const rows: ConfigRow[] = [
-    { key: "units", label: "Units", hint: "Desks and committees", icon: UsersIcon, group: "User management", cap: CAPABILITIES.manageUnits },
+    { key: "units", label: "Units", hint: "Desks and committees", icon: Building2Icon, group: "User management", cap: CAPABILITIES.manageUnits },
     { key: "roles", label: "Permissions", hint: "What each position can do", icon: ShieldCheckIcon, group: "User management", cap: CAPABILITIES.manageRoles },
     { key: "users", label: "Users", hint: "Accounts and status", icon: UserCogIcon, group: "User management", cap: CAPABILITIES.manageUsers },
-    { key: "categories", label: "Report categories", hint: "What residents can report", icon: FolderOpenIcon, group: "Operations", cap: CAPABILITIES.manageCategories },
+    { key: "categories", label: "Reports", hint: "What residents can report", icon: FolderOpenIcon, group: "Operations", cap: CAPABILITIES.manageCategories },
     { key: "coverage", label: "Coverage area", hint: "Where reports are accepted", icon: MapIcon, group: "Operations", cap: CAPABILITIES.configureGeography },
     { key: "verification", label: "ID Documents", hint: "Proof of residency", icon: IdCardLanyard, group: "Operations", cap: CAPABILITIES.manageUsers },
     { key: "announcements", label: "Announcements", hint: "Advisories and updates", icon: MegaphoneIcon, group: "Operations", cap: CAPABILITIES.publishAnnouncements },
@@ -284,7 +307,7 @@ function StaffConfigSheet({ open, onClose, onOpenSection }: { open: boolean; onC
   }
 
   return (
-    <SheetDialog open={open} onClose={onClose} title={<>Set up your <span className="text-brand-orange">Area</span></>} titleClassName="text-center" description={<span className="block text-center">Route concerns, dispatch responders, verify residents.</span>} size="wide" draggable showClose={false} bodyScrollable={false}>
+    <SheetDialog open={open} onClose={onClose} title={<>Set up your <span className="text-brand-orange">Area</span></>} titleClassName="text-center" size="wide" draggable showClose={false} bodyScrollable={false}>
       <ConfigurationListToolbar
         search={query}
         onSearch={(value) => { setQuery(value); setOffset(0) }}
@@ -463,13 +486,13 @@ function StaffBar({ role }: { role: "official" | "responder" }) {
           setConfigSection(null)
           setConfigOpen(true)
         }}
-        title={configSection?.label ?? ""}
+        title={<ConfigSectionTitle icon={configSection ? CONFIG_SECTION_ICONS[configSection.key] : undefined} label={configSection?.label ?? ""} />}
         titleClassName="text-center"
         size="wide"
         draggable
         showClose={false}
         bodyScrollable={false}
-        className="h-[min(720px,92dvh)]"
+        className={configSection && ["units", "roles", "users", "categories", "announcements", "coverage", "verification", "monitoring"].includes(configSection.key) ? "max-h-[min(720px,92dvh)]" : "h-[min(720px,92dvh)]"}
         bodyClassName="px-5 pb-4 sm:px-7"
       >
         <Suspense

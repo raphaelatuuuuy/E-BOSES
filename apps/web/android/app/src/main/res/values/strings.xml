@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">E-Boses</string>
+    <string name="title_activity_main">E-Boses</string>
+    <string name="package_name">com.eboses.app</string>
+    <string name="custom_url_scheme">com.eboses.app</string>
+</resources>

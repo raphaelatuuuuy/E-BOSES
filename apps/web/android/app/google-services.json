@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "171930122833",
+    "project_id": "eboses-3365a",
+    "storage_bucket": "eboses-3365a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:171930122833:android:0a334fc01822df468e1670",
+        "android_client_info": {
+          "package_name": "com.eboses.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBx3ZWoHKWvk_Uc1g9Vir5rkAcPpnW7Tv4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+

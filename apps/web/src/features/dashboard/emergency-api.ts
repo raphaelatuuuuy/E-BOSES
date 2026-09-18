@@ -648,6 +648,8 @@ export interface EmergencyChatMessage {
   } | null
   created_at: string
   is_mine: boolean
+  viaSms?: boolean
+  sendFailed?: boolean
 }
 
 export function listEmergencyChat(

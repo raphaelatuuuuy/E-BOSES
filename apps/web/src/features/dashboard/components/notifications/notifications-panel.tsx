@@ -43,7 +43,7 @@ import {
   notificationsPageFilter,
   openNotificationsPop,
 } from "@/features/dashboard/components/notifications/notifications-event"
-import { notificationIconFor } from "@/features/dashboard/components/notifications/notification-visuals"
+import { notificationIconFor, notificationActionLink } from "@/features/dashboard/components/notifications/notification-visuals"
 
 type NotificationView = "inbox" | "archived"
 const notificationViewEvent = "eboses:notification-view"
@@ -699,13 +699,10 @@ export function NotificationsPanel({
                     key={item.id}
                     className={cn(
                       "relative touch-pan-y overflow-hidden rounded-2xl border border-neutral-200 bg-white transition-colors",
-                      !item.is_read &&
-                        (urgent ? "border-sos/30 bg-sos/5" : "bg-neutral-50"),
-                      urgent && !item.is_read
+                      !item.is_read && urgent ? "bg-sos/5" : null,
+                      !item.is_read && urgent
                         ? "hover:bg-sos/10"
-                        : darkTheme
-                          ? "hover:bg-brand-orange/10"
-                          : "hover:bg-neutral-100"
+                        : "hover:bg-neutral-100"
                     )}
                   >
                     <button
@@ -840,8 +837,7 @@ export function NotificationsPanel({
                             </span>
                             <span
                               className={cn(
-                                "min-w-0 text-[14px] leading-5 font-normal text-neutral-950",
-                                urgent && !item.is_read && "text-sos"
+                                "min-w-0 text-[14px] leading-5 font-normal text-neutral-950"
                               )}
                             >
                               {item.display_title || item.title}
@@ -857,20 +853,19 @@ export function NotificationsPanel({
                           </span>
                         ) : null}
                         {item.safety_limited ? (
-                          <span className="mt-2 block rounded-lg border border-sos/30 bg-sos/10 px-3 py-2.5">
-                            <span className="block text-[12px] font-bold tracking-wide text-sos">
-                              Nearby safety alert
-                            </span>
-                            <span className="mt-1 block text-[13px] leading-5 text-neutral-800">
-                              {item.safety_guidance ||
-                                "Stay clear of the area and do not intervene."}
-                            </span>
-                            <span className="mt-1.5 block text-[11px] leading-4 text-sos/70">
-                              For privacy, the reporter's identity, exact
-                              location, and media are not shared.
-                            </span>
+                          <span className="mt-1.5 block text-[13px] leading-5 text-sos">
+                            <span className="font-semibold">Nearby safety alert.</span>{" "}
+                            {item.safety_guidance || "Stay clear of the area and do not intervene."}
                           </span>
                         ) : null}
+                        {(() => {
+                          const link = notificationActionLink(item)
+                          return link ? (
+                            <span className="mt-1.5 block text-right">
+                              <span className="text-[11px] font-medium text-neutral-500">{link}</span>
+                            </span>
+                          ) : null
+                        })()}
                       </span>
                     </button>
                     {hasMedia ? (

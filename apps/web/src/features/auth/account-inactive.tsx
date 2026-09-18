@@ -55,7 +55,7 @@ export default function AccountInactivePage() {
         <Link
           to="/"
           className="mx-auto flex max-w-3xl items-center gap-2"
-          aria-label="Boses — back to landing page"
+          aria-label={import.meta.env.MODE === "capacitor" ? "Boses — home" : "Boses — back to landing page"}
         >
           <img src="/contents/logo.webp" alt="" className="h-8 w-auto" />
           <span className="text-2xl font-bold text-accent">Boses</span>

@@ -5,7 +5,7 @@ const liveServerUrl = process.env.CAPACITOR_SERVER_URL?.trim()
 const config: CapacitorConfig = {
   appId: "com.eboses.app",
   appName: "E-Boses",
-  webDir: "dist",
+  webDir: "dist-native",
   server: liveServerUrl
     ? {
         url: liveServerUrl,

@@ -593,6 +593,21 @@ export function SheetActionRow({
   )
 }
 
+/** Compact action hierarchy: full-width row, narrower secondary first, primary filling the rest. */
+export function SheetCompactActionRow({
+  children,
+  className,
+}: {
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={cn("flex items-center gap-2 [&>*:first-child]:w-auto [&>*:first-child]:flex-none [&>*:last-child]:min-w-0 [&>*:last-child]:flex-1 [&_button]:h-11 [&_button]:px-6 [&_button]:text-[15px]", className)}>
+      {children}
+    </div>
+  )
+}
+
 /** Counted textarea, as used by the report flow's details step. */
 export function SheetTextarea({
   value,

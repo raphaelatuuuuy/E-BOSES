@@ -1,8 +1,13 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { AlertTriangleIcon, ArrowLeftIcon, PhoneIcon } from "lucide-react"
+import { ArrowLeftIcon, PhoneIcon } from "lucide-react"
 import { ApiError } from "@/lib/api"
 import { SosTakeover } from "@/features/dashboard/components/sos/sos-takeover"
+import { canSendSms, sendSmsText } from "@/lib/native-sms-inbox"
+import {
+  normalizeSmsRecipient,
+  smsBodyTooLong,
+} from "@/lib/sms-recipient"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
@@ -49,10 +54,12 @@ import {
   questionsForCategory,
 } from "@/features/dashboard/components/sos/triage-step"
 import { SosConfirmStep } from "@/features/dashboard/components/sos/confirm-step"
+import { SosStatusScreen } from "@/features/dashboard/components/sos/sos-status-screen"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 import {
   offlineCategoriesFromConfig,
   refreshOfflineSosConfig,
+  checkOfflineSosBundleUpdate,
   SOS_SMS_NUMBER,
 } from "@/features/dashboard/components/sos/offline-sos-config"
 import type { Hotline } from "@/features/dashboard/components/sos/duty-hours-dialog"
@@ -60,7 +67,7 @@ import type { Hotline } from "@/features/dashboard/components/sos/duty-hours-dia
 const OFFLINE_SUBMIT_ERROR =
   "You’re offline. Reconnect to send online, or use the SMS backup below."
 
-type WizardStep = "category" | "triage" | "location" | "review" | "countdown"
+type WizardStep = "category" | "triage" | "location" | "review" | "countdown" | "status"
 
 const WIZARD_STEPS: WizardStep[] = [
   "category",
@@ -77,10 +84,12 @@ function stepTitle(step: WizardStep) {
   if (step === "triage") return "Quick questions"
   if (step === "location") return "Confirm your location"
   if (step === "review") return "Review & send"
+  if (step === "status") return "Emergency Status"
   return "Ongoing"
 }
 
 function stepIndex(step: WizardStep) {
+  if (step === "status") return WIZARD_STEPS.length + 1
   return WIZARD_STEPS.indexOf(step) + 1
 }
 
@@ -98,6 +107,8 @@ function SosShell({
   footer,
   progress,
   resetKey,
+  hideHeader,
+  bodyClassName,
   children,
 }: {
   open: boolean
@@ -110,6 +121,8 @@ function SosShell({
   progress?: ReactNode
   /** Step identity — scrolls the body back to the top whenever it changes. */
   resetKey?: unknown
+  hideHeader?: boolean
+  bodyClassName?: string
   children: ReactNode
 }) {
   const titleId = useId()
@@ -154,43 +167,52 @@ function SosShell({
         ref={panelRef}
         className="mx-auto flex h-full min-h-0 w-full max-w-2xl flex-col overflow-hidden"
       >
-        <div className="flex shrink-0 items-center gap-2 px-5 pt-[max(1rem,env(safe-area-inset-top))] pb-4">
-          {showBack ? (
-            <button
-              type="button"
-              onClick={onBack}
-              aria-label="Back"
-              className="-ml-2 flex size-10 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
-            >
-              <ArrowLeftIcon className="size-6" strokeWidth={2} />
-            </button>
-          ) : null}
+        {!hideHeader ? (
+          <>
+            <div className="flex shrink-0 items-center gap-2 px-5 pt-[max(1rem,env(safe-area-inset-top))] pb-4">
+              {showBack ? (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  aria-label="Back"
+                  className="-ml-2 flex size-10 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
+                >
+                  <ArrowLeftIcon className="size-6" strokeWidth={2} />
+                </button>
+              ) : null}
 
-          <div className="min-w-0 flex-1 pt-0.5">
-            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
-              Emergency SOS
-            </p>
-            <h2
-              id={titleId}
-              className="mt-0.5 truncate text-[22px] leading-[1.2] font-bold tracking-tight text-white"
-            >
-              {title}
-            </h2>
-            {subtitle ? (
-              <p
-                id={subtitleId}
-                className="mt-1 text-[14px] leading-snug text-white/60"
-              >
-                {subtitle}
-              </p>
+              <div className="min-w-0 flex-1 pt-0.5">
+                <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
+                  Emergency SOS
+                </p>
+                <h2
+                  id={titleId}
+                  className="mt-0.5 truncate text-[22px] leading-[1.2] font-bold tracking-tight text-white"
+                >
+                  {title}
+                </h2>
+                {subtitle ? (
+                  <p
+                    id={subtitleId}
+                    className="mt-1 text-[14px] leading-snug text-white/60"
+                  >
+                    {subtitle}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            {progress ? (
+              <div className="shrink-0 px-5 pb-3">{progress}</div>
             ) : null}
-          </div>
-        </div>
-        {progress ? <div className="shrink-0 px-5 pb-3">{progress}</div> : null}
+          </>
+        ) : null}
 
         <div
           ref={bodyRef}
-          className="scrollbar-hide min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-5 pb-8 [-webkit-overflow-scrolling:touch]"
+          className={cn(
+            "scrollbar-hide min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch]",
+            bodyClassName ?? "px-5 pb-8"
+          )}
         >
           {children}
         </div>
@@ -231,6 +253,10 @@ export function SosWizard({
     EmergencyCategory[]
   >(() => offlineCategoriesFromConfig())
   useEffect(() => {
+    void checkOfflineSosBundleUpdate()
+  }, [open])
+
+  useEffect(() => {
     if (!open) return
     let cancelled = false
 
@@ -270,6 +296,7 @@ export function SosWizard({
   const [dispatchCountdown, setDispatchCountdown] = useState(5)
   const isOnline = online
   const [statusAnnouncement, setStatusAnnouncement] = useState("")
+  const [smsSending, setSmsSending] = useState(false)
   const clientRequestIdRef = useRef(crypto.randomUUID())
   const submitAbortRef = useRef<AbortController | null>(null)
   const cancelRequestedRef = useRef(false)
@@ -458,6 +485,7 @@ export function SosWizard({
     setMediaError(null)
     setDispatchCountdown(5)
     setSubmitting(false)
+    setSmsSending(false)
   }
 
   function closeShell() {
@@ -475,11 +503,21 @@ export function SosWizard({
       )
       return
     }
+    if (step === "status") {
+      resetWizard()
+      onClose()
+      return
+    }
     resetWizard()
     onClose()
   }
 
   function goBack() {
+    if (step === "status") {
+      resetWizard()
+      onClose()
+      return
+    }
     if (step === "countdown") {
       if (submitting) return
       setStep("review")
@@ -546,12 +584,28 @@ export function SosWizard({
     }
   }
 
+  // Full-page map has no wizard footer: the "Use this location" pill on the
+  // map confirms AND advances using the fresh pin value (avoids stale state).
+  function handleLocationAdvance(next: SosLocationValue) {
+    setLocation(next)
+    if (!isSosLocationReady(next)) {
+      setFieldErrors({ location: "Choose a location on the map." })
+      return
+    }
+    if (isOnline && !acceptedSosLocation(next)) {
+      setFieldErrors({
+        location: friendlyLocationMessage(next.locationCheck),
+      })
+      return
+    }
+    setFieldErrors({})
+    setStep("review")
+  }
+
   async function submitEmergency() {
     if (!location || !emergency || submitting) return
     if (!isOnline) {
-      setStep("review")
-      setSubmitError(OFFLINE_SUBMIT_ERROR)
-      setStatusAnnouncement(OFFLINE_SUBMIT_ERROR)
+      setStep("status")
       setDispatchCountdown(5)
       if (mediaFiles.length > 0) {
         toast.info("Photos need connection and were not included.")
@@ -724,8 +778,37 @@ export function SosWizard({
     )
   }
 
+  async function sendSmsAlert() {
+    if (smsSending) return
+    const to = normalizeSmsRecipient(SOS_SMS_NUMBER)
+    if (!to || smsBodyTooLong(smsBody)) {
+      toast.error("This alert is too long to send by SMS.")
+      return
+    }
+    setSmsSending(true)
+    try {
+      await sendSmsText(to, smsBody)
+      setStatusAnnouncement(
+        "Alert sent by SMS. Keep safe and wait for responders."
+      )
+      toast.success("Alert sent by SMS")
+      if (mediaFiles.length > 0) {
+        toast.info("Photos need connection and were not included.")
+      }
+      await enqueueCurrentEmergency().catch(() => {})
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not send SMS."
+      setStatusAnnouncement(`Alert was not sent. ${message}`)
+      toast.error(message)
+    } finally {
+      setSmsSending(false)
+    }
+  }
+
   const locationLabel = location?.addressPrimary || location?.address
   const useSmsDelivery = !isOnline
+  const nativeSmsDelivery = useSmsDelivery && canSendSms()
   const locationCanContinue = Boolean(
     location &&
     isSosLocationReady(location) &&
@@ -733,38 +816,37 @@ export function SosWizard({
   )
 
   const wizardFooter =
-    step !== "countdown" ? (
+    step !== "countdown" && step !== "status" ? (
       <>
-        {step === "review" ? (
-          <div className="mb-3 flex items-start gap-3 rounded-[18px] border border-sos/40 bg-sos/15 px-4 py-3">
-            <AlertTriangleIcon
-              className="mt-0.5 size-5 shrink-0 text-sos-bright"
-              strokeWidth={2}
-              aria-hidden="true"
-            />
-            <p className="text-[13px] leading-5 font-medium text-sos-bright">
-              False or misleading alerts are logged and repeated abuse can
-              suspend your account.
-            </p>
-          </div>
-        ) : null}
         <div className="flex gap-2">
           <button
             type="button"
             onClick={goBack}
-            className="h-[52px] flex-1 rounded-full border border-white/20 bg-white/10 text-[16px] font-semibold text-white transition-colors hover:bg-white/15"
+            className="h-[60px] flex-1 rounded-full border border-white/20 bg-white/10 text-[17px] font-semibold text-white transition-colors hover:bg-white/15"
           >
             Back
           </button>
-          {step === "review" && useSmsDelivery && emergencySmsHref ? (
-            <a
-              href={emergencySmsHref}
-              onClick={announceSmsFallback}
-              className="flex h-[52px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[16px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
-            >
-              <PhoneIcon className="size-4" aria-hidden="true" />
-              Send Alert
-            </a>
+          {step === "review" && useSmsDelivery ? (
+            nativeSmsDelivery ? (
+              <button
+                type="button"
+                onClick={() => void sendSmsAlert()}
+                disabled={smsSending}
+                className="flex h-[60px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[17px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-60"
+              >
+                <PhoneIcon className="size-4" aria-hidden="true" />
+                {smsSending ? "Sending…" : "Send Alert"}
+              </button>
+            ) : emergencySmsHref ? (
+              <a
+                href={emergencySmsHref}
+                onClick={announceSmsFallback}
+                className="flex h-[60px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[17px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
+              >
+                <PhoneIcon className="size-4" aria-hidden="true" />
+                Send Alert
+              </a>
+            ) : null
           ) : (
             <button
               type="button"
@@ -776,7 +858,7 @@ export function SosWizard({
                 (step === "location" && !locationCanContinue)
               }
               className={cn(
-                "h-[52px] flex-[1.4] rounded-full text-[16px] font-semibold text-white transition-all active:scale-[0.99]",
+                "h-[60px] flex-[1.4] rounded-full text-[17px] font-semibold text-white transition-all active:scale-[0.99]",
                 step === "review"
                   ? "bg-sos hover:opacity-90"
                   : "bg-brand-orange hover:bg-brand-orange-strong",
@@ -808,7 +890,7 @@ export function SosWizard({
         <button
           type="button"
           onClick={cancelCountdown}
-          className="h-[52px] flex-1 rounded-full border border-sos/50 bg-sos/15 text-[16px] font-semibold text-sos-bright transition-colors hover:bg-sos/25 disabled:opacity-60"
+          className="h-[60px] flex-1 rounded-full border border-sos/50 bg-sos/15 text-[17px] font-semibold text-sos-bright transition-colors hover:bg-sos/25 disabled:opacity-60"
         >
           {submitting ? "Cancel sending" : "Cancel"}
         </button>
@@ -816,7 +898,7 @@ export function SosWizard({
           type="button"
           onClick={() => void submitEmergency()}
           disabled={submitting}
-          className="h-[52px] flex-[1.4] rounded-full bg-sos text-[16px] font-semibold text-white transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-60"
+          className="h-[60px] flex-[1.4] rounded-full bg-sos text-[17px] font-semibold text-white transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-60"
         >
           {submitting ? "Sending…" : "Send Immediately"}
         </button>
@@ -849,11 +931,15 @@ export function SosWizard({
         subtitle={
           step === "countdown" ? "Tap cancel if this was accidental" : undefined
         }
-        showBack={step !== "category" && step !== "countdown"}
+        showBack={step !== "category" && step !== "countdown" && step !== "location" && step !== "status"}
         onBack={goBack}
-        footer={wizardFooter}
+        footer={step === "location" ? undefined : wizardFooter}
+        hideHeader={step === "location"}
+        bodyClassName={
+          step === "location" ? "p-0 pb-0 overflow-hidden" : undefined
+        }
         progress={
-          step !== "countdown" ? (
+          step !== "countdown" && step !== "location" && step !== "status" ? (
             <div className="flex gap-1.5" aria-hidden="true">
               {Array.from({ length: WIZARD_STEP_COUNT }).map((_, i) => {
                 const on = i < Math.min(stepIndex(step), WIZARD_STEP_COUNT)
@@ -890,23 +976,21 @@ export function SosWizard({
         {locationVisited ? (
           <div
             className={cn(
-              "flex min-h-full flex-col gap-4",
+              "flex min-h-full flex-col",
+              step === "location" ? "h-full min-h-full flex-1 gap-0" : "gap-4",
               step !== "location" && "hidden"
             )}
           >
             <SosLocationStep
               value={location}
               onChange={setLocation}
-              className="min-h-[320px] flex-1"
+              onBack={goBack}
+              onAdvance={handleLocationAdvance}
+              error={step === "location" ? fieldErrors.location : undefined}
+              className={
+                step === "location" ? "min-h-0 flex-1" : "min-h-[320px] flex-1"
+              }
             />
-            {fieldErrors.location ? (
-              <p
-                className="text-[13px] font-medium text-sos-bright"
-                role="alert"
-              >
-                {fieldErrors.location}
-              </p>
-            ) : null}
           </div>
         ) : null}
 
@@ -953,6 +1037,14 @@ export function SosWizard({
             submitting={submitting}
             dispatchCountdown={dispatchCountdown}
             onEditStep={(next) => setStep(next)}
+            isOnline={isOnline}
+          />
+        ) : null}
+
+        {step === "status" ? (
+          <SosStatusScreen
+            onGoHome={closeShell}
+            smsSentImmediately={isOnline}
           />
         ) : null}
       </SosShell>

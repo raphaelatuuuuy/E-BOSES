@@ -5,6 +5,8 @@ import {
   ChevronUpIcon,
   CircleCheck,
   CreditCard,
+  Eye,
+  EyeOff,
   IdCard,
   ImageUp,
   PlusIcon,
@@ -12,12 +14,14 @@ import {
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+import { ListDropdown } from "@/components/ui/list-controls"
 import type {
   OcrDocumentType,
   OcrFieldDefinition,
   ProofSide,
 } from "@/features/ocr/api"
 import { MarkAreasCanvas } from "@/features/ocr/components/mark-areas-canvas"
+import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 import {
   fieldCanvasSide,
   type FieldRegion,
@@ -248,6 +252,11 @@ export function ProofWorkspace({
   onUploadTestSlot,
   onClearTestSlot,
   sampleMatchForSide,
+  availableOnSignup,
+  onToggleAvailable,
+  availabilityLocked,
+  captureMode,
+  onCaptureModeChange,
 }: {
   document: OcrDocumentType
   fields: OcrFieldDefinition[]
@@ -285,6 +294,11 @@ export function ProofWorkspace({
     side: ProofSide
   ) => { url: string; filename: string } | null
   /** Whether this proof has a stored sample the layout can be compared against. */
+  availableOnSignup: boolean
+  onToggleAvailable: () => void
+  availabilityLocked: boolean
+  captureMode: "one" | "both"
+  onCaptureModeChange: (mode: "one" | "both") => void
 }) {
   const uploadRef = useRef<HTMLInputElement>(null)
   const testUploadRef = useRef<HTMLInputElement>(null)
@@ -293,6 +307,7 @@ export function ProofWorkspace({
   const [openFieldKey, setOpenFieldKey] = useState<string | null>(null)
   const [pendingRemoveKey, setPendingRemoveKey] = useState<string | null>(null)
   const [photosOpen, setPhotosOpen] = useState(false)
+const [previewPhoto, setPreviewPhoto] = useState(false)
   const [testSideIndex, setTestSideIndex] = useState(0)
   const needsBoth = canvasSides.length > 1
 
@@ -374,18 +389,59 @@ export function ProofWorkspace({
         />
       </Labelled>
 
+      <div className="flex items-end gap-2">
+        <ListDropdown
+          label="Photos needed"
+          value={captureMode}
+          onChange={(value) => onCaptureModeChange(value === "both" ? "both" : "one")}
+          options={[{ value: "one", label: "Front only" }, { value: "both", label: "Front and back" }]}
+          className="min-w-0 flex-1"
+        />
+        <button
+          type="button"
+          onClick={onToggleAvailable}
+          aria-pressed={availableOnSignup}
+          aria-label={availableOnSignup ? "Offered to residents — tap to hide" : "Hidden from residents — tap to offer"}
+          title={availableOnSignup ? "Offered to residents — tap to hide" : "Hidden from residents — tap to offer"}
+          className={cn(
+            "flex size-12 shrink-0 items-center justify-center rounded-[14px] border-[1.5px] transition-colors",
+            availabilityLocked
+              ? "border-neutral-200 text-neutral-300"
+              : availableOnSignup
+                ? "border-neutral-300 bg-neutral-100 text-neutral-900 hover:border-neutral-400"
+                : "border-neutral-300 text-neutral-400 hover:border-neutral-400 hover:text-neutral-900"
+          )}
+        >
+          {availableOnSignup ? (
+            <Eye className="size-5" aria-hidden />
+          ) : (
+            <EyeOff className="size-5" aria-hidden />
+          )}
+        </button>
+      </div>
+
       <Labelled
         label="Description"
         hint="Shown under the name when a resident picks it."
       >
-        <input
+        <textarea
           value={document.description ?? ""}
-          onChange={(event) =>
+          onChange={(event) => {
             onChangeDocument({ description: event.target.value })
-          }
+            const el = event.target
+            el.style.height = "auto"
+            el.style.height = `${el.scrollHeight}px`
+          }}
+          ref={(el) => {
+            if (el) {
+              el.style.height = "auto"
+              el.style.height = `${el.scrollHeight}px`
+            }
+          }}
           onBlur={onBlurSave}
+          rows={2}
           placeholder="Barangay-issued resident identification card"
-          className={inputClass}
+          className={`${inputClass} resize-y overflow-hidden [&::-webkit-resizer]:border-0 [&::-webkit-resizer]:bg-transparent`}
         />
       </Labelled>
 
@@ -518,6 +574,7 @@ export function ProofWorkspace({
               onSelectField={onSelectField}
               onSetFieldRegion={onSetFieldRegion}
               onRequestUpload={() => requestUpload(sampleSide)}
+              onBackgroundClick={() => { if (sampleUrl) setPreviewPhoto(true) }}
             />
             {sampleUrl ? (
               <div className="flex items-center justify-between gap-4">
@@ -551,6 +608,14 @@ export function ProofWorkspace({
             ) : null}
           </div>
         </SetupSection>
+
+        {previewPhoto && sampleUrl ? (
+          <MediaLightbox
+            items={[{ src: sampleUrl, filename: `${sampleSide === "back" ? "Back" : "Front"} sample photo`, kind: "image", badge: sampleSide === "back" ? "Back" : "Front" }]}
+            index={0}
+            onClose={() => setPreviewPhoto(false)}
+          />
+        ) : null}
 
         <SetupSection
           title="Test"

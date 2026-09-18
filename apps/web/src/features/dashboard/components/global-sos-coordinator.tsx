@@ -17,8 +17,9 @@ export function GlobalSosCoordinator() {
     pathname === "/create-community" ||
     pathname === "/book-demo" ||
     pathname === "/report-issue"
-  const { refreshUser } = useAuthSession()
+  const { refreshUser, user } = useAuthSession()
   const online = useApiReachability()
+  const resident = !user || user.role === "resident"
   const [showReconnected, setShowReconnected] = useState(false)
   const [mounted, setMounted] = useState(() => !online)
   const [hiding, setHiding] = useState(false)
@@ -72,6 +73,17 @@ export function GlobalSosCoordinator() {
 
   useEffect(() => { void probeApiReachability() }, [])
 
+  const [sosActive, setSosActive] = useState(false)
+  useEffect(() => {
+    function onChange(event: Event) {
+      setSosActive(
+        Boolean((event as CustomEvent<{ active?: boolean }>).detail?.active)
+      )
+    }
+    window.addEventListener("eboses:sos-active-change", onChange)
+    return () => window.removeEventListener("eboses:sos-active-change", onChange)
+  }, [])
+
   const reconnected = showReconnected || (hiding && wasReconnected)
   const isColdStart =
     !online && !reconnected && !initialOnline && !wasEverOnline
@@ -81,16 +93,27 @@ export function GlobalSosCoordinator() {
       <SOSButton />
       {mounted && !hideOfflineUi ? (
         isColdStart ? (
-          <OfflineColdStartPage hiding={hiding} />
+          <OfflineColdStartPage hiding={hiding} resident={resident} />
         ) : (
-          <OfflineSheetContent reconnected={reconnected} hiding={hiding} />
+          <OfflineSheetContent
+            reconnected={reconnected}
+            hiding={hiding}
+            resident={resident}
+            sosActive={sosActive}
+          />
         )
       ) : null}
     </>
   )
 }
 
-function OfflineColdStartPage({ hiding }: { hiding: boolean }) {
+function OfflineColdStartPage({
+  hiding,
+  resident,
+}: {
+  hiding: boolean
+  resident: boolean
+}) {
   return (
     <div
       role="alert"
@@ -109,32 +132,40 @@ function OfflineColdStartPage({ hiding }: { hiding: boolean }) {
         <p className="mt-6 text-[28px] font-bold tracking-tight">
           You&rsquo;re Offline
         </p>
-        <p className="mt-2 text-[15px] leading-6 text-white/70">
-          No internet connection. You can still get help &mdash; Emergency SOS
-          works offline via SMS.
-        </p>
-        <button
-          type="button"
-          onClick={() =>
-            window.dispatchEvent(new CustomEvent("eboses:open-sos"))
-          }
-          className="mt-6 inline-flex min-h-[54px] w-full items-center justify-center gap-2 rounded-full bg-sos px-4 text-[16px] font-bold text-white focus-visible:ring-2 focus-visible:ring-sos focus-visible:ring-offset-2 focus-visible:outline-none"
-        >
-          Open SOS
-          <ArrowRightIcon
-            className="size-5"
-            strokeWidth={2.25}
-            aria-hidden="true"
-          />
-        </button>
-        <p className="mt-4 flex items-center justify-center gap-1.5 text-[13px] leading-5 text-white/60">
-          <InfoIcon
-            className="size-3.5 shrink-0"
-            strokeWidth={2}
-            aria-hidden="true"
-          />
-          Use your phone&rsquo;s SMS app to get help.
-        </p>
+        {resident ? (
+          <>
+            <p className="mt-2 text-[15px] leading-6 text-white/70">
+              No internet connection. You can still get help &mdash; Emergency
+              SOS works offline via SMS.
+            </p>
+            <button
+              type="button"
+              onClick={() =>
+                window.dispatchEvent(new CustomEvent("eboses:open-sos"))
+              }
+              className="mt-6 inline-flex min-h-[54px] w-full items-center justify-center gap-2 rounded-full bg-sos px-4 text-[16px] font-bold text-white focus-visible:ring-2 focus-visible:ring-sos focus-visible:ring-offset-2 focus-visible:outline-none"
+            >
+              Open SOS
+              <ArrowRightIcon
+                className="size-5"
+                strokeWidth={2.25}
+                aria-hidden="true"
+              />
+            </button>
+            <p className="mt-4 flex items-center justify-center gap-1.5 text-[13px] leading-5 text-white/60">
+              <InfoIcon
+                className="size-3.5 shrink-0"
+                strokeWidth={2}
+                aria-hidden="true"
+              />
+              Use your phone&rsquo;s SMS app to get help.
+            </p>
+          </>
+        ) : (
+          <p className="mt-2 text-[15px] leading-6 text-white/70">
+            No internet connection. Connect to continue.
+          </p>
+        )}
         <button
           type="button"
           onClick={() => void probeApiReachability()}
@@ -150,15 +181,20 @@ function OfflineColdStartPage({ hiding }: { hiding: boolean }) {
 function OfflineSheetContent({
   reconnected,
   hiding,
+  resident,
+  sosActive,
 }: {
   reconnected: boolean
   hiding: boolean
+  resident: boolean
+  sosActive: boolean
 }) {
+  if ((!resident || sosActive) && !reconnected) return null
   return (
     <aside
       aria-label={reconnected ? "Back online" : "Offline emergency access"}
       aria-hidden={hiding ? true : undefined}
-      className={`fixed inset-x-0 bottom-0 z-[250] mx-auto flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-[28px] border-t px-5 pt-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-10px_36px_rgba(15,23,42,.18)] transition-all duration-200 ease-out sm:inset-x-3 sm:bottom-[max(0.75rem,env(safe-area-inset-bottom))] sm:max-w-sm sm:rounded-2xl sm:border sm:p-4 sm:shadow-[0_18px_55px_rgba(15,23,42,0.22)] ${hiding ? "pointer-events-none translate-y-2 opacity-0" : "translate-y-0 opacity-100"} ${reconnected ? "border-emerald-200 bg-white text-neutral-900" : "border-transparent bg-brand-navy text-white"}`}
+      className={`fixed inset-x-0 bottom-0 z-[250] mx-auto flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-[28px] border-t px-5 pt-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[0_-10px_36px_rgba(15,23,42,.18)] transition-all duration-200 ease-out sm:inset-x-3 sm:bottom-[max(0.75rem,env(safe-area-inset-bottom))] sm:max-w-sm sm:rounded-2xl sm:border sm:p-4 sm:shadow-[0_18px_55px_rgba(15,23,42,0.22)] ${hiding ? "pointer-events-none translate-y-2 opacity-0" : "translate-y-0 opacity-100"} ${reconnected ? "bg-white text-neutral-900" : "border-transparent bg-brand-navy text-white"}`}
     >
       <div
         aria-hidden
@@ -199,7 +235,7 @@ function OfflineSheetContent({
             }
             className="mt-4 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-full bg-sos px-4 text-[15px] font-bold text-white focus-visible:ring-2 focus-visible:ring-sos focus-visible:ring-offset-2 focus-visible:outline-none"
           >
-            Open Emergency SOS
+            {sosActive ? "View ongoing emergency" : "Open Emergency SOS"}
             <ArrowRightIcon
               className="size-5"
               strokeWidth={2.25}
@@ -212,7 +248,9 @@ function OfflineSheetContent({
               strokeWidth={2}
               aria-hidden="true"
             />
-            Use your phone’s SMS app to get help.
+            {sosActive
+              ? "Your emergency is still active. Updates continue through SMS."
+              : "Use your phone’s SMS app to get help."}
           </p>
         </div>
       )}

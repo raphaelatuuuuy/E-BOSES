@@ -20,10 +20,7 @@ import {
   validateLocation,
   type LocationClassification,
 } from "@/lib/location-validation"
-import {
-  addBaseTiles,
-  warmTileCacheForBounds,
-} from "@/features/dashboard/components/map/tile-layers"
+import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
 import {
   formatNominatimParts,
   reverseGeocode,
@@ -78,6 +75,8 @@ import {
 } from "@/features/auth/api"
 import type { GeoJsonPolygon } from "@/features/dashboard/api"
 import { useBottomSheetSnap } from "@/features/dashboard/lib/use-bottom-sheet-snap"
+import { SosStreetSearchSheet } from "@/features/dashboard/components/sos/street-search-sheet"
+import { SosPill } from "@/features/dashboard/components/sos/location-pill"
 
 const DEFAULT_CENTER: [number, number] = [14.5995, 120.9842]
 const EMPTY_ALERTS: LocationPickerAlertMarker[] = []
@@ -197,6 +196,16 @@ interface LocationPickerModalProps {
   onBackRequest?: () => void
   onAlertsRequest?: () => void
   showAlertsButton?: boolean
+  /**
+   * SOS wizard mode: inline map shows back + search buttons beside the pill.
+   * The search button opens a sheet with all Marikina Heights streets;
+   * picking one focuses the map there.
+   */
+  sosStreetSearch?: boolean
+  /** Offline SOS mode: accept the locally checked coverage without server validation. */
+  offline?: boolean
+  /** Offline label for the pin, compared against cached streets when the geocoder is unreachable. */
+  offlineAddressLabel?: ((lat: number, lng: number) => string | null) | null
 }
 
 export interface PinState {
@@ -363,6 +372,9 @@ export default function LocationPickerModal({
   onBackRequest,
   onAlertsRequest,
   showAlertsButton = false,
+  sosStreetSearch = false,
+  offline = false,
+  offlineAddressLabel = null,
 }: LocationPickerModalProps) {
   const usesServedCoverage = signup || coverageScope === "served"
   const containerRef = useRef<HTMLDivElement>(null)
@@ -394,6 +406,40 @@ export default function LocationPickerModal({
   const [results, setResults] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
   const [searchFocused, setSearchFocused] = useState(false)
+  const [sosStreetOpen, setSosStreetOpen] = useState(false)
+  const sosStreets = useMemo(() => {
+    try {
+      const config = loadOfflineSosConfig()
+      const communities = config.communities?.length
+        ? config.communities
+        : [config.community]
+      const seen = new Map<string, { name: string; lat: number; lng: number }>()
+      for (const community of communities) {
+        for (const street of community?.streets ?? []) {
+          const name = street.name?.trim()
+          if (!name || seen.has(name.toLowerCase())) continue
+          const paths = street.paths?.length ? street.paths : [street.points]
+          let best: [number, number] | null = null
+          for (const path of paths) {
+            if (path?.length) {
+              const mid = path[Math.floor(path.length / 2)]!
+              if (Number.isFinite(mid[0]) && Number.isFinite(mid[1])) {
+                best = mid
+                break
+              }
+            }
+          }
+          if (best)
+            seen.set(name.toLowerCase(), { name, lat: best[0], lng: best[1] })
+        }
+      }
+      return Array.from(seen.values()).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      )
+    } catch {
+      return []
+    }
+  }, [])
   const [mapContext, setMapContext] = useState<MapContext | null>(null)
   const [mapReady, setMapReady] = useState(false)
   const [locationClass, setLocationClass] = useState<LocationClass | null>(null)
@@ -445,6 +491,17 @@ export default function LocationPickerModal({
       setLocationClass(null)
       if (reverseTimer.current) window.clearTimeout(reverseTimer.current)
       const run = () => {
+        const withOfflineFallback = (parts: {
+          primary: string
+          secondary: string
+          full: string
+        }) => {
+          if (parts.primary && parts.primary !== "Finding street…")
+            return parts
+          const street = offlineAddressLabel?.(lat, lng)?.trim()
+          if (!street) return parts
+          return { primary: street, secondary: "", full: street }
+        }
         const wait = Math.max(
           0,
           LOCATION_LOOKUP_MIN_INTERVAL_MS -
@@ -462,20 +519,25 @@ export default function LocationPickerModal({
           const validationRequest = validateLocation(lat, lng)
           void addressRequest
             .then((result) => {
-              setPreviewParts({
-                primary: result.label || result.street || "Finding street…",
-                secondary: result.community,
-                full: [result.label || result.street, result.community]
-                  .filter(Boolean)
-                  .join(", "),
-              })
+              setPreviewParts(
+                withOfflineFallback({
+                  primary:
+                    result.label || result.street || "Finding street…",
+                  secondary: result.community,
+                  full: [result.label || result.street, result.community]
+                    .filter(Boolean)
+                    .join(", "),
+                })
+              )
             })
             .catch(() => {
-              setPreviewParts({
-                primary: "Finding street…",
-                secondary: mapContext?.boundary?.name || "",
-                full: "",
-              })
+              setPreviewParts(
+                withOfflineFallback({
+                  primary: "Finding street…",
+                  secondary: mapContext?.boundary?.name || "",
+                  full: "",
+                })
+              )
             })
           void validationRequest
             .then((classification) => {
@@ -507,7 +569,7 @@ export default function LocationPickerModal({
             mapContext?.boundary?.name || "Your community"
           ).catch(
             () =>
-              ({
+              withOfflineFallback({
                 primary: "Finding street…",
                 secondary: mapContext?.boundary?.name || "",
                 full: "",
@@ -536,7 +598,7 @@ export default function LocationPickerModal({
       }
       reverseTimer.current = window.setTimeout(run, LOCATION_LOOKUP_DEBOUNCE_MS)
     },
-    [mapContext?.boundary?.name, strictBoundary, usesServedCoverage]
+    [mapContext?.boundary?.name, offlineAddressLabel, strictBoundary, usesServedCoverage]
   )
   const scheduleReverseAndValidateRef = useRef(scheduleReverseAndValidate)
   useEffect(() => {
@@ -835,11 +897,69 @@ export default function LocationPickerModal({
     }
   }, [open, mapReady, gpsFix])
 
+  function offlineSosCoverage(): CoverageInput {
+    const config = loadOfflineSosConfig()
+    const community = (
+      config.communities?.length ? config.communities : [config.community]
+    )[0]
+    if (!community) return {}
+    const acceptance = community.acceptance
+    const geometry = acceptance?.geometry as GeoJsonPolygon | null
+    const hasGeometry =
+      geometry?.type === "Polygon" || geometry?.type === "MultiPolygon"
+    const centerLat = Number(acceptance?.centerLatitude)
+    const centerLng = Number(acceptance?.centerLongitude)
+    const radius = Number(acceptance?.radiusMeters)
+    const hasCircle =
+      Number.isFinite(centerLat) &&
+      Number.isFinite(centerLng) &&
+      Number.isFinite(radius) &&
+      radius > 0
+    return {
+      boundary: offlineCommunityOutline(community) ?? null,
+      policy:
+        hasGeometry || hasCircle
+          ? {
+              acceptance_center_latitude: hasCircle ? centerLat : null,
+              acceptance_center_longitude: hasCircle ? centerLng : null,
+              acceptance_radius_meters: hasCircle ? radius : 0,
+              acceptance_geometry: hasGeometry ? geometry : null,
+            }
+          : null,
+    }
+  }
+
   // Keep coverage data private to the picker. The boundary and radius are used
   // for validation, but are intentionally not drawn on resident/public maps.
   useEffect(() => {
     const map = mapRef.current
-    if (!open || !map || !mapContext) return
+    if (!open || !map) return
+    if (!mapContext) {
+      coverageRef.current = offlineSosCoverage()
+      const center = pinLatLng(map)
+      setOutOfScope(
+        !insideCoverage(center.lat, center.lng, coverageRef.current)
+      )
+      if (recenterOnOpen) {
+        const outline = coverageRef.current.boundary
+        if (
+          outline &&
+          (outline.type === "Polygon" || outline.type === "MultiPolygon")
+        ) {
+          void import("leaflet").then((L) => {
+            try {
+              map.fitBounds(L.geoJSON(outline as never).getBounds(), {
+                padding: [28, 28],
+                maxZoom: 16,
+              })
+            } catch {
+              // Keep the current view instead of failing.
+            }
+          })
+        }
+      }
+      return
+    }
     const boundary = (mapContext.boundary?.geometry ?? null) as never
     coverageRef.current = {
       boundary,
@@ -869,14 +989,6 @@ export default function LocationPickerModal({
         if (cancelled || fittedBoundaryRef.current || !mapRef.current) return
         try {
           const bounds = L.geoJSON(initialBoundary).getBounds()
-          if (bounds.isValid()) {
-            warmTileCacheForBounds("light", {
-              minLat: bounds.getSouth(),
-              maxLat: bounds.getNorth(),
-              minLng: bounds.getWest(),
-              maxLng: bounds.getEast(),
-            })
-          }
           const currentSize = map.getSize()
           if (!bounds.isValid() || currentSize.x <= 0 || currentSize.y <= 0)
             return
@@ -1181,11 +1293,17 @@ export default function LocationPickerModal({
   }, [search, open, usesServedCoverage])
 
   const flyTo = useCallback(
-    (lat: number, lng: number, parts?: AddressParts) => {
+    (
+      lat: number,
+      lng: number,
+      parts?: AddressParts,
+      zoom?: number | null
+    ) => {
       const map = mapRef.current
       if (!map) return
       ignoreMove.current = true
-      map.setView(pinAdjustedCenter(map, lat, lng, 17), 17)
+      const target = zoom ?? map.getZoom()
+      map.setView(pinAdjustedCenter(map, lat, lng, target), target)
       setPreviewLatLng({ lat, lng })
       if (parts) setPreviewParts(parts)
       scheduleReverseAndValidate(lat, lng)
@@ -1264,7 +1382,7 @@ export default function LocationPickerModal({
         toast.error(OUT_OF_SCOPE_MESSAGE)
         return
       }
-      flyTo(next.lat, next.lng)
+      flyTo(next.lat, next.lng, undefined, 17)
       setSvCoord(next)
     },
     [flyTo]
@@ -1362,10 +1480,14 @@ export default function LocationPickerModal({
     !insideCoverage(previewLatLng.lat, previewLatLng.lng, {
       boundary: coverageRef.current.boundary,
     })
+  const locallyAccepted = offline && previewLatLng != null && !outOfScope
   const canConfirm =
     !outOfScope &&
     !strictOutside &&
-    Boolean(locationClass?.accepted && locationClass.status !== "far") &&
+    (Boolean(
+      locationClass?.accepted && locationClass.status !== "far"
+    ) ||
+      locallyAccepted) &&
     hasUsableStreet &&
     !geocoding
 
@@ -1511,17 +1633,59 @@ export default function LocationPickerModal({
           ) : null}
           <div
             className={cn(
-              "pointer-events-none absolute inset-x-0 z-20 flex flex-col items-center gap-2 px-4",
-              !showSearch
-                ? "bottom-3"
-                : signup
-                  ? "bottom-5"
-                  : sheetMode === "peek"
-                    ? "bottom-[116px]"
-                    : "bottom-[88px]"
+              sosStreetSearch
+                ? "pointer-events-none absolute inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-20 flex items-center justify-center gap-2 px-3"
+                : "pointer-events-none absolute inset-x-0 z-20 flex flex-col items-center gap-2 px-4",
+              !sosStreetSearch &&
+                (!showSearch
+                  ? "bottom-3"
+                  : signup
+                    ? "bottom-5"
+                    : sheetMode === "peek"
+                      ? "bottom-[116px]"
+                      : "bottom-[88px]")
             )}
           >
-            {publicBrowse ? (
+            {sosStreetSearch ? (
+              <>
+                {onBackRequest ? (
+                  <button
+                    type="button"
+                    onClick={onBackRequest}
+                    aria-label="Back"
+                    className="pointer-events-auto flex size-[69px] shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white text-neutral-900 shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
+                  >
+                    <ArrowLeftIcon
+                      className="size-6 text-neutral-900"
+                      strokeWidth={2}
+                    />
+                  </button>
+                ) : null}
+                {outOfScope ? (
+                  <SosPill title={OUT_OF_SCOPE_MESSAGE} />
+                ) : (
+                  <SosPill
+                    title="Use this location"
+                    subtitle={
+                      geocoding ? "Finding address…" : previewParts.primary
+                    }
+                    onClick={handleConfirm}
+                    disabled={!canConfirm || geocoding}
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSosStreetOpen(true)}
+                  aria-label="Search streets"
+                  className="pointer-events-auto flex size-[69px] shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white text-neutral-900 shadow-[0_8px_24px_rgba(0,0,0,0.2)] transition-transform hover:scale-[1.02] active:scale-[0.99]"
+                >
+                  <SearchIcon
+                    className="size-6 text-neutral-900"
+                    strokeWidth={2}
+                  />
+                </button>
+              </>
+            ) : publicBrowse ? (
               <div className="pointer-events-none flex w-full items-center justify-center">
                 <div className="relative">
                   <button
@@ -1689,7 +1853,7 @@ export default function LocationPickerModal({
                         full: item.secondary
                           ? `${item.primary}, ${item.secondary}`
                           : item.primary,
-                      })
+                      }, 17)
                     }}
                   >
                     <span className="text-[15px] font-semibold text-neutral-900">
@@ -1706,6 +1870,28 @@ export default function LocationPickerModal({
             )}
           </ul>
         </div>
+      ) : null}
+
+      {/* SOS wizard street search sheet — draggable, alert-style filter + search */}
+      {!svCoord && sosStreetSearch && sosStreetOpen ? (
+        <SosStreetSearchSheet
+          streets={sosStreets}
+          pinLat={previewLatLng?.lat ?? null}
+          pinLng={previewLatLng?.lng ?? null}
+          onSelect={(street) => {
+            setSosStreetOpen(false)
+            flyTo(street.lat, street.lng, {
+              primary: street.name,
+              secondary: PRIMARY_COMMUNITY_NAME,
+              full: `${street.name}, ${PRIMARY_COMMUNITY_NAME}`,
+            })
+          }}
+          onGoHome={(lat, lng) => {
+            setSosStreetOpen(false)
+            flyTo(lat, lng, undefined, 17)
+          }}
+          onClose={() => setSosStreetOpen(false)}
+        />
       ) : null}
     </div>
   )

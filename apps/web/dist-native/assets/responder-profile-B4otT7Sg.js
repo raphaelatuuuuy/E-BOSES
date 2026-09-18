@@ -1,0 +1,1 @@
+import{n as e}from"./react-vendor-D_udBUjN.js";import{dt as t}from"./index-Bkez0xWy.js";import{t as n}from"./use-page-title-BpXoQUMr.js";var r=e();function i(){return n(`Responder Profile`),(0,r.jsx)(`main`,{className:`min-h-full flex-1 bg-canvas p-4 pb-6 md:p-6 md:pb-8`,children:(0,r.jsx)(`div`,{className:`mx-auto max-w-3xl`,children:(0,r.jsx)(t,{})})})}export{i as default};

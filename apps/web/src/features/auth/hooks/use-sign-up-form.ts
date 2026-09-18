@@ -24,7 +24,6 @@ import {
 } from "@/features/auth/schemas/sign-up-schema"
 import { ApiError } from "@/lib/api"
 import { toast } from "sonner"
-import { readyOfflineMap } from "@/features/dashboard/components/map/tile-layers"
 import { refreshOfflineSosConfig } from "@/features/dashboard/components/sos/offline-sos-config"
 
 const initialValues: SignUpValues = {
@@ -827,9 +826,7 @@ export function useSignUpForm(options: UseSignUpFormOptions = {}) {
         try {
           await refreshOfflineSosConfig()
         } catch {
-          // The bundled coverage copy still warms below.
         }
-        readyOfflineMap()
       })()
     } catch (error) {
       if (error instanceof ApiError && error.data && typeof error.data === "object") {

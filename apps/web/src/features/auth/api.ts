@@ -31,6 +31,8 @@ export interface AuthUser {
   lastName?: string
   full_name?: string
   address?: string
+  home_latitude?: number | string | null
+  home_longitude?: number | string | null
   barangay?: string
   date_of_birth?: string | null
   member_since?: string

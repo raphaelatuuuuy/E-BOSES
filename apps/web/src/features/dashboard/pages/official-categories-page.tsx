@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangleIcon, BellIcon, Building2Icon, CheckIcon, ChevronDownIcon, ChevronUpIcon,
-  CircleXIcon, ClipboardListIcon, FolderOpenIcon, MapPinIcon, PencilLineIcon, PlusIcon,
-  Share2Icon, ShieldAlertIcon, SirenIcon, TagsIcon, Trash2Icon,
+  CircleXIcon, ClipboardListIcon, CloudRainWindIcon, FolderOpenIcon, MapPinIcon, PencilLineIcon, PlusIcon,
+  ShieldAlertIcon, SirenIcon, TagsIcon, Trash2Icon,
 } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest, unwrapList, type ListEnvelope } from "@/lib/api"
@@ -12,8 +13,8 @@ import { resolveIconByKey } from "@/features/dashboard/components/concerns/resol
 import type { EmergencyCategory, EmergencyQuickQuestion } from "@/features/dashboard/emergency-api"
 import { ListDropdown } from "@/components/ui/list-controls"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
-import { ConfigurationInfoRow, ConfigurationTable } from "@/features/dashboard/components/config/configuration-table"
-import { SheetActionRow, SheetDialog, SheetIconButton, SheetList, SheetOptionRow, SheetPrimaryButton, SheetSecondaryButton, SheetToggleRow } from "@/features/dashboard/components/sheet-dialog"
+import { ConfigurationTable, ConfigurationTableRow } from "@/features/dashboard/components/config/configuration-table"
+import { SheetDialog, SheetIconButton, SheetList, SheetOptionRow, SheetPrimaryButton, SheetSecondaryButton, SheetToggleRow } from "@/features/dashboard/components/sheet-dialog"
 import { ConfigAlarm, ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
 
 interface Unit {
@@ -49,7 +50,7 @@ const labelClass = "text-[13px] font-semibold text-neutral-600"
 const ICONS = [
   ["bell", "General", BellIcon], ["shield-alert", "Safety", ShieldAlertIcon],
   ["map-pin", "Location", MapPinIcon], ["siren", "Emergency", SirenIcon],
-  ["zap", "Urgent", AlertTriangleIcon],
+  ["zap", "Urgent", AlertTriangleIcon], ["cloud-rain-wind", "Storm", CloudRainWindIcon],
 ] as const
 
 function normalize(value: string) { return value.trim().toLowerCase().replace(/[-\s]+/g, "_") }
@@ -85,6 +86,61 @@ function QuestionsEditor({ questions, onChange }: { questions: EmergencyQuickQue
   </div>
 }
 
+function IconDropdown({ value, options, onChange }: {
+  value: string
+  options: Array<{ key: string; label: string; Icon: LucideIcon }>
+  onChange: (key: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const selected = options.find((option) => option.key === value) ?? options[0]
+  useEffect(() => {
+    const close = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", close)
+    return () => document.removeEventListener("mousedown", close)
+  }, [])
+  const SelectedIcon = selected?.Icon
+  return (
+    <div ref={rootRef} className="relative">
+      <p className={labelClass}>Icon</p>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className="mt-1.5 flex w-full items-center gap-3 rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-left text-[16px] text-neutral-900 outline-none transition-colors hover:border-neutral-400"
+      >
+        {SelectedIcon ? <SelectedIcon className="size-5 shrink-0" aria-hidden /> : null}
+        <span className="min-w-0 flex-1 truncate">{selected?.label ?? "Choose an icon"}</span>
+        <ChevronDownIcon className={`size-4 shrink-0 text-neutral-400 transition-transform ${open ? "rotate-180" : ""}`} strokeWidth={1.8} aria-hidden />
+      </button>
+      {open ? (
+        <div role="listbox" aria-label="Category icon" className="absolute right-0 left-0 z-40 mt-2 max-h-64 overflow-y-auto rounded-[14px] border border-neutral-200 bg-white p-1.5 shadow-lg [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {options.map((option) => {
+            const isSelected = option.key === value
+            return (
+              <button
+                key={option.key}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => { onChange(option.key); setOpen(false) }}
+                className="flex w-full items-center gap-3 rounded-[12px] px-4 py-2.5 text-left transition hover:bg-neutral-50"
+              >
+                <option.Icon className="size-5 shrink-0 text-neutral-700" strokeWidth={1.8} aria-hidden />
+                <span className="min-w-0 flex-1 text-[15px] font-medium text-neutral-900">{option.label}</span>
+                {isSelected ? <CheckIcon className="size-4 shrink-0 text-green-600" strokeWidth={2} aria-hidden /> : null}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export default function OfficialCategoriesPage({ embedded = false }: { embedded?: boolean }) {
   const [concerns, setConcerns] = useState<ConcernCategory[]>([])
   const [emergencies, setEmergencies] = useState<EmergencyCategory[]>([])
@@ -93,14 +149,35 @@ export default function OfficialCategoriesPage({ embedded = false }: { embedded?
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
   const [query, setQuery] = useState("")
-  const [statusFilter, setStatusFilter] = useState("active")
+  const [statusFilter, setStatusFilter] = useState("all")
   const [offset, setOffset] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [dialogSection, setDialogSection] = useState<"overview" | "details" | "routing" | "settings">("overview")
   const [original, setOriginal] = useState("")
   const [saving, setSaving] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<CatalogRow | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
+  const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null)
+  const [deleteGrown, setDeleteGrown] = useState(false)
+  const removeRef = useRef<() => void>(() => {})
+  useEffect(() => { removeRef.current = () => void removeRow(rows.find((r) => r.key === draft?.key) ?? null) })
+  useEffect(() => { if (!draft) { setConfirmingRemove(false); setDeleteCountdown(null) } }, [draft ])
+  useEffect(() => {
+    if (deleteCountdown == null) return
+    if (deleteCountdown === 0) {
+      setDeleteCountdown(null)
+      void removeRef.current()
+      return
+    }
+    const timer = window.setTimeout(() => setDeleteCountdown(deleteCountdown - 1), 1000)
+    return () => window.clearTimeout(timer)
+  }, [deleteCountdown ])
+  useEffect(() => {
+    if (!confirmingRemove) return
+    setDeleteGrown(false)
+    const grow = window.setTimeout(() => setDeleteGrown(true), 30)
+    return () => window.clearTimeout(grow)
+  }, [confirmingRemove ])
 
   const load = useCallback(async () => {
     setLoading(true); setLoadError("")
@@ -129,24 +206,38 @@ export default function OfficialCategoriesPage({ embedded = false }: { embedded?
       return { key, concern, emergency, name: concern?.name ?? emergency?.label ?? key, description: concern?.description ?? emergency?.subtext ?? "", code: concern?.code ?? emergency?.code ?? key, iconKey: concern?.icon_key ?? emergency?.icon_key ?? "tags", unit, availableInReports: Boolean(concern?.is_active), availableInSos: Boolean(emergency?.is_active), active: Boolean(concern?.is_active || emergency?.is_active) }
     }).sort((x, y) => x.name.localeCompare(y.name))
   }, [concerns, emergencies, maps, units])
+  const iconOptions = useMemo(() => {
+    const seen = new Map<string, { key: string; label: string; Icon: LucideIcon }>()
+    const add = (key: string, label?: string) => {
+      if (!key || seen.has(key)) return
+      const Icon = resolveIconByKey(key)
+      if (!Icon) return
+      seen.set(key, { key, label: label ?? key.split(/[-_]+/).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" "), Icon })
+    }
+    add("tags", "Default")
+    for (const [key, label] of ICONS) add(key, label)
+    for (const row of rows) add(row.iconKey)
+    return [...seen.values()]
+  }, [rows])
   const statusOf = (row: CatalogRow) => !row.active ? "inactive" : !row.unit?.is_active || (row.availableInSos && Boolean(questionsError(row.emergency?.quick_questions ?? []))) ? "needs-setup" : "active"
   const filtered = useMemo(() => { const needle = query.trim().toLowerCase(); return rows.filter((row) => {
     if (needle && !`${row.name} ${row.description} ${row.unit?.name ?? ""} ${row.unit?.short_name ?? ""}`.toLowerCase().includes(needle)) return false
-    return statusFilter === "all" || statusOf(row) === statusFilter
+    return statusFilter === "all" ? true : statusFilter === "concerns" ? row.availableInReports : row.availableInSos
   }) }, [query, rows, statusFilter])
   const page = filtered.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
   const needsSetup = rows.filter((row) => statusOf(row) === "needs-setup").length
   const statusCounts = useMemo(() => ({
-    active: rows.filter((row) => statusOf(row) === "active").length,
+    concerns: rows.filter((row) => row.availableInReports).length,
+    sos: rows.filter((row) => row.availableInSos).length,
     "needs-setup": rows.filter((row) => statusOf(row) === "needs-setup").length,
     inactive: rows.filter((row) => statusOf(row) === "inactive").length,
     all: rows.length,
   }), [rows])
 
   const emptyDraft = (): Draft => ({ code: "", name: "", description: "", iconKey: "tags", unitId: null, availableInReports: true, availableInSos: false, descriptionRequired: true, photoRequired: false, locationRequired: true, publicFeedAllowed: true, sosDescription: "", sosVisibleOnMap: true, questions: [], active: true })
-  function openRow(row: CatalogRow) { const next: Draft = { key: row.key, concernId: row.concern?.id, emergencyId: row.emergency?.id, code: row.code, name: row.name, description: row.description, iconKey: row.iconKey, unitId: row.unit?.id ?? null, availableInReports: row.availableInReports, availableInSos: row.availableInSos, descriptionRequired: row.concern?.description_required ?? true, photoRequired: row.concern?.photo_required ?? false, locationRequired: row.concern?.location_required ?? true, publicFeedAllowed: row.concern?.public_feed_allowed ?? true, sosDescription: row.emergency?.subtext ?? "", sosVisibleOnMap: row.emergency?.visible_to_residents ?? true, questions: row.emergency?.quick_questions ?? [], active: row.active }; setDraft(next); setOriginal(JSON.stringify(next)) }
+  function openRow(row: CatalogRow) { const next: Draft = { key: row.key, concernId: row.concern?.id, emergencyId: row.emergency?.id, code: row.code, name: row.name, description: row.description, iconKey: row.iconKey, unitId: row.unit?.id ?? null, availableInReports: row.availableInReports, availableInSos: row.availableInSos, descriptionRequired: row.concern?.description_required ?? true, photoRequired: row.concern?.photo_required ?? false, locationRequired: row.concern?.location_required ?? true, publicFeedAllowed: true, sosDescription: row.emergency?.subtext ?? "", sosVisibleOnMap: row.emergency?.visible_to_residents ?? true, questions: row.emergency?.quick_questions ?? [], active: row.active }; setDraft(next); setOriginal(JSON.stringify(next)) }
   const openNew = () => { setDraft(emptyDraft()); setOriginal(""); setDialogSection("overview") }
-  const clearFilters = () => { setQuery(""); setStatusFilter("active") }
+  const clearFilters = () => { setQuery(""); setStatusFilter("all") }
 
   useEffect(() => {
     if (!embedded) return
@@ -192,28 +283,33 @@ export default function OfficialCategoriesPage({ embedded = false }: { embedded?
     } catch (error) { toast.error(describeApiError(error, "The category could not be saved.")) }
     finally { setSaving(false) }
   }
-  async function remove() { if (!deleteTarget) return; setDeleting(true); try { const ops: Promise<unknown>[] = []; if (deleteTarget.concern) ops.push(apiRequest(`/concerns/admin/categories/${deleteTarget.concern.id}/`, { method: "DELETE" })); if (deleteTarget.emergency) ops.push(apiRequest(`/emergencies/categories/${deleteTarget.emergency.id}/`, { method: "DELETE" })); await Promise.all(ops); toast.success("Category removed"); setDeleteTarget(null); await load() } catch (error) { toast.error(describeApiError(error, "The category could not be removed.")) } finally { setDeleting(false) } }
+  async function removeRow(row: CatalogRow | null) { if (!row) return; setDeleting(true); try { const ops: Promise<unknown>[] = []; if (row.concern) ops.push(apiRequest(`/concerns/admin/categories/${row.concern.id}/`, { method: "DELETE" })); if (row.emergency) ops.push(apiRequest(`/emergencies/categories/${row.emergency.id}/`, { method: "DELETE" })); await Promise.all(ops); toast.success("Category removed"); setDraft(null); setOriginal(""); setDialogSection("overview"); await load() } catch (error) { toast.error(describeApiError(error, "The category could not be removed.")) } finally { setDeleting(false) } }
 
-  return <ConfigShell embedded={embedded} hideEmbeddedAction={embedded} icon={FolderOpenIcon} eyebrow="Operations" title="Report categories" description="Manage what residents can report, where reports are sent, and which categories are available during an SOS." stats={[{ label: "Active categories", value: rows.filter((row) => row.active).length }, { label: "Available in SOS", value: rows.filter((row) => row.availableInSos).length }, { label: "Need setup", value: needsSetup, alarm: needsSetup > 0 }]} action={<ConfigHeroAction icon={PlusIcon} onClick={openNew}>Add category</ConfigHeroAction>}>
-    {needsSetup ? <ConfigAlarm><strong>{needsSetup} {needsSetup === 1 ? "category needs" : "categories need"} setup.</strong> Assign an active unit before residents can use {needsSetup === 1 ? "it" : "them"}. <button type="button" onClick={() => setStatusFilter("needs-setup")} className="font-semibold underline underline-offset-4">Show categories</button></ConfigAlarm> : null}
+  return <ConfigShell embedded={embedded} hideEmbeddedAction={embedded} icon={FolderOpenIcon} eyebrow="Operations" title="Report" description="Manage what residents can report, where reports are sent, and which categories are available during an SOS." stats={[{ label: "Active categories", value: rows.filter((row) => row.active).length }, { label: "Available in SOS", value: rows.filter((row) => row.availableInSos).length }, { label: "Need setup", value: needsSetup, alarm: needsSetup > 0 }]} action={<ConfigHeroAction icon={PlusIcon} onClick={openNew}>Add category</ConfigHeroAction>}>
+    {needsSetup ? <ConfigAlarm><strong>{needsSetup} {needsSetup === 1 ? "category needs" : "categories need"} setup.</strong> Assign an active unit before residents can use {needsSetup === 1 ? "it" : "them"}. <button type="button" onClick={() => setStatusFilter("concerns")} className="font-semibold underline underline-offset-4">Show categories</button></ConfigAlarm> : null}
+    <div className="space-y-4">
     <ConfigurationListToolbar
       search={query}
       onSearch={(value) => { setQuery(value); setOffset(0) }}
       placeholder="Search categories"
-      filters={[{ key: "active", label: "Active", count: statusCounts.active }, { key: "needs-setup", label: "Needs setup", count: statusCounts["needs-setup"] }, { key: "inactive", label: "Inactive", count: statusCounts.inactive }, { key: "all", label: "Any status", count: statusCounts.all }]}
+      filters={[{ key: "all", label: "All", count: statusCounts.all }, { key: "concerns", label: "Concerns", count: statusCounts.concerns }, { key: "sos", label: "SOS", count: statusCounts.sos }, { key: "__add", label: "Add a category" }]}
       activeFilter={statusFilter}
-      onFilter={(value) => { setStatusFilter(value); setOffset(0) }}
+      onFilter={(value) => { if (value === "__add") { openNew(); return } setStatusFilter(value); setOffset(0) }}
     />
-    {loadError ? <div className="rounded-2xl border border-neutral-200 px-6 py-10 text-center"><AlertTriangleIcon className="mx-auto size-6 text-sos" /><h2 className="mt-4 text-row font-semibold text-brand-navy">Categories could not be loaded</h2><p className="mt-2 text-read text-neutral-500">{loadError}</p><button type="button" onClick={() => void load()} className="mt-5 rounded-full bg-brand-navy px-5 py-2.5 text-sm font-semibold text-white">Try again</button></div> : loading ? <div className="divide-y divide-neutral-200" aria-label="Loading categories">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="grid grid-cols-[minmax(0,1fr)_auto] gap-6 py-5"><span className="h-4 w-32 animate-pulse rounded bg-neutral-100" /><span className="h-4 w-16 animate-pulse rounded bg-neutral-100" /></div>)}</div> : page.length === 0 ? <div className="py-16 text-center"><FolderOpenIcon className="mx-auto size-7 text-neutral-300" /><h2 className="mt-4 text-row font-semibold text-brand-navy">{rows.length ? "No categories match this view" : "No report categories yet"}</h2><p className="mt-2 text-read text-neutral-500">{rows.length ? "Try another search or status." : "Add the first category residents can use when submitting a report."}</p><button type="button" onClick={rows.length ? clearFilters : openNew} className="mt-5 font-semibold text-brand-navy underline underline-offset-4">{rows.length ? "Show active categories" : "Add category"}</button></div> : <ConfigurationTable label="Report categories" hideHeader>{page.map((row) => { const Icon = resolveIconByKey(row.iconKey) ?? TagsIcon; const status = statusOf(row); return <ConfigurationInfoRow key={row.key} icon={Icon} title={row.name} subtext={row.unit?.name ?? <span className="text-sos">No unit assigned</span>} description={row.description || "No description"} actions={<><SheetIconButton label={`Edit ${row.name}`} onClick={() => openRow(row)}><PencilLineIcon className="size-5" strokeWidth={1.8} aria-hidden /></SheetIconButton><SheetIconButton label={`Remove ${row.name}`} onClick={() => setDeleteTarget(row)} className="text-neutral-500 hover:text-sos"><Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden /></SheetIconButton></>} />})}</ConfigurationTable>}
-    {!loading && !loadError && filtered.length ? <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="categories" /> : null}
+    <div>
+    {loadError ? <div className="rounded-2xl border border-neutral-200 px-6 py-10 text-center"><AlertTriangleIcon className="mx-auto size-6 text-sos" /><h2 className="mt-4 text-row font-semibold text-brand-navy">Categories could not be loaded</h2><p className="mt-2 text-read text-neutral-500">{loadError}</p><button type="button" onClick={() => void load()} className="mt-5 rounded-full bg-brand-navy px-5 py-2.5 text-sm font-semibold text-white">Try again</button></div> : loading ? <div className="divide-y divide-neutral-200" aria-label="Loading categories">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="grid grid-cols-[minmax(0,1fr)_auto] gap-6 py-5"><span className="h-4 w-32 animate-pulse rounded bg-neutral-100" /><span className="h-4 w-16 animate-pulse rounded bg-neutral-100" /></div>)}</div> : page.length === 0 ? <div className="py-16 text-center"><FolderOpenIcon className="mx-auto size-7 text-neutral-300" /><h2 className="mt-4 text-row font-semibold text-brand-navy">{rows.length ? "No categories match this view" : "No report categories yet"}</h2><p className="mt-2 text-read text-neutral-500">{rows.length ? "Try another search or status." : "Add the first category residents can use when submitting a report."}</p><button type="button" onClick={rows.length ? clearFilters : openNew} className="mt-5 font-semibold text-brand-navy underline underline-offset-4">{rows.length ? "Show active categories" : "Add category"}</button></div> : <ConfigurationTable label="Report categories" hideHeader>{page.map((row) => { const Icon = resolveIconByKey(row.iconKey) ?? TagsIcon; return <ConfigurationTableRow key={row.key} actions={<SheetIconButton label={`Edit ${row.name}`} onClick={() => openRow(row)} className="mr-1 size-8 text-neutral-400 hover:text-neutral-700"><PencilLineIcon className="size-5" strokeWidth={1.9} aria-hidden /></SheetIconButton>}><div className="flex min-w-0 items-start gap-2"><Icon className="size-5 shrink-0 text-neutral-700" strokeWidth={1.9} aria-hidden /><div className="min-w-0 flex-1"><p className="break-words text-[15px] leading-snug font-bold text-neutral-900">{row.name} {row.unit?.short_name ? <span className="text-[13px] font-medium text-neutral-400">{row.unit.short_name}</span> : <span className="text-[13px] font-medium text-sos">No unit assigned</span>}</p></div></div></ConfigurationTableRow> })}</ConfigurationTable>}
+    {!loading && !loadError && filtered.length ? <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="categories" className="py-1" inline /> : null}
+    </div>
+    </div>
     {draft ? <SheetDialog
       open
       onClose={() => { if (!saving) { setDraft(null); setOriginal(""); setDialogSection("overview") } }}
-      title={draft.key ? `Edit ${draft.name}` : "Add category"}
-      description={dialogSection === "overview" ? "Set the category details and choose where it goes." : undefined}
+      onBack={() => { if (!saving) { setDraft(null); setOriginal(""); setDialogSection("overview") } }}
+      showClose={false}
+      titleClassName="text-center"
+      title={<span className="inline-flex items-center gap-2"><FolderOpenIcon className="size-6" strokeWidth={2} aria-hidden />Report<span className="text-brand-orange">Details</span></span>}
       size="wide"
-      actions={<><SheetIconButton label={draft.availableInSos ? "Remove from SOS" : "Add to SOS"} onClick={() => setDraft({ ...draft, availableInSos: !draft.availableInSos, availableInReports: draft.availableInSos })} className={draft.availableInSos ? "bg-sos/10 text-sos" : undefined}><SirenIcon className="size-5" strokeWidth={2} /></SheetIconButton><SheetIconButton label={draft.publicFeedAllowed ? "Turn off public sharing" : "Turn on public sharing"} onClick={() => setDraft({ ...draft, publicFeedAllowed: !draft.publicFeedAllowed })} className={draft.publicFeedAllowed ? "bg-brand-orange/10 text-brand-orange" : undefined}><Share2Icon className="size-5" strokeWidth={2} /></SheetIconButton></>}
-      footer={dialogSection === "overview" ? <SheetActionRow><SheetSecondaryButton disabled={saving} onClick={() => { setDraft(null); setOriginal("") }}>Cancel</SheetSecondaryButton><SheetPrimaryButton tone="accent" disabled={saving || !draft.name.trim() || !draft.description.trim() || Boolean(draft.key && original === JSON.stringify(draft))} onClick={() => void save()}>{saving ? "Saving…" : draft.key ? "Save changes" : "Create category"}</SheetPrimaryButton></SheetActionRow> : <SheetSecondaryButton onClick={() => setDialogSection("overview")}>Back</SheetSecondaryButton>}
+      footer={dialogSection === "overview" ? <div key={confirmingRemove ? "confirm" : "edit"} className="motion-safe:animate-slide-in-right">{confirmingRemove ? (<div className="flex items-center gap-2"><SheetSecondaryButton className="h-11 w-auto flex-none px-6 text-[15px]" onClick={() => { setDeleteCountdown(null); setConfirmingRemove(false) }}>No</SheetSecondaryButton><SheetPrimaryButton tone="danger" onClick={() => { if (deleteCountdown != null) setDeleteCountdown(null); else setDeleteCountdown(3) }} disabled={deleting || saving} className={`h-11 min-w-0 flex-1 gap-2 overflow-hidden whitespace-nowrap text-[15px] transition-[max-width] duration-500 ease-out ${deleteGrown ? "max-w-[999px]" : "max-w-11 px-0"}`}><Trash2Icon className="size-5 shrink-0" strokeWidth={2} aria-hidden /><span className={`overflow-hidden tabular-nums transition-[max-width,opacity] delay-150 duration-300 ${deleteGrown ? "max-w-32 opacity-100" : "max-w-0 opacity-0"}`}>{deleting ? "Deleting…" : deleteCountdown != null ? `Cancel ${deleteCountdown}s` : "Delete"}</span></SheetPrimaryButton></div>) : (<div className="flex items-center gap-2"><SheetPrimaryButton tone="accent" disabled={saving || !draft.name.trim() || !draft.description.trim() || Boolean(draft.key && original === JSON.stringify(draft))} onClick={() => void save()} className="h-11 min-w-0 flex-1 text-[15px]">{saving ? "Saving…" : draft.key ? "Save changes" : "Create category"}</SheetPrimaryButton>{draft.key ? (<SheetPrimaryButton tone="danger" aria-label="Remove category" onClick={() => setConfirmingRemove(true)} disabled={saving} className="h-11 w-11 flex-none px-0 text-[15px]"><Trash2Icon className="size-5" strokeWidth={2} aria-hidden /></SheetPrimaryButton>) : (<button type="button" aria-label={draft.availableInSos ? "Remove from SOS" : "Add to SOS"} aria-pressed={draft.availableInSos} onClick={() => setDraft({ ...draft, availableInSos: !draft.availableInSos, availableInReports: draft.availableInSos })} className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition-colors ${draft.availableInSos ? "border-transparent bg-sos/10 text-sos" : "border-neutral-300 text-neutral-500 hover:border-neutral-400"}`}><SirenIcon className="size-5" strokeWidth={2} aria-hidden /></button>)}</div>)}</div> : <SheetSecondaryButton onClick={() => setDialogSection("overview")}>Back</SheetSecondaryButton>}
     >
       {dialogSection === "overview" ? <div className="space-y-5 pt-2">
         <SheetList>
@@ -223,10 +319,9 @@ export default function OfficialCategoriesPage({ embedded = false }: { embedded?
         </SheetList>
         {draft.key ? <SheetList><SheetToggleRow id="category-active" checked={draft.active} onChange={(checked) => setDraft({ ...draft, active: checked })} label="Active" description="Show this category to residents." /></SheetList> : null}
       </div> : null}
-      {dialogSection === "details" ? <section className="space-y-5 pt-2"><label className="block"><span className={labelClass}>Category name</span><input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value, code: draft.concernId || draft.emergencyId ? draft.code : slugify(e.target.value) })} className={inputClass} placeholder="Illegal dumping" /></label><label className="block"><span className={labelClass}>Description</span><textarea value={draft.description} maxLength={255} rows={3} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className={inputClass} placeholder="Garbage left outside approved collection points" /></label><div><p className={labelClass}>Icon</p><div className="mt-2 grid grid-cols-5 gap-2">{ICONS.map(([key, label, Icon]) => <button key={key} type="button" aria-label={label} aria-pressed={draft.iconKey === key} onClick={() => setDraft({ ...draft, iconKey: key })} className={`flex h-12 items-center justify-center rounded-xl border ${draft.iconKey === key ? "border-brand-navy bg-brand-navy text-white" : "border-neutral-200 text-neutral-500 hover:bg-neutral-50"}`}><Icon className="size-5" /></button>)}</div></div></section> : null}
+      {dialogSection === "details" ? <section className="space-y-5 pt-2"><label className="block"><span className={labelClass}>Category name</span><input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value, code: draft.concernId || draft.emergencyId ? draft.code : slugify(e.target.value) })} className={inputClass} placeholder="Illegal dumping" /></label><label className="block"><span className={labelClass}>Description</span><textarea value={draft.description} maxLength={255} rows={3} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className={`${inputClass} min-h-24 resize-y [&::-webkit-resizer]:border-0 [&::-webkit-resizer]:bg-transparent`} placeholder="Garbage left outside approved collection points" /></label><IconDropdown value={draft.iconKey} options={iconOptions} onChange={(key) => setDraft({ ...draft, iconKey: key })} /></section> : null}
       {dialogSection === "routing" ? <section className="pt-2"><ListDropdown label="Assigned unit" value={draft.unitId ? String(draft.unitId) : ""} onChange={(value) => setDraft({ ...draft, unitId: value ? Number(value) : null })} options={[{ value: "", label: "Choose a unit" }, ...units.filter((unit) => unit.is_active).map((unit) => ({ value: String(unit.id), label: unit.name, description: unit.short_name }))]} /></section> : null}
-      {dialogSection === "settings" ? <section className="space-y-5 pt-2">{!draft.availableInSos ? <div className="grid gap-1 sm:grid-cols-3"><Requirement checked={draft.descriptionRequired} onChange={(checked) => setDraft({ ...draft, descriptionRequired: checked })} label="Description" hint="Ask what happened." /><Requirement checked={draft.photoRequired} onChange={(checked) => setDraft({ ...draft, photoRequired: checked })} label="Photo" hint="Ask for an image." /><Requirement checked={draft.locationRequired} onChange={(checked) => setDraft({ ...draft, locationRequired: checked })} label="Location" hint="Ask for the place." /></div> : <div className="space-y-5"><label className="block"><span className={labelClass}>SOS description</span><input value={draft.sosDescription} onChange={(e) => setDraft({ ...draft, sosDescription: e.target.value })} className={inputClass} placeholder={draft.description} /></label><QuestionsEditor questions={draft.questions} onChange={(questions) => setDraft({ ...draft, questions })} /><SheetList><SheetToggleRow id="category-sos-map" checked={draft.sosVisibleOnMap} onChange={(checked) => setDraft({ ...draft, sosVisibleOnMap: checked })} label="Show on alerts map" /></SheetList></div>}</section> : null}
+      {dialogSection === "settings" ? <section className="space-y-5 pt-2">{!draft.availableInSos ? <div className="grid gap-1 sm:grid-cols-3"><Requirement checked={draft.descriptionRequired} onChange={(checked) => setDraft({ ...draft, descriptionRequired: checked })} label="Description" hint="Ask what happened." /><Requirement checked={draft.photoRequired} onChange={(checked) => setDraft({ ...draft, photoRequired: checked })} label="Photo" hint="Ask for an image." /><Requirement checked={draft.locationRequired} onChange={(checked) => setDraft({ ...draft, locationRequired: checked })} label="Location" hint="Ask for the place." /></div> : <div className="space-y-5"><label className="block"><span className={labelClass}>SOS description</span><textarea value={draft.sosDescription} onChange={(e) => setDraft({ ...draft, sosDescription: e.target.value })} rows={3} className={`${inputClass} min-h-24 resize-y [&::-webkit-resizer]:border-0 [&::-webkit-resizer]:bg-transparent`} placeholder={draft.description} /></label><QuestionsEditor questions={draft.questions} onChange={(questions) => setDraft({ ...draft, questions })} /><SheetList><SheetToggleRow id="category-sos-map" checked={draft.sosVisibleOnMap} onChange={(checked) => setDraft({ ...draft, sosVisibleOnMap: checked })} label="Show on alerts map" /></SheetList></div>}</section> : null}
     </SheetDialog> : null}
-    <SheetDialog open={Boolean(deleteTarget)} onClose={() => { if (!deleting) setDeleteTarget(null) }} title={deleteTarget ? `Remove ${deleteTarget.name}?` : ""} description="Residents will no longer be able to use this category. Existing reports and SOS incidents will keep their history." footer={<SheetActionRow><SheetSecondaryButton disabled={deleting} onClick={() => setDeleteTarget(null)}>Cancel</SheetSecondaryButton><SheetPrimaryButton tone="danger" disabled={deleting} onClick={() => void remove()}>{deleting ? "Removing…" : "Remove category"}</SheetPrimaryButton></SheetActionRow>} />
   </ConfigShell>
 }

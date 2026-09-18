@@ -6,16 +6,17 @@
   "scripts": {
     "dev": "vite --host",
     "certs": "mkcert -install && mkcert localhost 127.0.0.1 10.35.187.164 172.24.208.1 172.23.32.1",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node ../../scripts/inject_sw_precache.mjs",
+    "build:native": "tsc -b && vite build --mode capacitor && node ../../scripts/inject_sw_precache.mjs dist-native",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test src/features/auth/recent-accounts.test.mjs src/features/dashboard/components/sos-fallback.test.mjs src/features/dashboard/components/emergency-tracking-state.test.mjs src/features/dashboard/components/record/severity.test.mjs src/features/dashboard/lib/report-priority.test.mjs src/features/classification/route-preview-map.test.mjs src/features/dashboard/lib/sms-update-parser.test.mjs src/features/dashboard/components/create-report-dialog-photo.test.mjs src/features/dashboard/components/map/tile-warmup.test.mjs",
+    "test": "node --experimental-strip-types --test native-build.test.mjs src/lib/sms-recipient.test.mjs src/lib/media-url.test.mjs src/features/auth/recent-accounts.test.mjs src/features/dashboard/components/sos-fallback.test.mjs src/features/dashboard/components/emergency-tracking-state.test.mjs src/features/dashboard/components/record/severity.test.mjs src/features/dashboard/lib/report-priority.test.mjs src/features/classification/route-preview-map.test.mjs src/features/dashboard/lib/sms-update-parser.test.mjs src/features/dashboard/components/create-report-dialog-photo.test.mjs",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b",
-    "offline-map": "node ../../scripts/build_offline_pmtiles.mjs",
+    "offline-map": "node ../../scripts/build_offline_pmtiles.mjs && node ../../scripts/extract_offline_tiles.mjs",
     "preview": "vite preview --host",
-    "cap:sync": "npm run build -- --mode capacitor && cap sync android",
+    "cap:sync": "npm run build:native && cap sync android",
     "cap:open:android": "cap open android",
-    "cap:run:android": "npm run build -- --mode capacitor && cap sync android && cap run android"
+    "cap:run:android": "npm run build:native && cap sync android && cap run android"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

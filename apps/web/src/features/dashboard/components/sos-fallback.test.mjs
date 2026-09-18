@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
 
@@ -10,6 +10,7 @@ import {
   isSosLocationReady,
 } from "./sos-fallback.ts"
 import { estimateOfflineStreet } from "./sos/offline-sos-config.ts"
+import { sosNetworkReachable } from "./sos/offline-sos-network.ts"
 
 const GOLDEN_PATH = fileURLToPath(
   new URL(
@@ -25,6 +26,12 @@ const SOS_LOCATION_STEP_PATH = fileURLToPath(
 )
 const LOCATION_PICKER_PATH = fileURLToPath(
   new URL("./location-picker.tsx", import.meta.url)
+)
+const SERVICE_WORKER_PATH = fileURLToPath(
+  new URL("../../../../public/eboses-sw.js", import.meta.url)
+)
+const PRECACHE_SCRIPT_PATH = fileURLToPath(
+  new URL("../../../../../../scripts/inject_sw_precache.mjs", import.meta.url)
 )
 
 test("buildEmergencySmsHref creates an explicit native SMS draft for a configured number", () => {
@@ -216,4 +223,109 @@ test("Emergency SOS reuses the report location picker and its pill", () => {
   assert.doesNotMatch(sosSource, /import\("leaflet"\)/)
   assert.match(pickerSource, /map = L\.map\(/)
   assert.match(pickerSource, /Use this location/)
+})
+
+test("the SOS map only picks the online picker when it can actually reach the network", async () => {
+  const probed = []
+  const answers = async (url) => {
+    probed.push(url)
+    return { ok: true, status: 200 }
+  }
+  const dead = async () => {
+    throw new TypeError("Failed to fetch")
+  }
+
+  assert.equal(
+    await sosNetworkReachable({ fetchImpl: answers, isOnline: () => false, apiBase: "/api" }),
+    false
+  )
+  assert.deepEqual(probed, [], "the browser already knows there is no network")
+
+  assert.equal(
+    await sosNetworkReachable({ fetchImpl: answers, isOnline: () => true, apiBase: "/api" }),
+    true
+  )
+  assert.equal(probed[0], "/api/", "the same-origin API is probed first")
+  assert.ok(
+    probed.some((url) => url.includes("basemaps.cartocdn.com")),
+    "the basemap the online map needs is probed too"
+  )
+
+  // Connected to something, but nothing answers: bundled map.
+  assert.equal(
+    await sosNetworkReachable({ fetchImpl: dead, isOnline: () => true, apiBase: "/api" }),
+    false
+  )
+
+  // Native builds use an absolute API origin where CORS can reject an healthy
+  // request, so the basemap decides instead of a misleading failure.
+  const blockedApi = async (url) => {
+    if (url.includes("cartocdn")) return { ok: true }
+    throw new TypeError("blocked")
+  }
+  assert.equal(
+    await sosNetworkReachable({
+      fetchImpl: blockedApi,
+      isOnline: () => true,
+      apiBase: "https://api.example.test",
+    }),
+    true
+  )
+  assert.equal(
+    await sosNetworkReachable({
+      fetchImpl: dead,
+      isOnline: () => true,
+      apiBase: "https://api.example.test",
+    }),
+    false
+  )
+})
+
+test("the SOS location step uses one shared map backed by the cached basemap", () => {
+  const locationStep = readFileSync(SOS_LOCATION_STEP_PATH, "utf8")
+  assert.match(locationStep, /LocationPickerModal/)
+  assert.doesNotMatch(locationStep, /OfflineSosMap/)
+  assert.doesNotMatch(locationStep, /offline-sos-map/)
+  assert.doesNotMatch(locationStep, /offline-sos-tiles/)
+  assert.doesNotMatch(locationStep, /warmOfflineTileCache/)
+  assert.doesNotMatch(locationStep, /useBundledMap/)
+  assert.match(locationStep, /watchSosNetwork/)
+})
+
+test("the service worker precaches one URL at a time so a single 404 cannot disable offline mode", () => {
+  const swSource = readFileSync(SERVICE_WORKER_PATH, "utf8")
+  assert.match(swSource, /allSettled/)
+  assert.doesNotMatch(
+    swSource,
+    /cache\.addAll/,
+    "addAll rejects the entire install"
+  )
+  assert.match(swSource, /__EBOSES_PRECACHE/)
+  assert.match(swSource, /startsWith\("\/tiles\/"\)/)
+})
+
+test("the service worker serves bundled tiles cache-first and never caches a miss", () => {
+  const swSource = readFileSync(SERVICE_WORKER_PATH, "utf8")
+  assert.match(swSource, /startsWith\("\/tiles\/"\)/)
+  assert.match(swSource, /function cacheAll/)
+  // Old deployments are swept away, but only their build artifacts are.
+  assert.match(swSource, /startsWith\("\/assets\/"\)/)
+  assert.match(swSource, /if \(keep\.size\)/)
+})
+
+test("the build precaches the whole bundle so a cold offline launch still reaches SOS", () => {
+  assert.ok(
+    existsSync(PRECACHE_SCRIPT_PATH),
+    "scripts/inject_sw_precache.mjs must ship with the build"
+  )
+  const source = readFileSync(PRECACHE_SCRIPT_PATH, "utf8")
+  for (const folder of ["assets", "tiles", "icons", "fonts"])
+    assert.match(source, new RegExp(`folder: "${folder}"`))
+  assert.match(source, /endsWith\("\.woff2"\)/)
+  assert.match(source, /required: true/)
+  assert.doesNotMatch(
+    source,
+    /(folder|route): "\/?contents"/,
+    "megabytes of marketing imagery are not part of the offline shell"
+  )
 })

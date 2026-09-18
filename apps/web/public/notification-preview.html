@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E-Boses — Notification Preview</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: "Roboto","Segoe UI",system-ui,sans-serif;
+    background: #0f0f1a;
+    color: #999;
+    min-height: 100vh;
+    padding: 16px;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+  h1 { color: #eee; font-size: 18px; font-weight: 600; margin-bottom: 2px; }
+  .sub { color: #555; font-size: 11px; margin-bottom: 20px; }
+  h2 { color: #ccc; font-size: 14px; font-weight: 600; margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+
+  /* CARD — all non-emergency */
+  .n { display: flex; gap: 10px; padding: 8px 12px; margin-bottom: 4px; border-radius: 8px; background: #16162a; border-left: 3px solid transparent; align-items: flex-start; }
+
+  /* EMERGENCY — red tint + red left border */
+  .n-emg { background: rgba(242,59,53,0.06); }
+
+  /* WITNESS ALERT — prominent emergency */
+  .n-witness { background: rgba(242,59,53,0.1); border-left: none; border-radius: 8px; padding: 10px 14px; margin-bottom: 4px; }
+  .n-witness .n-t { color: #ff6b6b; font-size: 14px; font-weight: 700; }
+  .n-witness .n-icon { width: 22px; height: 22px; margin-top: 0; }
+  .n-witness .n-icon img { width: 22px; height: 22px; }
+
+  /* ICON */
+  .n-icon { width: 20px; height: 20px; border-radius: 50%; overflow: hidden; flex-shrink: 0; margin-top: 1px; flex-shrink: 0; }
+  .n-icon img { width: 20px; height: 20px; object-fit: cover; display: block; }
+
+  /* BODY */
+  .n-body { flex: 1; min-width: 0; }
+  .n-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 1px; }
+  .n-t { color: #eee; font-size: 14px; font-weight: 600; line-height: 1.3; }
+  .n-time { color: #666; font-size: 11px; flex-shrink: 0; white-space: nowrap; }
+  .n-x { color: #999; font-size: 13px; line-height: 1.4; margin-top: 1px; }
+  .n-f { text-align: right; margin-top: 4px; }
+  .n-f .n-l { color: #666; font-size: 11px; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>E-Boses Notifications</h1>
+<p class="sub">FCM preview — all 32 types · 2 icon families · grouped by user need</p>
+
+<!-- ============ EMERGENCY ============ -->
+<h2>Emergency</h2>
+
+<div class="n n-witness">
+  <div class="n-icon"><img src="icons/notification-critical.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire near Poblacion</span><span class="n-time">Just now</span></div>
+    <div class="n-x">Stay clear. Do not intervene. Call emergency services if safe.</div>
+    <div class="n-f"><span class="n-l">View Incident</span></div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire reported near Poblacion</span><span class="n-time">Just now</span></div>
+    <div class="n-x">Fire Dept dispatched.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire Dept dispatched</span><span class="n-time">3m ago</span></div>
+    <div class="n-x">En route to Poblacion.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire Dept acknowledged</span><span class="n-time">5m ago</span></div>
+    <div class="n-x">Responding to Poblacion.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire Dept en route</span><span class="n-time">8m ago</span></div>
+    <div class="n-x">ETA 8 minutes.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire Dept nearby</span><span class="n-time">12m ago</span></div>
+    <div class="n-x">Fire units on scene.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire Dept arrived</span><span class="n-time">15m ago</span></div>
+    <div class="n-x">Fire containment in progress.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire in Poblacion resolved</span><span class="n-time">45m ago</span></div>
+    <div class="n-x">Fire controlled.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire cleared</span><span class="n-time">1 day ago</span></div>
+    <div class="n-x">Fire incident closed.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire upgraded to critical</span><span class="n-time">2 days ago</span></div>
+    <div class="n-x">Escalated to high-priority response.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Review requested</span><span class="n-time">3 days ago</span></div>
+    <div class="n-x">Appeal filed for Fire incident.</div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Review approved</span><span class="n-time">4 days ago</span></div>
+    <div class="n-x">Emergency review approved.</div>
+    <div class="n-f"><span class="n-l">View Incident</span></div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Review denied</span><span class="n-time">5 days ago</span></div>
+    <div class="n-x">Emergency review denied.</div>
+    <div class="n-f"><span class="n-l">View Incident</span></div>
+  </div>
+</div>
+
+<div class="n n-emg">
+  <div class="n-icon"><img src="icons/notification-info-red.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Fire in Poblacion</span><span class="n-time">1 week ago</span></div>
+    <div class="n-x">Emergency response ongoing.</div>
+  </div>
+</div>
+
+<!-- ============ MY REPORTS ============ -->
+<h2>My Reports</h2>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">New report received</span><span class="n-time">Just now</span></div>
+    <div class="n-x">Pothole on San Mateo St. received in Poblacion.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Report under review</span><span class="n-time">1h ago</span></div>
+    <div class="n-x">Your report is under review in Poblacion.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Report assigned to Public Works</span><span class="n-time">2h ago</span></div>
+    <div class="n-x">Assigned in Poblacion.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Work has started</span><span class="n-time">3h ago</span></div>
+    <div class="n-x">Work started on your report.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Report resolved</span><span class="n-time">Yesterday</span></div>
+    <div class="n-x">Pothole on San Mateo St. resolved.</div>
+    <div class="n-f"><span class="n-l">View Report</span></div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Report was not approved</span><span class="n-time">2 days ago</span></div>
+    <div class="n-x">Illegal parking near school not accepted.</div>
+    <div class="n-f"><span class="n-l">View Details</span></div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">More information is needed</span><span class="n-time">3 days ago</span></div>
+    <div class="n-x">Clarification requested for Pothole on San Mateo St.</div>
+    <div class="n-f"><span class="n-l">Reply</span></div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">A reply was received</span><span class="n-time">3 days ago</span></div>
+    <div class="n-x">Clarification answered for your report.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Appeal was submitted</span><span class="n-time">4 days ago</span></div>
+    <div class="n-x">Appeal submitted for Illegal parking near school.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Appeal was approved</span><span class="n-time">5 days ago</span></div>
+    <div class="n-x">Your appeal was approved.</div>
+    <div class="n-f"><span class="n-l">View Report</span></div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Appeal was denied</span><span class="n-time">1 week ago</span></div>
+    <div class="n-x">Your appeal was denied.</div>
+    <div class="n-f"><span class="n-l">View Details</span></div>
+  </div>
+</div>
+
+<!-- ============ MESSAGES ============ -->
+<h2>Messages</h2>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">A new message was received</span><span class="n-time">20m ago</span></div>
+    <div class="n-x">Pothole on San Mateo St.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">A message was received</span><span class="n-time">5h ago</span></div>
+    <div class="n-x">Sgt. Reyes: Fire under control. Awaiting clearance.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">You were mentioned in a discussion</span><span class="n-time">2 days ago</span></div>
+    <div class="n-x">@You in a discussion about Pothole on San Mateo St.</div>
+    <div class="n-f"><span class="n-l">View Thread</span></div>
+  </div>
+</div>
+
+<!-- ============ COMMUNITY ============ -->
+<h2>Community</h2>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Community announcement received</span><span class="n-time">1h ago</span></div>
+    <div class="n-x">Clean-up drive this Saturday at barangay plaza.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Water supply will be interrupted</span><span class="n-time">3h ago</span></div>
+    <div class="n-x">Tomorrow 6AM–2PM in Poblacion.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">Content review was completed</span><span class="n-time">2 days ago</span></div>
+    <div class="n-x">Vandalism on Rizal Ave remains available.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">A post was removed</span><span class="n-time">5 days ago</span></div>
+    <div class="n-x">False info about water removed.</div>
+  </div>
+</div>
+
+<div class="n">
+  <div class="n-icon"><img src="icons/notification-info.svg" alt=""></div>
+  <div class="n-body">
+    <div class="n-h"><span class="n-t">A comment was removed</span><span class="n-time">1 week ago</span></div>
+    <div class="n-x">Comment on Illegal dumping removed.</div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,3 +1,4 @@
+import hashlib
 import os
 import platform
 import subprocess
@@ -40,7 +41,7 @@ def build_apk():
     print("=" * 60)
     print("Step 1: Build web app")
     print("=" * 60)
-    run([NPM, "run", "build"], cwd=str(WEB_DIR))
+    run([NPM, "run", "build:native"], cwd=str(WEB_DIR))
 
     print("\n" + "=" * 60)
     print("Step 2: Sync Android project")
@@ -57,14 +58,10 @@ def build_apk():
 
 
 def find_apk():
-    build_outputs = ANDROID_DIR / "app" / "build" / "outputs" / "apk"
-    if not build_outputs.exists():
-        print("!!! Could not find APK build outputs")
-        sys.exit(1)
-    for apk in build_outputs.rglob("*.apk"):
-        return apk
-    print("!!! No APK found")
-    sys.exit(1)
+    apk = ANDROID_DIR / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    if not apk.is_file():
+        raise FileNotFoundError(apk)
+    return apk
 
 
 def get_credentials():
@@ -89,33 +86,22 @@ def upload_apk(apk_path):
     creds = get_credentials()
     service = build("drive", "v3", credentials=creds)
 
-    query = f"name='{FILE_NAME}' and '{FOLDER_ID}' in parents and trashed=false"
-    results = service.files().list(q=query, fields="files(id, name)").execute()
-    files = results.get("files", [])
-
-    media = MediaFileUpload(str(apk_path), mimetype="application/vnd.android.package-archive")
-
-    if files:
-        file_id = files[0]["id"]
-        print(f"Replacing existing file: {files[0]['name']} (id: {file_id})")
-        file = service.files().update(
-            fileId=file_id,
-            body={"name": FILE_NAME},
-            media_body=media,
-        ).execute()
-    else:
-        print(f"Uploading new file: {FILE_NAME}")
-        file_metadata = {
-            "name": FILE_NAME,
-            "parents": [FOLDER_ID],
-        }
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id, name, webViewLink",
-        ).execute()
-
-    link = file.get("webViewLink")
+    file_id = "1asRwyikXlhlk-n0svrvmoTqc6sY7D9rI"
+    metadata = service.files().get(fileId=file_id, fields="id,name,trashed").execute()
+    if metadata.get("trashed") or metadata["name"] != FILE_NAME:
+        raise RuntimeError("The linked Drive file is not the expected APK")
+    with open(apk_path, "rb") as source:
+        checksum = hashlib.file_digest(source, "md5").hexdigest()
+    media = MediaFileUpload(str(apk_path), mimetype="application/vnd.android.package-archive", resumable=True)
+    service.files().update(fileId=file_id, media_body=media).execute()
+    file = service.files().get(
+        fileId=file_id,
+        fields="id,name,size,md5Checksum,modifiedTime,webViewLink",
+    ).execute()
+    if int(file["size"]) != apk_path.stat().st_size or file["md5Checksum"] != checksum:
+        raise RuntimeError("Drive APK verification failed")
+    link = file["webViewLink"]
+    print(f"Verified Drive APK: {file['size']} bytes, MD5 {checksum}, updated {file['modifiedTime']}")
     print(f"\nUploaded: {link}")
     return link
 

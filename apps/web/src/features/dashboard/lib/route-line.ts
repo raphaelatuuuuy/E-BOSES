@@ -1,10 +1,9 @@
 import type leaflet from "leaflet"
 
 /**
- * One definition of how a route is drawn, everywhere: a fat solid line with a
- * darker casing under it, rounded at every cap and join. Orange while a
- * responder is travelling to an open incident, grey once it is settled.
- * Live routes carry a moving highlight.
+ * One definition of how a route is drawn, everywhere: a fat casing line with a
+ * darker underlay, rounded at every cap and join. Live routes carry a moving
+ * dashed highlight.
  *
  * Where an endpoint sits off the road network the route is completed with a
  * blue `approach` and a blue dashed `connector` for whatever is left. Both
@@ -29,24 +28,9 @@ export function routeCasingStyle({
   dim = false,
 }: RouteLineOptions): leaflet.PolylineOptions {
   return {
-    color: live ? "var(--color-map-route-casing)" : "#e5e7eb",
+    color: "transparent",
     weight: weight + 4,
     opacity: (live ? 0.45 : 0.25) * (dim ? DIM_FACTOR : 1),
-    lineCap: "round",
-    lineJoin: "round",
-    interactive: false,
-  }
-}
-
-export function routeLineStyle({
-  live,
-  weight = DEFAULT_WEIGHT,
-  dim = false,
-}: RouteLineOptions): leaflet.PolylineOptions {
-  return {
-    color: live ? "#ff6a1a" : "#9ca3af",
-    weight,
-    opacity: (live ? 1 : 0.5) * (dim ? DIM_FACTOR : 1),
     lineCap: "round",
     lineJoin: "round",
     interactive: false,
@@ -58,7 +42,7 @@ export function routeFlowStyle({
   dim = false,
 }: RouteLineOptions): leaflet.PolylineOptions {
   return {
-    color: "#ffffff",
+    color: "#ff6a1a",
     weight: Math.max(2, Math.round(weight / 3)),
     opacity: dim ? 0.9 * DIM_FACTOR : 0.9,
     dashArray: "2 14",
@@ -221,7 +205,6 @@ export function drawRoute(
 
   if (road.length > 1) {
     layers.push(L.polyline(road, routeCasingStyle({ live, weight, dim })))
-    layers.push(L.polyline(road, routeLineStyle({ live, weight, dim })))
     if (live && !dim) layers.push(L.polyline(road, routeFlowStyle({ live, weight, dim })))
     points.push(...road)
   }

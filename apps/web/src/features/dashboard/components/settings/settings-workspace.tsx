@@ -253,14 +253,13 @@ export function SettingsWorkspace({
 
   const communityName = user?.barangay?.trim() || "Your community"
 
-  // Profiles card: street only + current community
+  // Profiles card: street only (the ", Marikina Heights" community suffix is
+  // dropped — the remaining part is the street).
   const displayAddress = (() => {
     const raw = address.trim()
     if (!raw || raw.toLowerCase() === "pending") return ""
     const { street } = parseStoredAddress(raw)
-    const streetLine = street.trim() || raw.split(",")[0]?.trim() || raw
-    if (!streetLine) return ""
-    return `${streetLine}, ${communityName}`
+    return street.trim() || raw.split(",")[0]?.trim() || raw
   })()
 
   const pendingDeletion = accountRequests.find(

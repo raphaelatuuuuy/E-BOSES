@@ -13,7 +13,7 @@ dist/
 build/
 
 # Generated/local Capacitor Android project
-apps/web/android/
+
 
 # Old references
 old frontend reference/

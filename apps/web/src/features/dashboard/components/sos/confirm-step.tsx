@@ -2,8 +2,7 @@ import {
   MapPinIcon,
   MessageSquareIcon,
   PhoneIcon,
-  SirenIcon,
-  type LucideIcon,
+  TriangleAlertIcon,
 } from "lucide-react"
 
 /**
@@ -24,6 +23,7 @@ export function SosConfirmStep({
   submitting,
   dispatchCountdown,
   onEditStep,
+  isOnline,
 }: {
   mode: "review" | "countdown"
   submitError: string
@@ -36,32 +36,13 @@ export function SosConfirmStep({
   submitting: boolean
   dispatchCountdown: number
   onEditStep?: (step: "category" | "triage" | "location") => void
+  isOnline?: boolean
 }) {
-  const summaryRows: {
-    key: "category" | "triage" | "location"
-    eyebrow: string
-    value: string
-    icon: LucideIcon
-  }[] = [
-    {
-      key: "category",
-      eyebrow: "Emergency type",
-      value: typeLabel ?? "—",
-      icon: SirenIcon,
-    },
-    {
-      key: "location",
-      eyebrow: "Location",
-      value: locationLabel || "—",
-      icon: MapPinIcon,
-    },
-    {
-      key: "triage",
-      eyebrow: "Situation",
-      value: triageSummary || "Not answered",
-      icon: MessageSquareIcon,
-    },
-  ]
+  const triageFlags = (triageSummary || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+
   if (mode === "countdown") {
     const progress = submitting
       ? 0
@@ -153,41 +134,129 @@ export function SosConfirmStep({
         </div>
       ) : null}
 
-      <div className="divide-y divide-white/10 overflow-hidden rounded-[18px] border border-white/15 bg-white/5">
-        {summaryRows.map((row) => (
-          <div key={row.key} className="flex items-center gap-3 px-4 py-3.5">
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white">
-              <row.icon
-                className="size-[22px]"
-                strokeWidth={2}
-                aria-hidden="true"
-              />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-semibold tracking-wide text-brand-orange uppercase">
-                {row.eyebrow}
-              </p>
-              <p className="mt-0.5 text-[16px] font-semibold break-words text-white">
-                {row.value}
-              </p>
-            </div>
-            {onEditStep ? (
-              <button
-                type="button"
-                onClick={() => onEditStep(row.key)}
-                className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 px-3 text-[13px] font-bold text-white transition-colors hover:bg-white/15 active:scale-95"
-              >
-                Edit
-              </button>
-            ) : null}
+      {isOnline && !submitError ? (
+        <div
+          style={{ background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", borderRadius: "18px", padding: "12px 16px", display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}
+          role="status"
+        >
+          <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px rgba(16,185,129,0.6)", flexShrink: 0 }} />
+          <div>
+            <p style={{ fontSize: "14px", fontWeight: 700, color: "#6ee7b7" }}>Connection restored</p>
+            <p style={{ fontSize: "12px", lineHeight: "1.5", color: "rgba(255,255,255,0.6)", marginTop: "2px" }}>Your alert will be sent online. Details are still here.</p>
           </div>
-        ))}
-      </div>
-      {note.trim() ? (
-        <p className="px-1 text-[14px] leading-6 text-white/75">
-          {note.trim()}
-        </p>
+        </div>
       ) : null}
+
+      {/* Timeline */}
+      <div className="px-0.5 pt-1">
+        <div className="relative flex gap-3 pb-[18px]">
+          <span
+            aria-hidden="true"
+            className="absolute top-[42px] bottom-0 left-[19px] w-[2px] bg-[linear-gradient(rgba(255,106,26,0.6),rgba(255,106,26,0.08))]"
+          />
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
+            <TriangleAlertIcon className="size-5" strokeWidth={2} aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-bold tracking-wide text-[#ff8a5c] uppercase">
+              Type
+            </p>
+            <p className="mt-0.5 text-[15.5px] leading-snug font-semibold break-words text-white">
+              {typeLabel ?? "—"}
+            </p>
+          </div>
+          {onEditStep ? (
+            <button
+              type="button"
+              onClick={() => onEditStep("category")}
+              className="flex min-h-11 shrink-0 items-center justify-center self-start rounded-[10px] px-3 text-[12px] font-bold text-white transition-colors hover:bg-white/10 active:scale-95"
+            >
+              Change
+            </button>
+          ) : null}
+        </div>
+
+        <div className="relative flex gap-3 pb-[18px]">
+          <span
+            aria-hidden="true"
+            className="absolute top-[42px] bottom-0 left-[19px] w-[2px] bg-[linear-gradient(rgba(255,106,26,0.6),rgba(255,106,26,0.08))]"
+          />
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
+            <MapPinIcon className="size-5" strokeWidth={2} aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-bold tracking-wide text-[#ff8a5c] uppercase">
+              Location
+            </p>
+            <p className="mt-0.5 text-[15.5px] leading-snug font-semibold break-words text-white">
+              {locationLabel || "—"}
+            </p>
+          </div>
+          {onEditStep ? (
+            <button
+              type="button"
+              onClick={() => onEditStep("location")}
+              className="flex min-h-11 shrink-0 items-center justify-center self-start rounded-[10px] px-3 text-[12px] font-bold text-white transition-colors hover:bg-white/10 active:scale-95"
+            >
+              Change
+            </button>
+          ) : null}
+        </div>
+
+        <div className="relative flex gap-3 pb-1">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
+            <MessageSquareIcon
+              className="size-5"
+              strokeWidth={2}
+              aria-hidden="true"
+            />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-bold tracking-wide text-[#ff8a5c] uppercase">
+              Situation
+            </p>
+            {triageFlags.length ? (
+              <ul className="mt-1 space-y-1">
+                {triageFlags.map((flag) => (
+                  <li key={flag} className="flex items-start gap-2 text-[14px] text-white/90">
+                    <span className="mt-[9px] h-[5px] w-[5px] shrink-0 rounded-full bg-white/60" />
+                    <span className="leading-snug">{flag}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-0.5 text-[14px] text-white/55">Not answered</p>
+            )}
+          </div>
+          {onEditStep ? (
+            <button
+              type="button"
+              onClick={() => onEditStep("triage")}
+              className="flex min-h-11 shrink-0 items-center justify-center self-start rounded-[10px] px-3 text-[12px] font-bold text-white transition-colors hover:bg-white/10 active:scale-95"
+            >
+              Change
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Additional notes */}
+      <div className="rounded-r-[14px] border-l-[3px] border-brand-orange bg-white/5 px-3.5 py-2.5">
+        <p className="text-[11px] font-bold tracking-wide text-[#ff8a5c] uppercase">
+          Additional notes
+        </p>
+        <p className="mt-0.5 text-[13.5px] text-white/80 italic">
+          {note.trim() || "None"}
+        </p>
+      </div>
+
+      {/* Warning */}
+      <div className="flex items-start gap-2">
+        <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-red-300/90" strokeWidth={2} aria-hidden="true" />
+        <p className="text-[12px] leading-5 text-red-300/90">
+          False or misleading alerts are logged and repeated abuse can suspend your account.
+        </p>
+      </div>
     </div>
   )
 }

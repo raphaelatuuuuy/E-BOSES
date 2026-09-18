@@ -1,6 +1,7 @@
 // apps/web/src/features/dashboard/lib/authenticated-media.ts
 
-import { getAccessToken } from "@/lib/api"
+import { apiOrigin, getAccessToken } from "@/lib/api"
+import { resolveMediaUrl } from "@/lib/media-url"
 
 /**
  * Open an authenticated blob (bearer token) as a download. Also used by the
@@ -8,7 +9,7 @@ import { getAccessToken } from "@/lib/api"
  */
 export async function openAuthenticatedMedia(src: string, filename: string) {
   const token = getAccessToken()
-  const response = await fetch(src, {
+  const response = await fetch(resolveMediaUrl(src, apiOrigin()), {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   })
   if (!response.ok) throw new Error("Could not open this file.")
@@ -51,11 +52,12 @@ export function toMediaPreviewItem(
   media?: import("@/features/dashboard/api").ConcernMedia
 ): MediaPreviewItem {
   const value = mimeOrKind || ""
+  const resolved = resolveMediaUrl(src, apiOrigin())
   if (value.startsWith("video/") || value === "video")
-    return { src, filename, kind: "video", media }
+    return { src: resolved, filename, kind: "video", media }
   if (value.startsWith("image/") || value === "image" || !value)
-    return { src, filename, kind: "image", media }
-  return { src, filename, kind: "file", media }
+    return { src: resolved, filename, kind: "image", media }
+  return { src: resolved, filename, kind: "file", media }
 }
 
 /**
@@ -72,5 +74,8 @@ export function mediaDisplaySource(media: {
   preview_url?: string | null
   raw_url?: string | null
 }): string {
-  return media.preview_url || media.raw_url || ""
+  return resolveMediaUrl(
+    media.preview_url || media.raw_url || "",
+    apiOrigin()
+  )
 }

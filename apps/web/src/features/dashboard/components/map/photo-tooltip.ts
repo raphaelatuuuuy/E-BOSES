@@ -1,5 +1,7 @@
 import type leaflet from "leaflet"
 
+import { apiOrigin } from "@/lib/api"
+import { resolveMediaUrl } from "@/lib/media-url"
 import { concernSummaryText } from "@/features/dashboard/components/feed-post-text"
 
 /** What every map hover card shows: a photo when there is one, always words. */
@@ -116,7 +118,7 @@ export function mapCardHtml(tip: MapTip) {
     ? resolutionImage || tip.image?.trim() || ""
     : tip.image?.trim() || resolutionImage
   const media = primaryImage
-    ? `<div class="eboses-sv-pop__media"><img class="eboses-sv-pop__img" src="${escapeHtml(primaryImage)}" alt="${resolved ? "Resolved condition" : ""}" /></div>`
+    ? `<div class="eboses-sv-pop__media"><img class="eboses-sv-pop__img" src="${escapeHtml(resolveMediaUrl(primaryImage, apiOrigin()))}" alt="${resolved ? "Resolved condition" : ""}" /></div>`
     : ""
   const dateText = tip.date?.trim() ? formatTipDate(tip.date.trim()) : ""
   const date = dateText

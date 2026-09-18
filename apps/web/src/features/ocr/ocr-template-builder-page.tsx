@@ -1,15 +1,11 @@
 import { forwardRef, useImperativeHandle, useState } from "react"
+import { IdCardLanyardIcon } from "lucide-react"
 import {
   ArrowLeft,
-  CreditCard,
-  Eye,
-  EyeOff,
-  IdCard,
   LoaderCircle,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { cn } from "@workspace/ui/lib/utils"
 
 import { usePageTitle } from "@/hooks/use-page-title"
 import type { ProofSide } from "@/features/ocr/api"
@@ -31,6 +27,7 @@ const OcrTemplateBuilderPage = forwardRef<
   usePageTitle("ID & Proof Templates")
   const [view, setView] = useState<"list" | "wizard">("list")
   const [edited, setEdited] = useState(false)
+  const [confirmingWizardRemove, setConfirmingWizardRemove] = useState(false)
 
   const {
     configuration,
@@ -122,6 +119,7 @@ const OcrTemplateBuilderPage = forwardRef<
   }
 
   async function backToList() {
+    setConfirmingWizardRemove(false)
     await persistWizardExit()
     // `setStep(1)` used to live here. It referenced state that no longer
     // exists — the wizard became a set of always-rendered accordion sections
@@ -155,7 +153,6 @@ const OcrTemplateBuilderPage = forwardRef<
     return (
       <ProofTypeList
         documents={configuration.document_types}
-        saving={saving}
         onAdd={() => {
           void addDocumentType()
           setEdited(false)
@@ -166,9 +163,6 @@ const OcrTemplateBuilderPage = forwardRef<
           resetTests()
           setEdited(false)
           setView("wizard")
-        }}
-        onRemove={(docKey) => {
-          void removeDocumentType(docKey)
         }}
       />
     )
@@ -194,100 +188,26 @@ const OcrTemplateBuilderPage = forwardRef<
   }
 
   const availableOnSignup = selectedDocument.enabled !== false
-  // OcrDocumentType has no `label` — this page was reading a property that does
-  // not exist, so the heading and all three section "done" checks silently
-  // evaluated undefined: the proof name never displayed and step one never
-  // showed as complete. Same precedence the proof list uses.
-  const proofDisplayName =
-    selectedDocument.template_name?.trim() ||
-    selectedDocument.name?.trim() ||
-    ""
-
+  const canRemoveDoc = configuration.document_types.some((doc) => doc.key === selectedDocument.key)
   return (
     <ProofWizardShell
       open
-      title={proofDisplayName || "New document"}
+      title={<span className="inline-flex items-center gap-2"><IdCardLanyardIcon className="size-6" strokeWidth={2} aria-hidden />ID Document<span className="text-brand-orange">Details</span></span>}
       subtitle={
         missingSampleLabels.length
           ? `Add a ${missingSampleLabels.join(" and ")} sample photo to offer this`
           : availableOnSignup
-            ? "Residents can choose this when they register"
+            ? undefined
             : "Hidden from residents for now"
       }
       onClose={() => void backToList()}
       saveState={autoSaveState}
       doneDisabled={!edited}
-      actions={
-        <div className="flex items-center gap-1.5">
-          {/* Offering the document was a full-width switch at the bottom of a
-              long scroll, restating in a sentence what the subtitle above
-              already says. It is one binary about this document, so it belongs
-              with the other one, and the subtitle is its label. */}
-          <button
-            type="button"
-            onClick={() => {
-              if (missingSamples.length > 0) {
-                validateRequiredSamples(selectedDocument)
-                return
-              }
-              setEdited(true)
-              void setProofAvailableOnSignup(selectedDocument.key, !availableOnSignup)
-            }}
-            aria-pressed={availableOnSignup}
-            title={
-              missingSampleLabels.length
-                ? `Add a ${missingSampleLabels.join(" and ")} sample photo first`
-                : availableOnSignup
-                  ? "Offered to residents — tap to hide"
-                  : "Hidden from residents — tap to offer"
-            }
-            className={cn(
-              "flex size-8 items-center justify-center rounded-full border transition-colors",
-              missingSamples.length > 0
-                ? "border-neutral-200 text-neutral-300"
-                : availableOnSignup
-                  ? "border-neutral-200 bg-neutral-100 text-neutral-900 hover:bg-neutral-200"
-                  : "border-neutral-200 text-neutral-400 hover:text-neutral-900"
-            )}
-          >
-            {availableOnSignup ? (
-              <Eye className="size-4" aria-hidden />
-            ) : (
-              <EyeOff className="size-4" aria-hidden />
-            )}
-          </button>
-          <div className="flex items-center rounded-full border border-neutral-200 p-0.5">
-          <button
-            type="button"
-            onClick={() => changeCaptureMode("one")}
-            title="Front only"
-            aria-label="Front only"
-            className={cn(
-              "flex size-8 items-center justify-center rounded-full transition-colors",
-              canvasSides.length === 1
-                ? "bg-neutral-100 text-neutral-900"
-                : "text-neutral-400 hover:text-neutral-900"
-            )}
-          >
-            <IdCard className="size-4" aria-hidden />
-          </button>
-          <button
-            type="button"
-            onClick={() => changeCaptureMode("both")}
-            title="Front and back"
-            aria-label="Front and back"
-            className={cn(
-              "flex size-8 items-center justify-center rounded-full transition-colors",
-              canvasSides.length === 2
-                ? "bg-neutral-100 text-neutral-900"
-                : "text-neutral-400 hover:text-neutral-900"
-            )}
-          >
-            <CreditCard className="size-4" aria-hidden />
-            </button>
-          </div>
-        </div>
-      }
+      onDelete={canRemoveDoc ? () => setConfirmingWizardRemove(true) : undefined}
+      confirmingDelete={confirmingWizardRemove}
+      onCancelDelete={() => setConfirmingWizardRemove(false)}
+      onConfirmDelete={() => { setConfirmingWizardRemove(false); setView("list"); void removeDocumentType(selectedDocument.key) }}
+      deleting={saving}
     >
       <ProofWorkspace
         document={selectedDocument}
@@ -298,6 +218,18 @@ const OcrTemplateBuilderPage = forwardRef<
         onSampleSideChange={setSamplePreviewSide}
         sampleUrl={canvasSource}
         zoom={zoom}
+        availableOnSignup={availableOnSignup}
+        onToggleAvailable={() => {
+          if (missingSamples.length > 0) {
+            validateRequiredSamples(selectedDocument)
+            return
+          }
+          setEdited(true)
+          void setProofAvailableOnSignup(selectedDocument.key, !availableOnSignup)
+        }}
+        availabilityLocked={missingSamples.length > 0}
+        captureMode={canvasSides.length === 2 ? "both" : "one"}
+        onCaptureModeChange={(mode) => changeCaptureMode(mode)}
         onSelectField={selectField}
         onAddField={() => {
           addField()

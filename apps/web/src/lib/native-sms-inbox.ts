@@ -5,6 +5,7 @@ interface SmsInboxPlugin {
     sender: string
     body: string
   } | null>
+  sendSms(options: { to: string; body: string }): Promise<{ parts: number }>
 }
 
 const SmsInbox = registerPlugin<SmsInboxPlugin>("SmsInbox")
@@ -24,4 +25,22 @@ export async function requestSmsUpdate(
   } catch {
     return null
   }
+}
+
+export function canSendSms() {
+  return canUseSmsInbox()
+}
+
+export async function sendSmsText(
+  to: string,
+  body: string
+): Promise<{ parts: number }> {
+  if (!canSendSms())
+    throw new Error("Automatic SMS is only available in the Android app.")
+  const result = await SmsInbox.sendSms({ to, body })
+  return { parts: Number(result?.parts ?? 1) || 1 }
+}
+
+export function openSmsApp(to: string, body: string) {
+  window.location.href = `sms:${to}?body=${encodeURIComponent(body)}`
 }

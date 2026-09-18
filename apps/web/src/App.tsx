@@ -88,24 +88,44 @@ const NotFoundPage = lazy(() => import("@/features/dashboard/pages/not-found"))
 const OfficialCommunityContentPage = lazy(
   () => import("@/features/dashboard/pages/official-community-content-page")
 )
-const LandingPage = lazy(() => import("@/features/landing/landing-page"))
-const HelpPage = lazy(() => import("@/features/help/help-page"))
-const HelpCollectionPage = lazy(
-  () => import("@/features/help/help-collection-page")
-)
-const HelpArticlePage = lazy(() => import("@/features/help/help-article-page"))
-const ActiveCommunitiesPage = lazy(
-  () => import("@/features/communities/active-communities-page")
-)
-const CreateCommunityPage = lazy(
-  () => import("@/features/landing/pages/create-community-page")
-)
-const ReportIssuePage = lazy(
-  () => import("@/features/landing/pages/report-issue-page")
+const LandingPage = import.meta.env.MODE === "capacitor"
+  ? NativeEntry
+  : lazy(() => import("@/features/landing/landing-page"))
+const HelpPage = import.meta.env.MODE === "capacitor"
+  ? lazy(() => import("@/features/help/native-help"))
+  : lazy(() => import("@/features/help/help-page"))
+const HelpCollectionPage = import.meta.env.MODE === "capacitor"
+  ? HelpPage
+  : lazy(() => import("@/features/help/help-collection-page"))
+const HelpArticlePage = import.meta.env.MODE === "capacitor"
+  ? HelpPage
+  : lazy(() => import("@/features/help/help-article-page"))
+const ActiveCommunitiesPage = import.meta.env.MODE === "capacitor"
+  ? NativeEntry
+  : lazy(() => import("@/features/communities/active-communities-page"))
+const CreateCommunityPage = import.meta.env.MODE === "capacitor"
+  ? NativeEntry
+  : lazy(() => import("@/features/landing/pages/create-community-page"))
+const ReportIssuePage = import.meta.env.MODE === "capacitor"
+  ? NativeEntry
+  : lazy(() => import("@/features/landing/pages/report-issue-page"))
+const GuestReportPage = lazy(
+  () => import("@/features/guest/guest-report-page")
 )
 const AssistantWidget = lazy(
   () => import("@/features/assistant/assistant-widget")
 )
+
+function NativeEntry({ children }: { children?: ReactNode }) {
+  const { loading, user } = useAuthSession()
+  if (children && import.meta.env.MODE !== "capacitor") return children
+  if (loading) return <PageLoader />
+  const target = user
+    ? getStatusPath(user.status, { isOnboarded: user.is_onboarded })
+    : "/sign-in"
+  if (children && target === "/sign-in") return children
+  return <Navigate to={target} replace />
+}
 
 function ProtectedDashboard() {
   const { loading, user } = useAuthSession()
@@ -398,6 +418,7 @@ function AppRoutes() {
     const returnTo = new URLSearchParams(window.location.search).get("returnTo")
     const reportReturn = window.sessionStorage.getItem("eboses-report-return")
     if (
+      import.meta.env.MODE !== "capacitor" &&
       user.status === "verified" &&
       user.is_onboarded &&
       (returnTo === "/report-issue" || reportReturn === "/report-issue")
@@ -682,21 +703,23 @@ function AppRoutes() {
       <Route
         path="/sign-in"
         element={
-          <SignInPage
-            onBack={() => navigate("/")}
-            onForgotPassword={() => navigate("/forgot-password")}
-            onSignUp={() => navigate("/sign-up")}
-            onSuccess={(user, access) => {
-              finishAuthentication(user, access)
-            }}
-          />
+          <NativeEntry>
+            <SignInPage
+              onBack={() => navigate(import.meta.env.MODE === "capacitor" ? "/sign-in" : "/")}
+              onForgotPassword={() => navigate("/forgot-password")}
+              onSignUp={() => navigate("/sign-up")}
+              onSuccess={(user, access) => {
+                finishAuthentication(user, access)
+              }}
+            />
+          </NativeEntry>
         }
       />
       <Route
         path="/sign-up"
         element={
           <SignUpPage
-            onBack={() => navigate("/")}
+            onBack={() => navigate(import.meta.env.MODE === "capacitor" ? "/sign-in" : "/")}
             onSignIn={() => navigate("/sign-in")}
             onSuccess={(user, access) => {
               finishAuthentication(user, access)
@@ -836,6 +859,7 @@ function AppRoutes() {
         element={<Navigate to="/communities/new" replace />}
       />
       <Route path="/report-issue" element={<ReportIssuePage />} />
+      <Route path="/guest-report" element={<GuestReportPage />} />
       <Route
         path="/book-demo"
         element={<Navigate to="/report-issue" replace />}
@@ -883,13 +907,15 @@ function MaintenanceGate({ children }: { children: ReactNode }) {
 
   const staff = isOfficialUser(user)
   const exempt =
+    (import.meta.env.MODE === "capacitor" && !location.pathname.startsWith("/dashboard")) ||
     location.pathname === "/" ||
     location.pathname.startsWith("/help") ||
     location.pathname === "/communities" ||
     location.pathname === "/communities/new" ||
     location.pathname === "/create-community" ||
     location.pathname === "/book-demo" ||
-    location.pathname === "/report-issue"
+    location.pathname === "/report-issue" ||
+    location.pathname === "/guest-report"
 
   if (status?.maintenance && !staff && !exempt) {
     return <MaintenancePage />

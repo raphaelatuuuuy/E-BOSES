@@ -9,6 +9,7 @@ import {
   Plus,
   Save,
   SearchIcon,
+  ShieldCheckIcon,
   Square,
   SquarePen,
   Trash2,
@@ -981,8 +982,7 @@ export default function OfficialCoverageAreaPage({ embedded = false }: { embedde
       hideEmbeddedAction={embedded}
       icon={MapIcon}
       eyebrow="Operations"
-      title="Coverage area"
-      className="!pb-6 sm:!pb-10"
+      title="Coverage AREA"
       description="Set the area where your station accepts reports"
       stats={[
         {
@@ -997,10 +997,7 @@ export default function OfficialCoverageAreaPage({ embedded = false }: { embedde
         </ConfigHeroAction>
       }
     >
-      <ConfigPanel
-        title="Define coverage zone"
-        hint="Define where reports are accepted. Draw a zone, trace the barangay edge with the pencil, then turn on edit to drag either one into place."
-      >
+      <ConfigPanel>
         <div className="relative h-[460px] overflow-hidden rounded-2xl border-[1.5px] border-neutral-300 bg-ink">
           <div
             ref={containerRef}
@@ -1257,6 +1254,10 @@ export default function OfficialCoverageAreaPage({ embedded = false }: { embedde
             {hint}
           </div>
         </div>
+        <p className="mt-3 flex items-start gap-2 text-sm leading-snug text-neutral-500">
+          <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-neutral-400" strokeWidth={2} />
+          <span>Reports are only accepted within this coverage area.</span>
+        </p>
       </ConfigPanel>
     </ConfigShell>
   )

@@ -189,12 +189,7 @@ function isNetworkFetchError(error: unknown): boolean {
 
 export function networkErrorMessage(error?: unknown): string {
   void error
-  const base = apiBaseUrl()
-  return (
-    `Cannot reach the API (${base}). ` +
-    `Make sure the backend is running (usually on port 8000) and the Vite proxy can reach it, then refresh. ` +
-    `For phones on Wi‑Fi, open the HTTPS Vite URL (not :8000) so location APIs work in a secure context.`
-  )
+  return "System currently experiencing issues."
 }
 
 async function request<T>(path: string, init: RequestInit, options: ApiRequestOptions) {

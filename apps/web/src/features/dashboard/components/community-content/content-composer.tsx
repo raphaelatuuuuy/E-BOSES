@@ -506,7 +506,7 @@ export function ContentComposer({
       <div className="grid grid-cols-2 gap-3">
         <div className="relative" ref={tagMenuRef}>
           <label className={labelClass}>
-            Type
+            <span className="block text-[13px] font-semibold text-neutral-500">Type</span>
             <button
               type="button"
               onClick={() => setTagMenuOpen((o) => !o)}
@@ -545,7 +545,7 @@ export function ContentComposer({
 
         <div className="relative" ref={audienceRef}>
           <label className={labelClass}>
-            Audience
+            <span className="block text-[13px] font-semibold text-neutral-500">Audience</span>
             <button
               type="button"
               onClick={() => setAudienceOpen((o) => !o)}

@@ -464,13 +464,13 @@ export function WeekChart({
   const linePathRef = useRef<SVGPathElement>(null)
   const clipRectRef = useRef<SVGRectElement>(null)
   const clipId = useId()
+  const lineGradientId = `${clipId}-line-fill`
   const lineMax = Math.max(0, ...filteredTotals)
   const lineDots = filteredTotals.map((value, index) => ({
     x: ((index + 0.5) / Math.max(filteredTotals.length, 1)) * 100,
     y: 38 - (lineMax > 0 ? (value / lineMax) * 32 : 0),
   }))
-  const lineFirstX = lineDots[0]?.x ?? 50
-  const lineLastX = lineDots[lineDots.length - 1]?.x ?? 50
+
   const lineCurve = (() => {
     if (lineDots.length === 0) return ""
     const formatted = lineDots.map(
@@ -492,10 +492,6 @@ export function WeekChart({
     }
     return path
   })()
-  const lineStrokeClass =
-    segmentFilter === "priority" ? "stroke-severity-critical" : "stroke-overview-bar"
-  const lineFillClass =
-    segmentFilter === "priority" ? "fill-severity-critical" : "fill-overview-bar"
 
   useEffect(() => {
     setBarAnimated(false)
@@ -665,12 +661,16 @@ export function WeekChart({
                     >
                       <div
                         className={cn(
-                          "flex w-full min-w-0 flex-col overflow-hidden rounded-t-[6px] transition-[height] duration-700 ease-out",
+                          "flex w-full min-w-0 flex-col overflow-hidden rounded-t-[6px] origin-bottom transition-[transform] duration-700 ease-out",
                           barWidth,
                         )}
                         style={{
-                          height: barAnimated ? `${stackHeight}%` : "0%",
+                          height: "100%",
+                          transform: barAnimated
+                            ? `scaleY(${stackHeight / 100})`
+                            : "scaleY(0)",
                           background: barGradient(stack, segmentFilter),
+                          transformOrigin: "bottom",
                           transitionDelay: `${Math.min(index, 12) * 28}ms`,
                         }}
                         title={
@@ -715,34 +715,29 @@ export function WeekChart({
                         ref={clipRectRef}
                       />
                     </clipPath>
+                    <linearGradient
+                      id={lineGradientId}
+                      x1="0%"
+                      y1="0%"
+                      x2="100%"
+                      y2="0%"
+                    >
+                      <stop offset="0%" stopColor="#1f6c98" />
+                      <stop offset="33%" stopColor="#f2a03d" />
+                      <stop offset="66%" stopColor="#ea6f24" />
+                      <stop offset="100%" stopColor="#f23b35" />
+                    </linearGradient>
                   </defs>
                   <g clipPath={`url(#${clipId})`}>
-                    <path
-                      d={`${lineCurve} L ${lineLastX.toFixed(2)},42 L ${lineFirstX.toFixed(2)},42 Z`}
-                      className={lineFillClass}
-                      fillOpacity={0.12}
-                      stroke="none"
-                    />
                     <path
                       ref={linePathRef}
                       d={lineCurve}
                       fill="none"
-                      className={lineStrokeClass}
+                      stroke={`url(#${lineGradientId})`}
                       strokeWidth={2.5}
                       strokeLinecap="round"
                       vectorEffect="non-scaling-stroke"
                     />
-                    {lineDots.map((point, index) => (
-                      <circle
-                        key={index}
-                        cx={point.x}
-                        cy={point.y}
-                        r={index === lineDots.length - 1 ? 2.6 : 1.8}
-                        className={lineFillClass}
-                        stroke="#fff"
-                        strokeWidth={1.2}
-                      />
-                    ))}
                   </g>
                 </svg>
               )}

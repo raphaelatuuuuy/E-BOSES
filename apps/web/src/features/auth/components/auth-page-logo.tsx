@@ -11,7 +11,7 @@ export function AuthPageLogo({ className }: { className?: string }) {
     <Link
       to="/"
       className={cn("flex shrink-0 items-center gap-2 py-4", className)}
-      aria-label="Boses — back to landing page"
+      aria-label={import.meta.env.MODE === "capacitor" ? "Boses — home" : "Boses — back to landing page"}
     >
       <img src="/contents/logo.webp" alt="E-Boses" className="h-9 w-auto md:h-10" />
       <span className="text-2xl font-bold text-accent">Boses</span>

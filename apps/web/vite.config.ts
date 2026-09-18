@@ -4,6 +4,7 @@ import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import basicSsl from "@vitejs/plugin-basic-ssl"
 import { defineConfig, loadEnv } from "vite"
+import { nativeBuild } from "./native-build"
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -59,6 +60,7 @@ export default defineConfig(({ mode }) => {
   const hasMkcert = httpsEnabled && fs.existsSync(mkcertCert) && fs.existsSync(mkcertKey)
 
   return {
+    publicDir: mode === "capacitor" ? false : "public",
     define: {
       "import.meta.env.VITE_API_BASE_URL": JSON.stringify(
         appModeEnv.VITE_API_BASE_URL || rootEnv.VITE_API_BASE_URL || "/api",
@@ -67,6 +69,7 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       tailwindcss(),
+      ...(mode === "capacitor" ? [nativeBuild()] : []),
       ...(httpsEnabled && !hasMkcert
         ? [
             basicSsl({
@@ -79,6 +82,9 @@ export default defineConfig(({ mode }) => {
     ],
     // Load VITE_* from monorepo root `.env` (shared with Django).
     envDir: path.resolve(__dirname, "../.."),
+    optimizeDeps: {
+      exclude: ["maplibre-gl"],
+    },
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
@@ -165,6 +171,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
+      outDir: mode === "capacitor" ? "dist-native" : "dist",
       rollupOptions: {
         output: {
           // Function form, not the object form: rolldown (the bundler behind
@@ -179,8 +186,6 @@ export default defineConfig(({ mode }) => {
               return "three-vendor"
             }
             if (/[\\/]node_modules[\\/]leaflet[\\/]/.test(id)) return "leaflet"
-            if (/[\\/]node_modules[\\/](maplibre-gl|pmtiles)[\\/]/)
-              return "maplibre"
             if (id.includes("packages/ui")) return "ui-vendor"
             return
           },

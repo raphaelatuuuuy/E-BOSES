@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ChevronDownIcon, ChevronUpIcon, CircleCheck, FileX, MapPinIcon } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { apiOrigin } from "@/lib/api"
+import { resolveMediaUrl } from "@/lib/media-url"
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -418,7 +420,10 @@ export function ContentList({
                           className="block cursor-zoom-in overflow-hidden rounded-lg"
                         >
                           <img
-                            src={media.preview_url || media.raw_url}
+                            src={resolveMediaUrl(
+                              media.preview_url || media.raw_url,
+                              apiOrigin()
+                            )}
                             alt={media.original_filename || ""}
                             className="h-28 w-40 object-cover transition-transform duration-200 hover:scale-[1.03]"
                           />

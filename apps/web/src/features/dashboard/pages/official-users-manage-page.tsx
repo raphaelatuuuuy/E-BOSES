@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { CircleCheck, PencilIcon, PlusIcon, UserCogIcon, UserIcon } from "lucide-react"
+import { CircleCheck, PencilIcon, PlusIcon, UserCogIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
+import { initials } from "@/lib/initials"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { cn } from "@workspace/ui/lib/utils"
-import { SheetActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
+import { SheetCompactActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
-import { ConfigurationInfoRow, ConfigurationTable, ConfigurationTableEmpty } from "@/features/dashboard/components/config/configuration-table"
+import { ConfigurationTable, ConfigurationTableEmpty } from "@/features/dashboard/components/config/configuration-table"
 
 type ManagedRole = "resident" | "barangay_official" | "first_responder"
 
@@ -118,7 +119,6 @@ function communitiesOf(departments: Department[]): { value: string; label: strin
 const FILTERS = [
   { key: "all", label: "All" },
   { key: "barangay_official", label: "Officials" },
-  { key: "first_responder", label: "Responders" },
   { key: "resident", label: "Residents" },
 ]
 
@@ -224,7 +224,8 @@ export default function OfficialUsersManagePage({ embedded = false }: { embedded
 
   const filtered = useMemo(() => {
     let result = users
-    if (roleFilter !== "all") result = result.filter((u) => u.role === roleFilter)
+    if (roleFilter === "barangay_official") result = result.filter((u) => u.role === "barangay_official" || u.role === "first_responder")
+    else if (roleFilter !== "all") result = result.filter((u) => u.role === roleFilter)
     if (debounced) {
       const q = debounced.toLowerCase()
       result = result.filter((u) => `${u.full_name ?? ""} ${u.email} ${u.phone_number}`.toLowerCase().includes(q))
@@ -236,8 +237,7 @@ export default function OfficialUsersManagePage({ embedded = false }: { embedded
 
   const filterCounts = useMemo(() => ({
     all: users.length,
-    barangay_official: users.filter((u) => u.role === "barangay_official").length,
-    first_responder: users.filter((u) => u.role === "first_responder").length,
+    barangay_official: users.filter((u) => u.role === "barangay_official" || u.role === "first_responder").length,
     resident: users.filter((u) => u.role === "resident").length,
   }), [users])
 
@@ -260,40 +260,59 @@ export default function OfficialUsersManagePage({ embedded = false }: { embedded
       stats={[
         { label: "Accounts", value: users.length },
         { label: "Officials", value: filterCounts.barangay_official },
-        { label: "Responders", value: filterCounts.first_responder },
         { label: "Residents", value: filterCounts.resident },
       ]}
     >
+      <div className="space-y-4">
       <ConfigurationListToolbar
         search={query}
         onSearch={(value) => { setQuery(value); setOffset(0) }}
         placeholder="Search by name, email or phone"
-        filters={FILTERS.map((filter) => ({ key: filter.key, label: filter.label, count: filterCounts[filter.key as keyof typeof filterCounts] }))}
+        filters={[...FILTERS.map((filter) => ({ key: filter.key, label: filter.label, count: filterCounts[filter.key as keyof typeof filterCounts] })), { key: "__add", label: "Add a user" }]}
         activeFilter={roleFilter}
-        onFilter={(value) => { setRoleFilter(value); setOffset(0) }}
+        onFilter={(value) => { if (value === "__add") { setCreateOpen(true); return } setRoleFilter(value); setOffset(0) }}
       />
 
+      <div>
       <ConfigurationTable label="Users" hideHeader>
         {page.map((user) => (
-          <ConfigurationInfoRow
-            key={user.id}
-            icon={UserIcon}
-            title={user.full_name || user.email}
-            subtext={unitLabel(user)}
-            badge={user.status === "verified" ? null : (
-              <span className={cn("rounded-full px-2 py-0.5 text-meta font-medium", user.status.startsWith("pending") ? "bg-amber-50 text-amber-600" : "bg-red-50 text-red-600")}>
-                {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
+          <tr key={user.id} className="transition-colors hover:bg-neutral-50">
+            <td className="min-w-0 max-w-0 px-4 py-4 align-middle sm:px-6 sm:py-5">
+            <div className="flex min-w-0 items-start gap-2">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
+                {initials(user.full_name || user.email).charAt(0)}
               </span>
-            )}
-            actions={<SheetIconButton label={`Manage ${user.full_name || user.email}`} onClick={() => { setSelected(user); setEditOpen(true) }}>
-              <PencilIcon className="size-5" strokeWidth={1.8} aria-hidden />
-            </SheetIconButton>}
-          />
+              <div className="min-w-0 flex-1">
+              <p className="break-words text-[15px] leading-snug font-bold text-neutral-900">
+                {user.full_name || user.email}
+                {user.status === "verified" ? null : (
+                  <span className={cn("ml-2 rounded-full px-2 py-0.5 text-meta font-medium", user.status.startsWith("pending") ? "bg-amber-50 text-amber-600" : "bg-red-50 text-red-600")}>
+                    {STATUS_LABEL[user.status] ?? user.status.replace(/_/g, " ")}
+                  </span>
+                )}
+              </p>
+                <p className="mt-1 text-[13px] text-neutral-500">
+                  {user.role === "resident" ? (ROLE_LABEL[user.role] ?? user.role) : "Official"}
+                  {unitLabel(user) === "Unassigned" ? null : <> (<span className="text-neutral-400">{unitLabel(user)}</span>)</>}
+                </p>
+              </div>
+            </div>
+            </td>
+            <td className="w-[64px] px-2 py-4 align-middle sm:w-[72px] sm:px-4 sm:py-5">
+              <div className="flex items-center justify-end">
+            <SheetIconButton label={`Manage ${user.full_name || user.email}`} onClick={() => { setSelected(user); setEditOpen(true) }} className="mr-1 size-8 text-neutral-400 hover:text-neutral-700">
+              <PencilIcon className="size-5" strokeWidth={1.9} aria-hidden />
+            </SheetIconButton>
+              </div>
+            </td>
+          </tr>
         ))}
         {page.length === 0 && !loading ? <ConfigurationTableEmpty>No users found.</ConfigurationTableEmpty> : null}
       </ConfigurationTable>
 
-      <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="users" />
+      <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="users" className="py-1" inline />
+      </div>
+      </div>
 
       {/* Manage dialog */}
       {selected && (
@@ -411,7 +430,7 @@ function CreateUserDialog({
       title="Create user"
       size="wide"
       footer={
-        <SheetActionRow>
+        <SheetCompactActionRow>
           <SheetSecondaryButton onClick={() => { onClose(); reset() }}>Cancel</SheetSecondaryButton>
           <SheetPrimaryButton
             type="button"
@@ -421,7 +440,7 @@ function CreateUserDialog({
           >
             {busy ? "Creating…" : "Create account"}
           </SheetPrimaryButton>
-        </SheetActionRow>
+        </SheetCompactActionRow>
       }
     >
       <div className="pb-4">
@@ -760,10 +779,13 @@ function UserManageDialog({
     <SheetDialog
       open={open}
       onClose={onClose}
-      title="User Details"
+      onBack={onClose}
+      showClose={false}
+      titleClassName="text-center"
+      title={<span className="inline-flex items-center gap-2"><UserCogIcon className="size-6" strokeWidth={2} aria-hidden />User<span className="text-brand-orange">Details</span></span>}
       size="wide"
       footer={
-        <SheetActionRow>
+        <SheetCompactActionRow>
           <SheetSecondaryButton onClick={onClose}>Cancel</SheetSecondaryButton>
           <SheetPrimaryButton
             type="button"
@@ -773,7 +795,7 @@ function UserManageDialog({
           >
             {busy ? "Saving\u2026" : "Save changes"}
           </SheetPrimaryButton>
-        </SheetActionRow>
+        </SheetCompactActionRow>
       }
     >
       <div className="pb-4">

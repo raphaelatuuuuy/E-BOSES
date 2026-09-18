@@ -1,0 +1,1 @@
+function e(e,t,n,r){let i=n||``;return i.startsWith(`video/`)||i===`video`?{src:e,filename:t,kind:`video`,media:r}:i.startsWith(`image/`)||i===`image`||!i?{src:e,filename:t,kind:`image`,media:r}:{src:e,filename:t,kind:`file`,media:r}}function t(e){return e.preview_url||e.raw_url||``}export{e as n,t};

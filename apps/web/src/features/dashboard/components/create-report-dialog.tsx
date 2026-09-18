@@ -49,7 +49,8 @@ import {
   isPhotoVerdictRejected,
   photoVerdictsWithWarningFallback,
 } from "@/features/dashboard/components/create-report-dialog-photo"
-import { ApiError } from "@/lib/api"
+import { ApiError, apiOrigin } from "@/lib/api"
+import { resolveMediaUrl } from "@/lib/media-url"
 import { lookupRegistrationPinAddress } from "@/features/auth/api"
 import { looksLikeCoordinates } from "@/features/dashboard/lib/location-text"
 
@@ -2157,7 +2158,7 @@ export function CreateReportDialog({
             </p>
             {resolvedMatch.preview_url ? (
               <img
-                src={resolvedMatch.preview_url}
+                src={resolveMediaUrl(resolvedMatch.preview_url, apiOrigin())}
                 alt=""
                 className="mt-4 h-40 w-full rounded-xl object-cover"
               />

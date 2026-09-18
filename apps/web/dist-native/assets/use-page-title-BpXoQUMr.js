@@ -1,0 +1,1 @@
+import{r as e}from"./rolldown-runtime-QTnfLwEv.js";import{g as t}from"./react-vendor-D_udBUjN.js";var n=e(t(),1);function r(e,t={}){let{suffix:r=`E-Boses`}=t;(0,n.useEffect)(()=>{document.title=`${e} | ${r}`},[r,e])}export{r as t};

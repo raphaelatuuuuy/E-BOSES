@@ -2,7 +2,6 @@ import { type FormEvent, useState } from "react"
 
 import { ApiError } from "@/lib/api"
 import { login, type AuthUser } from "@/features/auth/api"
-import { readyOfflineMap } from "@/features/dashboard/components/map/tile-layers"
 import { refreshOfflineSosConfig } from "@/features/dashboard/components/sos/offline-sos-config"
 import {
   type SignInErrors,
@@ -106,9 +105,7 @@ export function useSignInForm(options: UseSignInFormOptions = {}) {
         try {
           await refreshOfflineSosConfig()
         } catch {
-          // The bundled coverage copy still warms below.
         }
-        readyOfflineMap()
       })()
     } catch (error) {
       const fallback = "Invalid email or password."

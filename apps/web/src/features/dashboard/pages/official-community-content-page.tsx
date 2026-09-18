@@ -30,13 +30,15 @@ import {
   ConfigurationPager,
 } from "@/features/dashboard/components/config/configuration-list-controls"
 import {
-  ConfigurationInfoRow,
   ConfigurationTable,
+  ConfigurationTableRow,
 } from "@/features/dashboard/components/config/configuration-table"
 import {
+  SheetCompactActionRow,
   SheetDialog,
   SheetIconButton,
   SheetPrimaryButton,
+  SheetSecondaryButton,
 } from "@/features/dashboard/components/sheet-dialog"
 import { ContentComposer } from "@/features/dashboard/components/community-content/content-composer"
 
@@ -263,23 +265,21 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
         title={deleteTarget ? `Delete "${deleteTarget.title}"?` : ""}
         description="Residents will no longer see this announcement, and it will leave the content list. This cannot be undone."
         footer={
-          <div className="flex gap-2">
-            <SheetPrimaryButton
+          <SheetCompactActionRow>
+            <SheetSecondaryButton
               disabled={deleting}
               onClick={() => setDeleteTarget(null)}
-              className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]"
             >
               Cancel
-            </SheetPrimaryButton>
+            </SheetSecondaryButton>
             <SheetPrimaryButton
               tone="danger"
               disabled={deleting}
               onClick={() => void confirmDelete()}
-              className="flex-1 text-[15px]"
             >
               {deleting ? "Deleting…" : "Delete announcement"}
             </SheetPrimaryButton>
-          </div>
+          </SheetCompactActionRow>
         }
       />
     </>
@@ -300,14 +300,16 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
         <p className="py-14 text-center text-read text-neutral-400">Reading announcements…</p>
       ) : (
         <>
+          <div className="space-y-4">
           <ConfigurationListToolbar
             search={query}
             onSearch={(value) => { setQuery(value); setOffset(0) }}
             placeholder="Search announcements"
-            filters={TYPE_OPTIONS.map((o) => ({ key: o.key, label: o.label, count: typeCounts[o.key] }))}
+            filters={[...TYPE_OPTIONS.map((o) => ({ key: o.key, label: o.label, count: typeCounts[o.key] })), { key: "__add", label: "Add an announcement" }]}
             activeFilter={typeFilter}
-            onFilter={(value) => { setTypeFilter(value as TypeFilter); setOffset(0) }}
+            onFilter={(value) => { if (value === "__add") { openNew(); return } setTypeFilter(value as TypeFilter); setOffset(0) }}
           />
+          <div>
           {page.length === 0 ? (
             <div className="py-16 text-center">
               <MegaphoneIcon className="mx-auto size-7 text-neutral-300" aria-hidden />
@@ -321,27 +323,34 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
             <>
                   <ConfigurationTable label="Announcements" hideHeader>
                 {page.map((item) => (
-                  <ConfigurationInfoRow
+                  <ConfigurationTableRow
                     key={item.id}
-                    icon={MegaphoneIcon}
-                    title={item.title}
-                    subtext={advisoryLabel(item.tag)}
-                    badge={item.is_pinned ? <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-meta font-medium text-neutral-500">Pinned</span> : null}
-                    description={<>{item.audience === "all" ? "All users" : item.audience === "residents" ? "Residents" : item.audience === "responders" ? "Responders" : "Officials"} · {item.affected_streets?.length ? item.affected_streets.join(" · ") : "Whole barangay"}</>}
-                    actions={<>
-                      <SheetIconButton label={`Edit ${item.title}`} onClick={() => openEdit(item.id)}>
-                        <PencilLineIcon className="size-5" strokeWidth={1.8} aria-hidden />
+                    actions={<span className="flex items-center gap-0.5">
+                      <SheetIconButton label={`Edit ${item.title}`} onClick={() => openEdit(item.id)} className="size-8 text-neutral-400 hover:text-neutral-700">
+                        <PencilLineIcon className="size-5" strokeWidth={1.9} aria-hidden />
                       </SheetIconButton>
-                      <SheetIconButton label={`Remove ${item.title}`} onClick={() => handleDelete(item.id)} className="text-neutral-500 hover:text-sos">
-                        <Trash2Icon className="size-5" strokeWidth={1.8} aria-hidden />
+                      <SheetIconButton label={`Remove ${item.title}`} onClick={() => handleDelete(item.id)} className="size-8 text-neutral-400 hover:text-sos">
+                        <Trash2Icon className="size-4" strokeWidth={1.9} aria-hidden />
                       </SheetIconButton>
-                    </>}
-                  />
+                    </span>}
+                  >
+                    <div className="min-w-0 flex-1">
+                        <p className="break-words text-[15px] leading-snug font-bold text-neutral-900">
+                          {item.title}
+                          {item.is_pinned ? <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-meta font-medium text-neutral-500">Pinned</span> : null}
+                        </p>
+                        <p className="mt-1 text-[13px] text-neutral-500">
+                          <span className="text-neutral-400">{advisoryLabel(item.tag)}</span>{" "}{item.audience === "all" ? "All users" : item.audience === "residents" ? "Residents" : item.audience === "responders" ? "Responders" : "Officials"} · {item.affected_streets?.length ? item.affected_streets.join(" · ") : "Whole barangay"}
+                        </p>
+                    </div>
+                  </ConfigurationTableRow>
                 ))}
               </ConfigurationTable>
-              <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="announcements" />
+              <ConfigurationPager key={offset} offset={offset} total={filtered.length} onChange={setOffset} noun="announcements" className="py-1" inline />
             </>
           )}
+          </div>
+          </div>
         </>
       )}
       {overlays}
