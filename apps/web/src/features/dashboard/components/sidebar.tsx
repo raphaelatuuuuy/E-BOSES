@@ -26,7 +26,6 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
   isOfficialUser,
@@ -38,6 +37,7 @@ import {
   ResidentProfileDialog,
 } from "@/features/dashboard/components/resident/resident-account-dialogs"
 import { useNotifications } from "@/features/dashboard/components/notification-context"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { useOfficialBadges } from "@/features/dashboard/hooks/use-official-badges"
 import { useAssignedDispatches } from "@/features/dashboard/hooks/use-assigned-dispatches"
 import {
@@ -385,7 +385,6 @@ export function Sidebar() {
   const [profileOpen, setProfileOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
-  const avatarInitials = initials(user?.full_name || "Account").charAt(0)
   const rolePosition = displayPosition(user)
   const descriptions: Record<string, string> = {
     dispatch: "Handle emergency requests and coordinate the response.",
@@ -610,14 +609,12 @@ export function Sidebar() {
               ""
             )}
           >
-            <span
-              className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-full text-[14px] font-bold ring-1",
-                "bg-slate-soft text-navy-muted ring-transparent"
-              )}
-            >
-              {avatarInitials}
-            </span>
+            <UserAvatar
+              user={user}
+              online={Boolean(user)}
+              size="sm"
+              className={cn("!size-9 text-[14px] font-bold ring-1", "bg-slate-soft text-navy-muted ring-transparent")}
+            />
             <span className={cn("flex min-w-0 flex-1 flex-col", "hidden")}>
               <span
                 className={cn(

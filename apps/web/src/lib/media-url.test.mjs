@@ -29,3 +29,38 @@ test("leaves absolute, protocol-relative, blob, and empty sources alone", () => 
   )
   assert.equal(resolveMediaUrl("", "https://api.example.com"), "")
 })
+
+test("rebases absolute api media urls onto the configured origin", () => {
+  assert.equal(
+    resolveMediaUrl(
+      "http://192.168.1.5:8000/api/emergencies/resolution-evidence/9/preview/",
+      "https://api.example.com"
+    ),
+    "https://api.example.com/api/emergencies/resolution-evidence/9/preview/"
+  )
+  assert.equal(
+    resolveMediaUrl(
+      "https://api.example.com/api/concerns/media/3/preview/",
+      "https://api.example.com"
+    ),
+    "https://api.example.com/api/concerns/media/3/preview/"
+  )
+})
+
+test("leaves foreign absolute urls and empty origins alone", () => {
+  assert.equal(
+    resolveMediaUrl(
+      "http://192.168.1.5:8000/api/emergencies/resolution-evidence/9/preview/",
+      ""
+    ),
+    "http://192.168.1.5:8000/api/emergencies/resolution-evidence/9/preview/"
+  )
+  assert.equal(
+    resolveMediaUrl("https://cdn.example.com/photo.jpg", "https://api.example.com"),
+    "https://cdn.example.com/photo.jpg"
+  )
+  assert.equal(
+    resolveMediaUrl("https://api.example.com/about", "https://api.example.com"),
+    "https://api.example.com/about"
+  )
+})

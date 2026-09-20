@@ -59,14 +59,43 @@ const sidePanelClass = {
     left: "inset-y-0 left-0 right-auto h-full w-full max-w-sm rounded-r-2xl",
     right: "inset-y-0 right-0 left-auto h-full w-full max-w-sm rounded-l-2xl",
 };
-function SheetContent({ className, children, overlayClassName, side = "bottom", showHandle = true, ...props }) {
-    const { open } = useSheet();
+function SheetContent({ className, children, overlayClassName, side = "bottom", showHandle = true, draggable = false, ...props }) {
+    const { open, setOpen } = useSheet();
+    const [dragY, setDragY] = React.useState(0);
+    const [dragging, setDragging] = React.useState(false);
+    const dragStartY = React.useRef(0);
+    function handlePointerDown(event) {
+        if (!draggable || side !== "bottom")
+            return;
+        dragStartY.current = event.clientY;
+        setDragging(true);
+        event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    function handlePointerMove(event) {
+        if (!dragging)
+            return;
+        setDragY(Math.max(0, event.clientY - dragStartY.current));
+    }
+    function handlePointerUp(event) {
+        if (!dragging)
+            return;
+        const distance = event.clientY - dragStartY.current;
+        setDragging(false);
+        setDragY(0);
+        if (distance > 120)
+            setOpen(false);
+    }
     if (!open)
         return null;
     return (<>
       <SheetOverlay className={overlayClassName}/>
-      <div className={cn("fixed z-50 flex flex-col border border-border/50 bg-background shadow-2xl", sidePanelClass[side], className)} {...props}>
-        {side === "bottom" && showHandle ? (<div className="flex shrink-0 items-center justify-center pt-2.5 pb-1">
+      <div className={cn("fixed z-50 flex flex-col border border-border/50 bg-background shadow-2xl", sidePanelClass[side], draggable && "transition-transform duration-200 ease-out", className)} style={draggable && side === "bottom"
+            ? {
+                transform: `translateY(${dragY}px)`,
+                transitionDuration: dragging ? "0ms" : undefined,
+            }
+            : undefined} {...props}>
+        {side === "bottom" && showHandle ? (<div className={cn("flex shrink-0 items-center justify-center pt-2.5 pb-1", draggable && "cursor-grab touch-none active:cursor-grabbing")} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} aria-label={draggable ? "Drag sheet" : undefined}>
             <span className="h-1.5 w-10 rounded-full bg-neutral-300" aria-hidden/>
           </div>) : null}
         <div className="flex-1 overflow-y-auto overscroll-contain">{children}</div>

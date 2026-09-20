@@ -1,6 +1,5 @@
 import { useNavigate } from "react-router-dom"
 
-import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { useResponderUnit } from "@/features/dashboard/hooks/use-responder-unit"
 import {
@@ -9,6 +8,7 @@ import {
   SheetPrimaryButton,
   SheetSectionLabel,
 } from "@/features/dashboard/components/sheet-dialog"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 
 /**
  * Who the responder is, and nothing else. One identity strip, one details
@@ -31,12 +31,7 @@ export function ResponderProfilePanel() {
   return (
     <div className="flex min-w-0 flex-col">
       <section className="flex items-center gap-4">
-        <span
-          aria-hidden
-          className="flex size-16 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[32px] font-bold text-navy-muted"
-        >
-          {initials(fullName, "R").charAt(0)}
-        </span>
+        <UserAvatar user={user} online={Boolean(user)} size="lg" className="!size-16 text-[32px]" />
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[20px] font-bold leading-tight tracking-tight text-neutral-900">
             {fullName}

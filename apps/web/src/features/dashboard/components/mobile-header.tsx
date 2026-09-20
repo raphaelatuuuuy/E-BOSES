@@ -1,7 +1,6 @@
 import { useState } from "react"
 import { Link } from "react-router-dom"
 
-import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { isOfficialUser, isResponderUser } from "@/features/auth/roles"
 import { useOfficialBadges } from "@/features/dashboard/hooks/use-official-badges"
@@ -11,6 +10,7 @@ import {
   liveDotAriaLabel,
 } from "@/features/dashboard/components/home/live-dot"
 import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { OfficialMobileChrome } from "@/features/dashboard/components/official/official-account-dialogs"
 import {
   ResponderNotificationsButton,
@@ -27,7 +27,6 @@ import {
 function ResponderMobileChrome() {
   const [profileOpen, setProfileOpen] = useState(false)
   const { user } = useAuthSession()
-  const avatarInitials = initials(user?.full_name || "Account").charAt(0)
 
   return (
     <>
@@ -39,9 +38,7 @@ function ResponderMobileChrome() {
           aria-label="Open profile"
           className="ml-1.5 flex size-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-100"
         >
-          <span className="flex size-9 items-center justify-center rounded-full bg-slate-soft text-[15px] font-bold text-navy-muted">
-            {avatarInitials}
-          </span>
+          <UserAvatar user={user} online={Boolean(user)} size="sm" className="!size-9 text-[15px]" />
         </button>
       </div>
       <ResponderProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />

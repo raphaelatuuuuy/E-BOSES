@@ -350,6 +350,11 @@ def _point_is_in_acceptance_zone(latitude: float, longitude: float, community) -
     ) <= radius
 
 
+def point_is_in_acceptance_zone(latitude: float, longitude: float, community) -> bool:
+    """Public wrapper for the configured radius/shape coverage check."""
+    return _point_is_in_acceptance_zone(latitude, longitude, community)
+
+
 def active_communities_for_coverage_point(latitude: float, longitude: float):
     """Return communities covered by their boundary OR acceptance zone."""
     boundary_matches = active_communities_for_point(latitude, longitude)

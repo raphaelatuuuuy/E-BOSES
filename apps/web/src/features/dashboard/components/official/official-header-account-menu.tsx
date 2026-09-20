@@ -4,7 +4,6 @@ import { ChevronDownIcon, InboxIcon, LogOutIcon, UserCircleIcon } from "lucide-r
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { useNotifications } from "@/features/dashboard/components/notification-context"
 import {
@@ -13,6 +12,7 @@ import {
 } from "@/features/dashboard/components/official/official-account-dialogs"
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 import { displayUnit } from "@/features/dashboard/lib/position"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 
 /**
  * Account menu for the official desktop header — the same personal surfaces
@@ -33,7 +33,6 @@ export function OfficialHeaderAccountMenu() {
   const [signingOut, setSigningOut] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
-  const avatarInitials = initials(user?.full_name || "Account").charAt(0)
   const unitLabel = displayUnit(user)
 
   // Close the dropdown when clicking anywhere outside it.
@@ -73,14 +72,15 @@ export function OfficialHeaderAccountMenu() {
         aria-haspopup="menu"
         className="flex items-center gap-2.5 rounded-full py-1.5 pl-1.5 pr-3 text-left transition-colors hover:bg-black/10"
       >
-        <span
+        <UserAvatar
+          user={user}
+          online={Boolean(user)}
+          size="sm"
           className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-full",
-            "bg-white/15 text-[14px] font-bold text-white ring-1 ring-white/30",
+            "!size-9 text-[14px] font-bold",
+            "bg-white/15 text-white ring-1 ring-white/30",
           )}
-        >
-          {avatarInitials}
-        </span>
+        />
         <span className="flex min-w-0 flex-col">
           <span className="max-w-44 truncate text-[12.5px] font-bold leading-tight text-white">
             {user?.full_name || "Account"}

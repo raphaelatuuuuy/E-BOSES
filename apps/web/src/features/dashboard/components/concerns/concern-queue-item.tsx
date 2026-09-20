@@ -35,6 +35,7 @@ import {
   getConcern,
   type Concern,
   type ConcernComment,
+  type PublicUser,
 } from "@/features/dashboard/api"
 import {
   mediaDisplaySource,
@@ -43,6 +44,7 @@ import {
 } from "@/features/dashboard/lib/authenticated-media"
 import { streetOnly } from "@/features/dashboard/lib/location-text"
 import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { concernSummaryText } from "@/features/dashboard/components/feed-post-text"
 import {
   CommentAttachment,
@@ -166,16 +168,15 @@ function staffBadgeClass(role: string) {
   return ""
 }
 
-function StaffAvatar({ name, role }: { name: string; role: string }) {
+function StaffAvatar({ user, name, role }: { user?: PublicUser | null; name: string; role: string }) {
   const badge = staffBadgeClass(role)
   return (
-    <span
-      className={cn(
-        "relative flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold",
-        avatarTone
-      )}
-    >
-      {initialsOf(name).charAt(0)}
+    <span className="relative shrink-0">
+      <UserAvatar
+        user={user ?? { full_name: name }}
+        size="sm"
+        className={cn("!size-7 text-[11px]", avatarTone)}
+      />
       {badge ? (
         <span
           className={cn(
@@ -229,12 +230,12 @@ export function ConcernEngagementFooter({
         <div className="flex min-w-0 items-center gap-1.5">
           <div className="flex -space-x-1.5" aria-hidden="true">
             {upvoterNames.map((name, i) => (
-              <span
+              <UserAvatar
                 key={`${name}-${i}`}
-                className="flex size-5 items-center justify-center rounded-full bg-slate-soft text-[8px] font-semibold text-navy-muted ring-1 ring-white"
-              >
-                {initialsOf(name).charAt(0)}
-              </span>
+                user={{ full_name: name }}
+                size="sm"
+                className="!size-5 text-[8px] ring-1 ring-white"
+              />
             ))}
             {extraUpvoters > 0 ? (
               <span className="flex size-5 items-center justify-center rounded-full bg-neutral-100 text-[8px] font-semibold text-neutral-500 ring-1 ring-white">
@@ -332,6 +333,7 @@ export function ConcernCommentsList({
         >
           <div className="flex items-start gap-2">
             <StaffAvatar
+              user={comment.author}
               name={comment.author?.full_name || "R"}
               role={comment.author?.role ?? ""}
             />
@@ -385,7 +387,6 @@ export function ConcernQueueItem({
   const displayTitle = titleText || truncateDescription(descriptionText, 60)
   const showBody = Boolean(descriptionText || generatedSummary)
   const full = concernReporterName(concern)
-  const initials = (concern.reporter?.initials || initialsOf(full)).charAt(0)
   const othersCount = concern.also_reported_count ?? 0
 
   const isPublic = concern.visibility === "community"
@@ -662,14 +663,11 @@ export function ConcernQueueItem({
       ) : (
         <>
           <div className="flex items-center gap-2.5">
-            <span
-              className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-full text-[14px] font-bold",
-                avatarTone
-              )}
-            >
-              {initials}
-            </span>
+            <UserAvatar
+              user={concern.reporter}
+              size="sm"
+              className={cn("!size-9 text-[14px]", avatarTone)}
+            />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[13px] leading-tight font-medium text-neutral-700">
                 {full}
@@ -794,6 +792,7 @@ export function ConcernQueueItem({
                     <div className="flex items-stretch gap-2">
                       <div className="flex w-7 shrink-0 flex-col items-center">
                         <StaffAvatar
+                          user={comment.author}
                           name={comment.author?.full_name || "R"}
                           role={comment.author?.role ?? ""}
                         />
@@ -857,6 +856,7 @@ export function ConcernQueueItem({
                                   className="pointer-events-none absolute -top-4 -left-[22px] h-8 w-[22px] rounded-bl-[12px] border-b border-l border-neutral-200"
                                 />
                                 <StaffAvatar
+                                  user={reply.author}
                                   name={reply.author?.full_name || "R"}
                                   role={reply.author?.role ?? ""}
                                 />

@@ -12,6 +12,7 @@ from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.emergencies.services import mark_witness_notifications_read
 
 from .models import BrowserPushSubscription, NativePushDevice, Notification
+from .presence import is_user_online
 from .serializers import BrowserPushSubscriptionSerializer, NativePushDeviceSerializer, NotificationSerializer
 from .services import web_push_config_health
 from .tickets import issue_websocket_ticket
@@ -22,6 +23,20 @@ class RealtimeTicketView(APIView):
 
     def post(self, request):
         return Response({"ticket": issue_websocket_ticket(request.user), "expires_in": 60})
+
+
+class PresenceStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        raw_ids = request.query_params.get("ids", "")
+        try:
+            ids = list(dict.fromkeys(int(value) for value in raw_ids.split(",") if value.strip()))
+        except ValueError:
+            return Response({"detail": "Presence ids must be whole numbers."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(ids) > 100:
+            return Response({"detail": "A maximum of 100 presence ids may be requested."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"statuses": {str(user_id): is_user_online(user_id) for user_id in ids}})
 
 
 class NotificationListView(APIView):

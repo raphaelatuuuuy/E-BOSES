@@ -236,6 +236,10 @@ def _dispatch(inbound, payload, match: SenderMatch, role: str) -> Reply | None:
     if parsed.is_emergency and not command.recognised:
         return _create_emergency(inbound, parsed, payload, match)
 
+    if role in {ROLE_RESIDENT, ROLE_UNKNOWN} and not command.recognised:
+        if _append_to_active_chat(inbound, match, payload.body):
+            return Reply(None)
+
     inbound.outcome = InboundSmsMessage.Outcome.UNRECOGNISED
     inbound.detail = "No emergency signal recognised; SMS commands are managed in the app."
     return Reply(None)
@@ -299,14 +303,37 @@ def _create_emergency(inbound, parsed, payload, match: SenderMatch) -> Reply:
 
     if result.duplicate:
         inbound.outcome = InboundSmsMessage.Outcome.DUPLICATE
-        inbound.detail = "Sender already has an active emergency."
-        return Reply(None)
+        inbound.detail = "Sender already has an active emergency; duplicate SOS was not added to chat."
+        return Reply(
+            templates.ongoing_emergency(),
+            purpose=SmsPurpose.EMERGENCY_ACK,
+            alert=alert,
+            recipient=getattr(match, "user", None),
+        )
 
     inbound.outcome = InboundSmsMessage.Outcome.EMERGENCY_CREATED
     inbound.detail = f"Created {templates.reference(alert)}."
     from .notify import notify_reporter_ack
     transaction.on_commit(lambda: notify_reporter_ack(alert))
     return Reply(None)
+
+
+def _append_to_active_chat(inbound, match: SenderMatch, body: str, *, alert=None) -> bool:
+    from apps.emergencies.sms_intake import active_alert_for, find_intake_reporter
+
+    reporter = find_intake_reporter(inbound.sender_number, match)
+    active = alert or active_alert_for(reporter, inbound.sender_number)
+    if not active:
+        return False
+    sender = match.user if match.user and resolve_role(match.user) == ROLE_RESIDENT else reporter
+    message = active.chat_messages.create(sender=sender, body=(body or "").strip()[:2000])
+    inbound.alert = active
+    inbound.outcome = InboundSmsMessage.Outcome.CHAT_APPENDED
+    inbound.detail = "Resident SMS appended to the active emergency chat."
+    from apps.emergencies.chat_services import schedule_chat_message_delivery
+
+    schedule_chat_message_delivery(message)
+    return True
 
 
 def _handle_responder_progress(inbound, responder, command: ParsedCommand) -> Reply:
@@ -369,7 +396,9 @@ def _send(inbound, destination: str, reply: Reply) -> None:
         destination,
         reply.body,
         purpose=reply.purpose,
-        idempotency_key=f"reply:{inbound.dedupe_key}",
+        # `deliver()` only sends current-format operational replies. Keeping
+        # this under the sms-v2 namespace also makes gateway retries safe.
+        idempotency_key=f"sms-v2:reply:{inbound.dedupe_key}",
         alert=reply.alert,
         recipient=reply.recipient or inbound.matched_user,
         in_reply_to=inbound,

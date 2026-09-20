@@ -5,7 +5,6 @@ import { InboxIcon, SettingsIcon } from "lucide-react"
 
 import { SheetDialog, SheetIconButton } from "@/features/dashboard/components/sheet-dialog"
 
-import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { useNotifications } from "@/features/dashboard/components/notification-context"
 import { OfficialProfilePanel } from "@/features/dashboard/components/official/official-profile-panel"
@@ -14,6 +13,7 @@ import { NotificationViewActions } from "@/features/dashboard/components/notific
 import { SettingsWorkspace } from "@/features/dashboard/components/settings/settings-workspace"
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 import { useNotificationsPopGate } from "@/features/dashboard/components/notifications/notifications-event"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 
 /**
  * The official's personal surfaces. Notifications, Profile and Settings all
@@ -170,7 +170,6 @@ export function OfficialSettingsDialog({
 export function OfficialMobileChrome() {
   const [profileOpen, setProfileOpen] = useState(false)
   const { user } = useAuthSession()
-  const avatarInitials = initials(user?.full_name || "Account").charAt(0)
 
   return (
     <>
@@ -182,9 +181,7 @@ export function OfficialMobileChrome() {
           aria-label="Open profile"
           className="ml-1.5 flex size-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-100"
         >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[15px] font-bold text-navy-muted">
-            {avatarInitials}
-          </span>
+          <UserAvatar user={user} online={Boolean(user)} size="sm" className="!size-9 text-[15px]" />
         </button>
       </div>
       <OfficialProfileDialog

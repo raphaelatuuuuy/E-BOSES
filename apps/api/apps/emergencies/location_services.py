@@ -17,6 +17,7 @@ from apps.geo_services import (
     REVERSE_STATUS_SKIPPED,
     REVERSE_STATUS_SUCCESS,
     is_inside_barangay_boundary,
+    point_is_in_acceptance_zone,
     reverse_geocode,
 )
 
@@ -55,14 +56,22 @@ def classify_location_confidence(alert) -> str:
     if boundary and boundary.geometry:
         from apps.geo_services import point_in_geojson_inclusive
 
+        if point_in_geojson_inclusive(alert.longitude, alert.latitude, boundary.geometry):
+            return EmergencyAlert.LocationConfidence.CONFIRMED
+        # Inside the configured acceptance radius/shape but not the polygon: a
+        # real accepted location, just not boundary-confirmed.
         return (
-            EmergencyAlert.LocationConfidence.CONFIRMED
-            if point_in_geojson_inclusive(alert.longitude, alert.latitude, boundary.geometry)
+            EmergencyAlert.LocationConfidence.REPORTED
+            if point_is_in_acceptance_zone(alert.latitude, alert.longitude, community)
             else EmergencyAlert.LocationConfidence.OUTSIDE_AREA
         )
     try:
         if not is_inside_barangay_boundary(alert.latitude, alert.longitude):
-            return EmergencyAlert.LocationConfidence.OUTSIDE_AREA
+            return (
+                EmergencyAlert.LocationConfidence.REPORTED
+                if point_is_in_acceptance_zone(alert.latitude, alert.longitude, community)
+                else EmergencyAlert.LocationConfidence.OUTSIDE_AREA
+            )
     except Exception:
         logger.warning("Boundary check failed for alert %s; treating as confirmed.", alert.pk)
     return EmergencyAlert.LocationConfidence.CONFIRMED

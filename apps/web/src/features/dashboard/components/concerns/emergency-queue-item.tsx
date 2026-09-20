@@ -20,7 +20,6 @@ import {
 } from "@/features/dashboard/emergency-api"
 import {
   avatarTone,
-  initialsOf,
   severityTintStyle,
   statusTintStyle,
 } from "@/features/dashboard/components/concerns/concern-queue-item"
@@ -39,6 +38,7 @@ import {
   responderStatusLabel,
 } from "@/features/dashboard/components/emergencies/lib"
 import { EmergencyResolutionBanner } from "@/features/dashboard/components/emergencies/emergency-resolution-banner"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
 import {
   CommentAttachment,
@@ -117,13 +117,13 @@ export function EmergencyEngagementFooter({
         <div className="flex min-w-0 items-center gap-1.5">
           <div className="flex -space-x-1.5" aria-label="Responders responding">
             {visibleResponders.map((responder) => (
-              <span
+              <UserAvatar
                 key={responder.id}
+                user={responder}
+                size="sm"
+                className="!size-5 text-[8px] ring-1 ring-white"
                 title={responder.full_name}
-                className="flex size-5 items-center justify-center rounded-full bg-slate-soft text-[8px] font-semibold text-navy-muted ring-1 ring-white"
-              >
-                {initialsOf(responder.full_name).charAt(0)}
-              </span>
+              />
             ))}
             {extraResponders > 0 ? (
               <span className="flex size-5 items-center justify-center rounded-full bg-neutral-100 text-[8px] font-semibold text-neutral-500 ring-1 ring-white">
@@ -277,14 +277,11 @@ export function EmergencyQueueItem({
       style={rowTint}
     >
       <div className="flex items-center gap-2.5">
-        <span
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-full text-[14px] font-bold",
-            avatarTone
-          )}
-        >
-          {reporterName.charAt(0).toUpperCase()}
-        </span>
+        <UserAvatar
+          user={alert.reporter ?? { full_name: reporterName }}
+          size="sm"
+          className={cn("!size-9 text-[14px]", avatarTone)}
+        />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] leading-tight font-normal text-subtle-foreground">
             {reporterName}
@@ -402,15 +399,13 @@ export function EmergencyQueueItem({
               aria-label="Responders on this route"
             >
               {routeResponders.slice(0, 3).map((responder) => (
-                <span
+                <UserAvatar
                   key={responder.id}
+                  user={responder}
+                  size="sm"
+                  className="!size-5 text-[8px] ring-1 ring-white"
                   title={responder.full_name}
-                  className="flex size-5 items-center justify-center rounded-full bg-slate-soft text-[8px] font-semibold text-navy-muted ring-1 ring-white"
-                >
-                  {(responder.initials || responder.full_name || "R")
-                    .charAt(0)
-                    .toUpperCase()}
-                </span>
+                />
               ))}
             </span>
           ) : null}
@@ -447,11 +442,11 @@ export function EmergencyQueueItem({
           ) : (
             comments?.map((comment) => (
               <div key={comment.id} className="flex items-start gap-2">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[10px] font-bold text-navy-muted">
-                  {(comment.author_label || comment.author?.full_name || "R")
-                    .charAt(0)
-                    .toUpperCase()}
-                </span>
+                <UserAvatar
+                  user={comment.author ?? { full_name: comment.author_label || "Resident" }}
+                  size="sm"
+                  className="!size-7 text-[10px]"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] font-medium text-neutral-800">
                     {comment.author_label ||

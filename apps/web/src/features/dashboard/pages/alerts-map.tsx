@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Check,
@@ -142,6 +142,8 @@ function publicEmergencyAsLive(
       longitude: null,
       location_updated_at: null,
     },
+    assigned_unit: null,
+    units: [],
     current_assignment: null,
     created_at: emergency.created_at,
     updated_at: emergency.updated_at,
@@ -152,9 +154,12 @@ function publicEmergencyAsLive(
 
 function withPublicRecords(
   snapshot: LiveMapSnapshot,
-  includePublic = true
+  includePublic = true,
+  // When the SOS unit filter is active the public pins must stay out: they are
+  // not unit-scoped, so merging them would re-add rows the filter just removed.
+  includePublicEmergencies = includePublic
 ): LiveMapSnapshot {
-  if (!includePublic) return snapshot
+  if (!includePublic && !includePublicEmergencies) return snapshot
   const concernIds = new Set(
     snapshot.operational.concerns.map((item) => item.id)
   )
@@ -163,18 +168,22 @@ function withPublicRecords(
   )
   return {
     ...snapshot,
-    concerns: [
-      ...snapshot.operational.concerns,
-      ...snapshot.public_concerns
-        .filter((item) => !concernIds.has(item.id))
-        .map(publicConcernAsLive),
-    ],
-    emergencies: [
-      ...snapshot.operational.emergencies,
-      ...snapshot.public_emergencies
-        .filter((item) => !emergencyIds.has(item.id))
-        .map(publicEmergencyAsLive),
-    ],
+    concerns: includePublic
+      ? [
+          ...snapshot.operational.concerns,
+          ...snapshot.public_concerns
+            .filter((item) => !concernIds.has(item.id))
+            .map(publicConcernAsLive),
+        ]
+      : snapshot.concerns,
+    emergencies: includePublicEmergencies
+      ? [
+          ...snapshot.operational.emergencies,
+          ...snapshot.public_emergencies
+            .filter((item) => !emergencyIds.has(item.id))
+            .map(publicEmergencyAsLive),
+        ]
+      : snapshot.emergencies,
   }
 }
 
@@ -321,6 +330,9 @@ export default function AlertsMapPage() {
   const [alertQuery, setAlertQuery] = useState("")
   const [alertFilterOpen, setAlertFilterOpen] = useState(false)
   const [communityFilter, setCommunityFilter] = useState("all")
+  const [unitFilter, setUnitFilter] = useState("all")
+  const homeCommunityIdRef = useRef<string | null>(null)
+  const unitFilterApplied = useRef(false)
   const [weatherReady, setWeatherReady] = useState(false)
 
   const sheet = useBottomSheetSnap({ enabled: !isDesktop })
@@ -379,16 +391,18 @@ export default function AlertsMapPage() {
   }, [isDesktop, sheet])
 
   const load = useCallback(
-    async (communityId?: string) => {
+    async (communityId?: string, unitId?: number | "unassigned") => {
       try {
         const nextSnapshot = withPublicRecords(
-          await getOfficialLiveMap(communityId),
-          !isResponder
+          await getOfficialLiveMap(communityId, unitId),
+          !isResponder,
+          !isResponder && unitId == null
         )
         const nextHomeCommunityId =
           nextSnapshot.home_community_id ??
           nextSnapshot.operational.community_id ??
           null
+        if (!homeCommunityIdRef.current) homeCommunityIdRef.current = nextHomeCommunityId
         setHomeCommunityId((current) => current ?? nextHomeCommunityId)
         // Open on the signed-in official's community so foreign pins stay
         // hidden by default.
@@ -411,6 +425,22 @@ export default function AlertsMapPage() {
       window.clearTimeout(initialLoad)
     }
   }, [load])
+
+  // The unit filter is enforced server-side, so changing it refetches the
+  // snapshot rather than filtering already-scoped rows on the client.
+  useEffect(() => {
+    if (!unitFilterApplied.current) {
+      unitFilterApplied.current = true
+      return
+    }
+    const unitId =
+      unitFilter === "all"
+        ? undefined
+        : unitFilter === "unassigned"
+          ? "unassigned"
+          : Number(unitFilter)
+    void load(homeCommunityIdRef.current ?? undefined, unitId)
+  }, [unitFilter, load])
 
   useEffect(() => {
     let socket: WebSocket | null = null
@@ -532,6 +562,20 @@ export default function AlertsMapPage() {
           snapshot.operational.concerns.some((entry) => entry.id === item.id))
     )
   }, [snapshot, communityFilter, homeCommunityId])
+  // Mirrors the server rule so a live WebSocket push cannot slip an SOS from
+  // another unit onto a unit-filtered map. "all" always matches.
+  const unitFilterMatches = useCallback(
+    (emergency: LiveMapEmergency) => {
+      if (unitFilter === "all") return true
+      if (unitFilter === "unassigned") return emergency.assigned_unit == null
+      const unitId = Number(unitFilter)
+      if (!Number.isFinite(unitId)) return true
+      if (emergency.assigned_unit) return emergency.assigned_unit.id === unitId
+      return emergency.units.some((unit) => unit.id === unitId)
+    },
+    [unitFilter]
+  )
+
   const visibleEmergencies = useMemo(() => {
     const active = snapshot?.emergencies.filter(isActiveEmergency) ?? []
     const rows = [...active, ...resolvedRecords.emergencies]
@@ -546,13 +590,14 @@ export default function AlertsMapPage() {
     )
     return rows.filter(
       (item) =>
-        ids.has(item.id) ||
-        (snapshot.operational.community_id === selectedCommunityId &&
-          snapshot.operational.emergencies.some(
-            (entry) => entry.id === item.id
-          ))
+        unitFilterMatches(item) &&
+        (ids.has(item.id) ||
+          (snapshot.operational.community_id === selectedCommunityId &&
+            snapshot.operational.emergencies.some(
+              (entry) => entry.id === item.id
+            )))
     )
-  }, [snapshot, resolvedRecords, communityFilter, homeCommunityId])
+  }, [snapshot, resolvedRecords, communityFilter, homeCommunityId, unitFilterMatches])
   const mapSelectedStreetNames = useMemo(() => new Set<string>(), [])
 
   const selectOnMap = useCallback(
@@ -605,6 +650,20 @@ export default function AlertsMapPage() {
       ),
     }
   }, [snapshot, visibleConcerns, visibleEmergencies])
+
+  const unitOptions = useMemo(() => {
+    const options: { value: string; label: string }[] = [
+      { value: "all", label: "All units" },
+    ]
+    for (const unit of snapshot?.units ?? []) {
+      options.push({
+        value: String(unit.id),
+        label: unit.short_name || unit.name,
+      })
+    }
+    options.push({ value: "unassigned", label: "Unassigned" })
+    return options
+  }, [snapshot?.units])
 
   const clearSelection = useCallback(() => setSelected(null), [])
 
@@ -865,6 +924,12 @@ export default function AlertsMapPage() {
                 onSelectChip={(key) => {
                   setFeedChip(key)
                   setWeatherOpen(false)
+                  clearSelection()
+                }}
+                units={isOfficial ? unitOptions : undefined}
+                unitValue={unitFilter}
+                onSelectUnit={(value) => {
+                  setUnitFilter(value)
                   clearSelection()
                 }}
               />

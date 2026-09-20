@@ -207,6 +207,7 @@ class NativePushDeviceSerializer(serializers.Serializer):
     def save(self, **kwargs):
         request = self.context["request"]
         device, _ = NativePushDevice.objects.update_or_create(
+            user=request.user,
             token=self.validated_data["token"],
             defaults={"user": request.user, "platform": self.validated_data["platform"], "is_active": True},
         )

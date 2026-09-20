@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import {
   CheckIcon,
@@ -27,6 +27,7 @@ export function ConfigurationListToolbar({
   filters,
   activeFilter,
   onFilter,
+  trailing,
 }: {
   search: string
   onSearch: (value: string) => void
@@ -34,6 +35,7 @@ export function ConfigurationListToolbar({
   filters: ConfigurationFilter[]
   activeFilter: string
   onFilter: (value: string) => void
+  trailing?: ReactNode
 }) {
   const [filterOpen, setFilterOpen] = useState(false)
   const searchRowRef = useRef<HTMLDivElement>(null)
@@ -88,6 +90,7 @@ export function ConfigurationListToolbar({
             className="min-w-0 flex-1 bg-transparent text-[15px] text-neutral-900 outline-none placeholder:text-neutral-400"
           />
         </label>
+        {trailing}
       </div>
 
       {filterOpen && panelBox

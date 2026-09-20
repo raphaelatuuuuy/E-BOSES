@@ -32,7 +32,6 @@ import {
   ConcernCommentsList,
   concernReporterName,
   ConcernEngagementFooter,
-  initialsOf,
   useConcernComments,
 } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { unitShortTag } from "@/features/dashboard/components/concerns/concern-display"
@@ -44,6 +43,7 @@ import {
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
 import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
 import { IncidentMap } from "@/features/dashboard/components/emergencies/incident-board"
 import { EmergencyTimelineCard } from "@/features/dashboard/components/emergencies/emergency-timeline-card"
@@ -144,7 +144,6 @@ export function MobileReportDetailPage({
   const isGuestReport =
     Boolean(report.is_anonymous) ||
     fullName.trim().toLowerCase() === "community reporter"
-  const initials = (report.reporter?.initials || initialsOf(fullName)).charAt(0)
   const unit =
     report.validation_status === "accepted"
       ? (report.assigned_department ??
@@ -310,17 +309,23 @@ export function MobileReportDetailPage({
           <div className="-mx-1 flex min-h-0 flex-1 flex-col">
             {/* Chat header — the same identity block shown in report info */}
             <div className="flex flex-col items-center px-1 pt-2 pb-4 text-center">
-              <span
-                className={cn(
-                  "flex size-14 items-center justify-center rounded-full px-1 text-center leading-none",
-                  avatarTone,
-                  showAssignedUnit
-                    ? "text-[13px] font-bold"
-                    : "text-[18px] font-bold"
-                )}
-              >
-                {showAssignedUnit ? unitTag : initials}
-              </span>
+              {showAssignedUnit ? (
+                <span
+                  className={cn(
+                    "flex size-14 items-center justify-center rounded-full px-1 text-center text-[13px] leading-none font-bold",
+                    avatarTone,
+                  )}
+                >
+                  {unitTag}
+                </span>
+              ) : (
+                <UserAvatar
+                  user={report.reporter}
+                  size="lg"
+                  online={report.reporter?.is_online}
+                  className={cn("!size-14 text-[18px]", avatarTone)}
+                />
+              )}
               <p className="mt-2 text-[17px] leading-tight font-bold text-neutral-900">
                 {identityName || "Resident"}
               </p>
@@ -448,9 +453,6 @@ export function MobileEmergencyReportDetailPage({
     alert.reporter_display?.trim() ||
     alert.reporter?.full_name?.trim() ||
     "Resident"
-  const reporterInitial = (alert.reporter?.initials || reporterName)
-    .charAt(0)
-    .toUpperCase()
   const location = streetSegment(
     alert.display_location ||
       alert.resolved_location ||
@@ -563,35 +565,37 @@ export function MobileEmergencyReportDetailPage({
             responderActions.hasOwnAssignment ? (
             <div className="space-y-2.5">
               <div className="flex items-center gap-3">
-                <span
-                  className={cn(
-                    "flex size-10 shrink-0 items-center justify-center rounded-full text-[15px] leading-none font-bold",
-                    avatarTone
-                  )}
-                >
-                  {reporterInitial}
-                </span>
+                <UserAvatar
+                  user={alert.reporter}
+                  size="sm"
+                  online={alert.reporter?.is_online}
+                  className={cn("!size-10 text-[15px]", avatarTone)}
+                />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] font-semibold text-neutral-900">
                     {reporterName}
                   </p>
                   <p className="mt-0.5 truncate text-[12px] text-neutral-600">
-                    {reporterContactPhone ||
-                      alert.reporter_phone?.trim() ||
-                      "Phone unavailable"}
+                    {resolved
+                      ? "Phone unavailable"
+                      : reporterContactPhone ||
+                        alert.reporter_phone?.trim() ||
+                        "Phone unavailable"}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void callReporterContact()}
-                  disabled={reporterCallBusy}
-                  aria-label={`Call ${reporterName}`}
-                  title={`Call ${reporterName}`}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-50"
-                >
-                  <PhoneIcon className="size-4" aria-hidden="true" />
-                  <span>{reporterCallBusy ? "Calling…" : "Call"}</span>
-                </button>
+                {!resolved ? (
+                  <button
+                    type="button"
+                    onClick={() => void callReporterContact()}
+                    disabled={reporterCallBusy}
+                    aria-label={`Call ${reporterName}`}
+                    title={`Call ${reporterName}`}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-50"
+                  >
+                    <PhoneIcon className="size-4" aria-hidden="true" />
+                    <span>{reporterCallBusy ? "Calling…" : "Call"}</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => setTab("chat")}
@@ -838,7 +842,7 @@ export function MobileEmergencyReportDetailPage({
                 bare
                 disabled={terminal}
                 className="h-full min-h-0 flex-1"
-                smsTo={reporterContactPhone}
+                smsTo={resolved ? null : reporterContactPhone}
               />
             </div>
           ) : (

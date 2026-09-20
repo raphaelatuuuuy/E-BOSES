@@ -26,6 +26,7 @@ class SmsPurpose(models.TextChoices):
     COMMAND_REPLY = "command_reply", "Command reply"
     OTP = "otp", "Registration OTP"
     OFFICIAL_ALERT = "official_alert", "Official alert"
+    CHAT_UPDATE = "chat_update", "Chat update"
     SYSTEM = "system", "System"
 
 
@@ -102,6 +103,7 @@ class InboundSmsMessage(models.Model):
         COMMAND_HANDLED = "command_handled", "Command handled"
         UNRECOGNISED = "unrecognised", "Unrecognised"
         DUPLICATE = "duplicate", "Duplicate"
+        CHAT_APPENDED = "chat_appended", "Chat appended"
         DROPPED_OTP = "dropped_otp", "Dropped (OTP-shaped)"
         REJECTED = "rejected", "Rejected"
         ERROR = "error", "Error"
@@ -209,6 +211,13 @@ class OutboundSmsMessage(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="replies",
+    )
+    chat_message = models.ForeignKey(
+        "emergencies.EmergencyChatMessage",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="outbound_sms_messages",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     sent_at = models.DateTimeField(null=True, blank=True)

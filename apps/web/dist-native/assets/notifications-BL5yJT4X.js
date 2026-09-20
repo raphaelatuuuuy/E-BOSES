@@ -1,9 +1,0 @@
-import{r as e}from"./rolldown-runtime-QTnfLwEv.js";import{g as t,n,u as r}from"./react-vendor-D_udBUjN.js";import{r as i}from"./api-BlQbY2En.js";import{Ot as a,_ as o,g as s,kt as c}from"./index-Bkez0xWy.js";import{t as l}from"./use-page-title-BpXoQUMr.js";var u=e(t(),1),d=n(),f=[`announcements`,`emergencies`,`reports`,`unread`];function p(){if(typeof window>`u`)return{};let e=new URLSearchParams(window.location.search).get(`type`);return e===`archived`?{view:`archived`,filter:`all`}:e&&f.includes(e)?{view:`inbox`,filter:e}:{}}function m(){l(`Your updates`);let e=r(),[t,n]=(0,u.useState)([]),[f,m]=(0,u.useState)(2),[h,g]=(0,u.useState)(!1),[_,v]=(0,u.useState)(!0),y=(0,u.useMemo)(()=>a(e),[e]);async function b(){g(!0);try{let e=await i(`/notifications/?page=${f}&page_size=20`);n(t=>[...t,...e]),m(e=>e+1),v(e.length===20)}finally{g(!1)}}let x=(0,u.useMemo)(()=>p(),[]);function S(){window.history.length>1?e(-1):e(`/dashboard/home`)}return(0,d.jsxs)(`div`,{className:`flex min-h-0 min-w-0 flex-1 flex-col bg-white`,children:[(0,d.jsx)(`style`,{children:`
-        /* Mobile: single column (rail hidden). Desktop: feed | rail like Home */
-        .notif-layout { display: block !important; }
-        @media (min-width: ${s}px) {
-          .notif-layout {
-            display: grid !important;
-          }
-        }
-      `}),(0,d.jsx)(o,{className:`notif-layout min-w-0 flex-1 pb-6 pt-2 md:pb-12 md:pt-4 lg:px-0`,children:(0,d.jsx)(`div`,{className:`min-w-0 w-full`,children:(0,d.jsx)(c,{config:y,onBack:S,initialView:x.view,initialFilter:x.filter,onLoadMore:b,hasMore:_,loadingMore:h,extraItems:t})})})]})}export{m as default};

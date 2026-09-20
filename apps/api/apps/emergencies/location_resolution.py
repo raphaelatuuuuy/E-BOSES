@@ -8,7 +8,7 @@ from math import asin, cos, radians, sin, sqrt
 
 from django.utils import timezone
 
-from apps.geo_services import active_communities_for_point, point_in_geojson_inclusive
+from apps.geo_services import active_communities_for_coverage_point, active_communities_for_point, point_in_geojson_inclusive
 from apps.community_scope import PRIMARY_COMMUNITY_CODE
 
 from .models import Community, MapGeometry, MapServicePoi
@@ -308,7 +308,11 @@ def geocode_reported_place(text: str) -> LocationResolution:
 def resolve_incident_location(*, latitude=None, longitude=None, message_area="", match=None, user=None):
     if latitude is not None and longitude is not None:
         lat, lng = float(latitude), float(longitude)
-        communities = active_communities_for_point(lat, lng)
+        # An emergency may be inside the official barangay boundary or inside
+        # the configured acceptance radius/shape. Keep the location resolver
+        # aligned with the emergency validation policy so an accepted-radius
+        # SMS is not left in an unresolved community state.
+        communities = active_communities_for_coverage_point(lat, lng)
         if len(communities) == 1:
             community = communities[0]
             return LocationResolution(

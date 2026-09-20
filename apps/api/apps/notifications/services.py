@@ -951,6 +951,7 @@ def send_native_push(notification, payload: dict) -> dict:
         display = notification_display_payload(notification, payload)
         data = {
             "notification_id": str(notification.pk),
+            "recipient_id": str(notification.recipient_id),
             "action_url": str(payload.get("action_url") or notification_url(notification)),
             "type": str(notification.type),
         }

@@ -8,10 +8,10 @@ import { useAuthSession } from "@/features/auth/auth-session"
 import {
   avatarTone,
   concernReporterName,
-  initialsOf,
 } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { concernSeverityOf } from "@/features/dashboard/components/record/concern-adapter"
 import { unitShortTag } from "@/features/dashboard/components/concerns/concern-display"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 
 function submittedAt(value: string) {
   const date = new Date(value)
@@ -103,17 +103,24 @@ export function ReportDetailHeader({
       </div>
 
       <div className="mt-4 flex flex-col items-center text-center">
-        <span
-          className={cn(
-            "flex size-14 items-center justify-center rounded-full px-1 text-center leading-none",
-            avatarTone,
-            showAssignedUnit ? "text-[13px] font-bold" : "text-[18px] font-bold"
-          )}
-        >
-          {showAssignedUnit
-            ? unitShortTag(unit)
-            : (report.reporter?.initials || initialsOf(fullName)).charAt(0)}
-        </span>
+        {showAssignedUnit ? (
+          <span
+            className={cn(
+              "flex size-14 items-center justify-center rounded-full px-1 text-center leading-none",
+              avatarTone,
+              "text-[13px] font-bold",
+            )}
+          >
+            {unitShortTag(unit)}
+          </span>
+        ) : (
+          <UserAvatar
+            user={report.reporter}
+            size="lg"
+            online={report.reporter?.is_online}
+            className={cn("!size-14 text-[18px]", avatarTone)}
+          />
+        )}
         <p className="mt-2 text-[18px] leading-tight font-bold text-balance text-foreground">
           {identityName || "Assigned response unit"}
         </p>

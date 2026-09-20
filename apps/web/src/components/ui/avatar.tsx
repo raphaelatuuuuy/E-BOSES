@@ -2,16 +2,28 @@ import * as React from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-export function Avatar({ className, ...props }: React.ComponentProps<"span">) {
+export function Avatar({ className, online = false, children, ...props }: React.ComponentProps<"span"> & { online?: boolean }) {
   return (
     <span
       data-slot="avatar"
       className={cn(
-        "relative flex size-9 shrink-0 overflow-hidden rounded-full bg-slate-soft",
+        "relative flex size-9 shrink-0 rounded-full bg-slate-soft",
         className,
       )}
       {...props}
-    />
+    >
+      <span className="flex size-full overflow-hidden rounded-full">
+        {children}
+      </span>
+      <span
+        className={cn(
+          "pointer-events-none absolute right-[-1px] bottom-[-1px] z-10 size-2.5 rounded-full border-2 border-white",
+          online ? "bg-emerald-500" : "bg-slate-400",
+        )}
+        title={online ? "Online" : "Offline"}
+        aria-label={online ? "Online" : "Offline"}
+      />
+    </span>
   )
 }
 

@@ -125,7 +125,7 @@ class BrowserPushSubscription(models.Model):
 
 class NativePushDevice(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="native_push_devices")
-    token = models.CharField(max_length=512, unique=True)
+    token = models.CharField(max_length=512)
     platform = models.CharField(max_length=16, default="android")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -133,3 +133,6 @@ class NativePushDevice(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["user", "is_active"], name="notificatio_user_id_native_idx")]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "token"], name="notification_user_token_unique"),
+        ]

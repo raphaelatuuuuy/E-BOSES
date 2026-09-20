@@ -11,12 +11,14 @@ from .views import (
     NotificationReadView,
     NotificationUnreadCountView,
     NativePushDeviceView,
+    PresenceStatusView,
     RealtimeTicketView,
 )
 
 urlpatterns = [
     path("", NotificationListView.as_view(), name="notification-list"),
     path("realtime-ticket/", RealtimeTicketView.as_view(), name="realtime-ticket"),
+    path("presence/", PresenceStatusView.as_view(), name="presence-status"),
     path("unread-count/", NotificationUnreadCountView.as_view(), name="notification-unread-count"),
     path("browser-push/public-key/", BrowserPushPublicKeyView.as_view(), name="browser-push-public-key"),
     path("browser-push/subscriptions/", BrowserPushSubscriptionView.as_view(), name="browser-push-subscriptions"),

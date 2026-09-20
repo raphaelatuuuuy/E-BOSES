@@ -5,8 +5,7 @@ import {
   CircleCheck,
   ChevronDownIcon,
   ClockIcon,
-  ImageIcon,
-  PinIcon,
+  PlusIcon,
   ShieldCheckIcon,
   UserIcon,
   UsersIcon,
@@ -21,13 +20,8 @@ import {
   type Announcement,
   type AnnouncementAreaContext,
 } from "@/features/dashboard/api"
-import {
-  SheetDialog,
-  SheetPrimaryButton,
-  SheetSecondaryButton,
-} from "@/features/dashboard/components/sheet-dialog"
 import { AreaPicker } from "./area-picker"
-import { ADVISORY_TAGS, advisoryMeta } from "./advisory-tags"
+import { ADVISORY_TAGS } from "./advisory-tags"
 import { areaFromAnnouncement, emptyArea, type AreaPickerValue } from "./area-lib"
 
 export interface AnnouncementDraft {
@@ -50,7 +44,7 @@ const emptyAnnouncement: AnnouncementDraft = {
   audience: "all",
   urgency: "normal",
   is_pinned: false,
-  is_published: false,
+  is_published: true,
   starts_at: "",
   expires_at: "",
   image_alt: "",
@@ -70,15 +64,15 @@ function localDateTime(value: string | null | undefined) {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
-function announcementDraftFrom(initial: Announcement, isPinned: boolean): AnnouncementDraft {
+function announcementDraftFrom(initial: Announcement): AnnouncementDraft {
   return {
     title: initial.title,
     body: initial.body,
     tag: initial.tag,
     audience: initial.audience,
     urgency: initial.urgency,
-    is_pinned: isPinned,
-    is_published: initial.is_published,
+    is_pinned: initial.is_pinned,
+    is_published: true,
     starts_at: localDateTime(initial.starts_at),
     expires_at: localDateTime(initial.expires_at),
     image_alt: initial.image_alt || "",
@@ -86,9 +80,9 @@ function announcementDraftFrom(initial: Announcement, isPinned: boolean): Announ
 }
 
 const inputClass =
-  "w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[15px] font-normal text-neutral-900 outline-none transition-colors focus:border-neutral-500"
+  "mt-1.5 w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
 
-const labelClass = "grid gap-1 text-[13px] font-normal text-neutral-500"
+const labelClass = "text-[13px] font-semibold text-neutral-500"
 
 const SCHEDULE_PRESETS = [
   { key: "now", label: "Now", icon: ClockIcon },
@@ -134,21 +128,17 @@ function applyPreset(preset: SchedulePreset): { starts: string; expires: string 
   }
 }
 
-const URGENCY_OPTIONS = [
-  { value: "normal" as const, label: "Normal" },
-  { value: "important" as const, label: "Important" },
-  { value: "urgent" as const, label: "Urgent" },
-]
-
 /** Simple calendar date+time picker. */
 function CalendarPicker({
   label,
   value,
   onChange,
+  align = "left",
 }: {
   label: string
   value: string
   onChange: (v: string) => void
+  align?: "left" | "right"
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -190,7 +180,7 @@ function CalendarPicker({
 
   return (
     <div className="relative" ref={ref}>
-      <label className="grid gap-1.5 text-[12px] font-medium text-neutral-400">
+      <label className="grid gap-1 text-[13px] font-normal text-neutral-500">
         <span>{label}</span>
         <button
           type="button"
@@ -204,8 +194,8 @@ function CalendarPicker({
             }
           }}
           className={cn(
-            "flex h-11 w-full items-center gap-2 rounded-[12px] border-[1.5px] bg-white px-3 text-[14px] outline-none transition-colors",
-            open ? "border-neutral-400" : "border-neutral-200 hover:border-neutral-300",
+            "mt-1.5 flex w-full items-center gap-2 rounded-[14px] border-[1.5px] bg-white px-4 py-3 text-[16px] outline-none transition-colors",
+            open ? "border-neutral-500" : "border-neutral-300 hover:border-neutral-400",
             date ? "text-neutral-900" : "text-neutral-400",
           )}
         >
@@ -214,7 +204,7 @@ function CalendarPicker({
         </button>
       </label>
       {open ? (
-        <div className="absolute left-0 top-full z-[1300] mt-1 w-[300px] overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white p-3 shadow-lg">
+        <div className={cn("absolute top-full z-[1300] mt-1 w-[min(300px,calc(100vw-3rem))] overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white p-3 shadow-lg", align === "right" ? "right-0" : "left-0")}>
           <div className="mb-2 flex items-center justify-between">
             <button
               type="button"
@@ -345,51 +335,26 @@ function CalendarPicker({
   )
 }
 
-function formatScheduleSummary(starts: string, expires: string, preset: SchedulePreset): string {
-  if (preset === "now" || (!starts && !expires)) return "Publish now"
-  const fmt = (v: string) => {
-    if (!v) return null
-    const d = new Date(v)
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " +
-      d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-  }
-  const s = fmt(starts)
-  const e = fmt(expires)
-  if (s && e) return `${s} → ${e}`
-  if (s) return `From ${s}`
-  if (e) return `Until ${e}`
-  return "Not set"
-}
-
 export function ContentComposer({
   initial,
   areaContext,
-  published,
   isPinned,
-  onPinnedChange,
-  configureOpen,
-  onConfigureOpenChange,
   onSaved,
-  onClose,
+  onFormStateChange,
 }: {
   initial?: Announcement | null
   areaContext: AnnouncementAreaContext | null
-  published: boolean
   isPinned: boolean
-  onPinnedChange: (v: boolean) => void
-  configureOpen: boolean
-  onConfigureOpenChange: (v: boolean) => void
   onSaved: () => void
-  onClose: () => void
+  onFormStateChange?: (state: { canSave: boolean; busy: boolean; editing: boolean }) => void
 }) {
-  const [announcement, setAnnouncement] = useState<AnnouncementDraft>(() => initial ? announcementDraftFrom(initial, isPinned) : emptyAnnouncement)
+  const [announcement, setAnnouncement] = useState<AnnouncementDraft>(() => initial ? announcementDraftFrom(initial) : emptyAnnouncement)
   const [announcementImage, setAnnouncementImage] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(() => initial?.image_url ?? null)
   const [area, setArea] = useState<AreaPickerValue>(() => initial ? areaFromAnnouncement(initial.affected_streets, initial.area_geometry) : emptyArea)
   const [editingAnnouncement] = useState<number | null>(() => initial?.id ?? null)
   const [busy, setBusy] = useState("")
   const [schedulePreset, setSchedulePreset] = useState<SchedulePreset>(() => initial && (initial.starts_at || initial.expires_at) ? "custom" : "now")
-  const [customOpen, setCustomOpen] = useState(() => Boolean(initial && (initial.starts_at || initial.expires_at)))
   const [tagMenuOpen, setTagMenuOpen] = useState(false)
   const [audienceOpen, setAudienceOpen] = useState(false)
   const tagMenuRef = useRef<HTMLDivElement>(null)
@@ -397,21 +362,25 @@ export function ContentComposer({
 
   const editing = editingAnnouncement != null
 
-  const initialDraft = useMemo(() => initial ? announcementDraftFrom(initial, isPinned) : null, [initial, isPinned])
+  const initialDraft = useMemo(() => initial ? announcementDraftFrom(initial) : null, [initial])
   const initialArea = useMemo(() => initial ? areaFromAnnouncement(initial.affected_streets, initial.area_geometry) : emptyArea, [initial])
 
   const dirty = useMemo(() => {
     if (!editing) return true
     return (
       announcementImage != null ||
-      announcement.is_published !== published ||
-      announcement.is_pinned !== isPinned ||
+      isPinned !== (initial?.is_pinned ?? false) ||
       JSON.stringify(announcement) !== JSON.stringify(initialDraft) ||
       JSON.stringify(area) !== JSON.stringify(initialArea)
     )
-  }, [announcement, area, announcementImage, editing, initialArea, initialDraft, isPinned, published])
+  }, [announcement, area, announcementImage, editing, initial, initialArea, initialDraft, isPinned])
 
   const hasContent = announcement.title.trim() !== "" && announcement.body.trim() !== ""
+  const canSave = editing ? dirty : hasContent
+
+  useEffect(() => {
+    onFormStateChange?.({ canSave, busy: busy === "save", editing })
+  }, [canSave, busy, editing, onFormStateChange])
 
   useEffect(() => {
     if (!tagMenuOpen && !audienceOpen) return
@@ -444,7 +413,7 @@ export function ContentComposer({
     try {
       const payload = {
         ...announcement,
-        is_published: published,
+        is_published: true,
         is_pinned: isPinned,
         starts_at: announcement.starts_at ? new Date(announcement.starts_at).toISOString() : null,
         expires_at: announcement.expires_at ? new Date(announcement.expires_at).toISOString() : null,
@@ -471,7 +440,7 @@ export function ContentComposer({
       }
       if (editing) await updateManagedAnnouncement(editingAnnouncement, requestBody)
       else await createManagedAnnouncement(requestBody)
-      toast.success(editing ? "Announcement updated" : "Announcement created")
+      toast.success(editing ? "Announcement updated" : "Announcement published")
       onSaved()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not save.")
@@ -480,18 +449,13 @@ export function ContentComposer({
     }
   }
 
-  const selectedMeta = advisoryMeta(announcement.tag)
-  const TagIcon = selectedMeta.icon
   const audienceLabel =
     AUDIENCE_OPTIONS.find((option) => option.value === announcement.audience)?.label ?? "All users"
 
-  const scheduleSummary = formatScheduleSummary(announcement.starts_at, announcement.expires_at, schedulePreset)
-  const urgencyLabel = URGENCY_OPTIONS.find((u) => u.value === announcement.urgency)?.label ?? "Normal"
-
   return (
-    <form className="space-y-5" onSubmit={save}>
-      <label className={labelClass}>
-        Title
+    <form id="announcement-form" className="space-y-6 pb-4" onSubmit={save}>
+      <label className="block">
+        <span className={labelClass}>Title</span>
         <input
           required
           maxLength={160}
@@ -502,17 +466,16 @@ export function ContentComposer({
         />
       </label>
 
-      {/* Type + Audience side by side */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* Type + Audience side by side on wider sheets, stacked on phones */}
+      <div className="grid grid-cols-1 gap-4 min-[420px]:grid-cols-2">
         <div className="relative" ref={tagMenuRef}>
-          <label className={labelClass}>
-            <span className="block text-[13px] font-semibold text-neutral-500">Type</span>
+          <label className="block">
+            <span className={labelClass}>Type</span>
             <button
               type="button"
               onClick={() => setTagMenuOpen((o) => !o)}
-              className={cn(inputClass, "mt-1.5 flex w-full items-center gap-2 text-left")}
+              className={cn(inputClass, "flex w-full items-center gap-2 text-left")}
             >
-              <TagIcon className="size-4 shrink-0" strokeWidth={2} style={{ color: selectedMeta.color }} aria-hidden />
               <span className="min-w-0 flex-1 truncate">{announcement.tag}</span>
               <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", tagMenuOpen && "rotate-180")} />
             </button>
@@ -544,18 +507,13 @@ export function ContentComposer({
         </div>
 
         <div className="relative" ref={audienceRef}>
-          <label className={labelClass}>
-            <span className="block text-[13px] font-semibold text-neutral-500">Audience</span>
+          <label className="block">
+            <span className={labelClass}>Audience</span>
             <button
               type="button"
               onClick={() => setAudienceOpen((o) => !o)}
-              className={cn(inputClass, "mt-1.5 flex w-full items-center gap-2 text-left")}
+              className={cn(inputClass, "flex w-full items-center gap-2 text-left")}
             >
-              {(() => {
-                const selected = AUDIENCE_OPTIONS.find((o) => o.value === announcement.audience)
-                const AIcon = selected?.icon ?? UsersIcon
-                return <AIcon className="size-4 shrink-0 text-brand-navy" strokeWidth={2} aria-hidden />
-              })()}
               <span className="min-w-0 flex-1 truncate">{audienceLabel}</span>
               <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", audienceOpen && "rotate-180")} />
             </button>
@@ -587,8 +545,8 @@ export function ContentComposer({
         </div>
       </div>
 
-      <label className={labelClass}>
-        Message
+      <label className="block">
+        <span className={labelClass}>Message</span>
         <textarea
           required
           maxLength={3000}
@@ -606,225 +564,88 @@ export function ContentComposer({
             el.style.height = `${el.scrollHeight}px`
           }}
           placeholder="Information residents need to know"
-          className="resize-none rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[15px] text-neutral-900 outline-none transition-colors focus:border-neutral-500 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+          className={`${inputClass} resize-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden`}
         />
       </label>
 
-      {/* ── Summary table: shows configured values ── */}
       <div>
-        <span className="mb-2 block text-[13px] font-medium text-neutral-500">Announcement settings</span>
-        <div className="overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200 bg-white text-[14px]">
-          <div className="grid grid-cols-[120px_1fr] items-center border-b border-neutral-100 px-5 py-3">
-            <span className="text-[13px] font-medium text-neutral-400">Schedule</span>
-            <span className="text-neutral-900">{scheduleSummary}</span>
+        <span className={labelClass}>Schedule</span>
+        <div className="mt-1.5 flex flex-wrap gap-2">
+            {SCHEDULE_PRESETS.map(({ key, label, icon: Icon }) => {
+              const active = schedulePreset === key
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setSchedulePreset(key)
+                    if (key === "custom") return
+                    const { starts, expires } = applyPreset(key)
+                    setAnnouncement((v) => ({ ...v, starts_at: starts, expires_at: expires }))
+                  }}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-normal transition-colors",
+                    active
+                      ? "bg-brand-navy text-white"
+                      : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200",
+                  )}
+                >
+                  {Icon ? <Icon className="size-3.5" /> : null}
+                  {label}
+                </button>
+              )
+            })}
           </div>
-          <div className="grid grid-cols-[120px_1fr] items-center border-b border-neutral-100 px-5 py-3">
-            <span className="text-[13px] font-medium text-neutral-400">Urgency</span>
-            <span className="text-neutral-900">{urgencyLabel}</span>
-          </div>
-          <div className="grid grid-cols-[120px_1fr] items-center px-5 py-3">
-            <span className="text-[13px] font-medium text-neutral-400">Banner</span>
-            {imagePreview ? (
-              <div className="overflow-hidden rounded-lg border border-neutral-200">
-                <img src={imagePreview} alt={announcement.image_alt || "Banner"} className="h-16 w-28 object-cover" />
-              </div>
-            ) : (
-              <span className="text-neutral-900">No image</span>
-            )}
+          <div className="mt-3 grid grid-cols-1 gap-4">
+            <CalendarPicker
+              label="Starts"
+              value={announcement.starts_at}
+              onChange={(v) => setAnnouncement((a) => ({ ...a, starts_at: v }))}
+            />
+            <CalendarPicker
+              label="Expires"
+              value={announcement.expires_at}
+              onChange={(v) => setAnnouncement((a) => ({ ...a, expires_at: v }))}
+              align="right"
+            />
           </div>
         </div>
+
+      <div>
+        {imagePreview ? (
+          <div className="relative overflow-hidden rounded-[14px] bg-neutral-100">
+            <img src={imagePreview} alt="Banner preview" className="h-40 w-full object-cover" />
+            <button
+              type="button"
+              onClick={() => pickImage(null)}
+              aria-label="Remove banner image"
+              className="absolute top-2 right-2 flex size-8 items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
+            >
+              <XIcon className="size-4" />
+            </button>
+          </div>
+        ) : (
+          <label className="flex h-28 cursor-pointer flex-col items-center justify-center gap-1 rounded-[14px] bg-neutral-100 text-neutral-400 transition-colors hover:bg-neutral-200">
+            <PlusIcon className="size-6" />
+            <span className="text-[13px]">Add an image</span>
+            <input type="file" accept="image/*" onChange={(e) => pickImage(e.target.files?.[0] ?? null)} className="hidden" />
+          </label>
+        )}
       </div>
 
       {/* Affected area */}
       <div>
-        <div className="mb-2 flex items-center gap-2">
-          <span className="text-[13px] font-medium text-neutral-500">Affected area</span>
-          <span className="text-[13px] text-neutral-400">
-            {area.streets.length > 0
-              ? `${area.streets.length} street${area.streets.length === 1 ? "" : "s"} marked`
-              : "Optional"}
-          </span>
+        <span className={labelClass}>Affected area</span>
+        <div className="mt-1.5">
+          <AreaPicker
+            context={areaContext}
+            value={area}
+            onChange={setArea}
+            tag={announcement.tag}
+            excludeId={editingAnnouncement}
+          />
         </div>
-        <AreaPicker
-          context={areaContext}
-          value={area}
-          onChange={setArea}
-          tag={announcement.tag}
-          excludeId={editingAnnouncement}
-        />
       </div>
-
-      <div className="flex gap-2 pt-2">
-        <SheetSecondaryButton onClick={onClose} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">
-          Cancel
-        </SheetSecondaryButton>
-        <SheetPrimaryButton
-          tone="accent"
-          type="submit"
-          disabled={busy === "save" || (editing ? !dirty : !hasContent)}
-          className="flex-1 text-[15px]"
-        >
-          {busy === "save" ? "Saving…" : editing ? "Save changes" : "Create announcement"}
-        </SheetPrimaryButton>
-      </div>
-
-      {/* ── Configure popup ── */}
-      <SheetDialog
-        open={configureOpen}
-        onClose={() => onConfigureOpenChange(false)}
-        title="Configure announcement"
-        description="Set schedule, urgency, pin, and banner image."
-        size="wide"
-        actions={
-          <div role="radiogroup" aria-label="Pin to top" className="flex items-center gap-0.5 rounded-full bg-neutral-100 p-1">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={isPinned}
-              aria-label="Pin to top"
-              title="Pin to top"
-              onClick={() => onPinnedChange(!isPinned)}
-              className={cn(
-                "flex size-9 items-center justify-center rounded-full transition-colors",
-                isPinned
-                  ? "bg-white/70 text-neutral-900 shadow-sm"
-                  : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
-              )}
-            >
-              <PinIcon className="size-[18px]" />
-            </button>
-          </div>
-        }
-        footer={
-          <div className="flex gap-2">
-            <SheetSecondaryButton onClick={() => onConfigureOpenChange(false)} className="mt-0 h-[52px] w-[25%] flex-shrink-0 text-[15px]">
-              Cancel
-            </SheetSecondaryButton>
-            <SheetPrimaryButton type="button" onClick={() => onConfigureOpenChange(false)} className="flex-1 bg-brand-navy text-[15px] text-white hover:bg-brand-navy/85">
-              Done
-            </SheetPrimaryButton>
-          </div>
-        }
-      >
-        <div className="space-y-6">
-          {/* Schedule */}
-          <div>
-            <span className="mb-3 block text-[13px] font-medium text-neutral-500">Schedule</span>
-            <div className="flex flex-wrap gap-2">
-              {SCHEDULE_PRESETS.map(({ key, label, icon: Icon }) => {
-                const active = schedulePreset === key
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => {
-                      setSchedulePreset(key)
-                      if (key === "custom") {
-                        setCustomOpen((o) => !o)
-                        return
-                      }
-                      setCustomOpen(false)
-                      const { starts, expires } = applyPreset(key)
-                      setAnnouncement((v) => ({ ...v, starts_at: starts, expires_at: expires }))
-                    }}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-medium transition-colors",
-                      active
-                        ? "bg-brand-navy text-white"
-                        : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200",
-                    )}
-                  >
-                    {Icon ? <Icon className="size-3.5" /> : null}
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-            {customOpen ? (
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <CalendarPicker
-                  label="Starts"
-                  value={announcement.starts_at}
-                  onChange={(v) => setAnnouncement((a) => ({ ...a, starts_at: v }))}
-                />
-                <CalendarPicker
-                  label="Expires"
-                  value={announcement.expires_at}
-                  onChange={(v) => setAnnouncement((a) => ({ ...a, expires_at: v }))}
-                />
-              </div>
-            ) : null}
-          </div>
-
-          {/* Urgency */}
-          <div>
-            <span className="mb-3 block text-[13px] font-medium text-neutral-500">Urgency</span>
-            <div className="flex gap-0.5 rounded-full bg-neutral-100 p-1">
-              {URGENCY_OPTIONS.map(({ value, label }) => {
-                const active = announcement.urgency === value
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setAnnouncement((v) => ({ ...v, urgency: value }))}
-                    className={cn(
-                      "flex-1 rounded-full py-2 text-[13px] font-medium transition-colors",
-                      active
-                        ? "bg-white/70 text-neutral-900 shadow-sm"
-                        : "text-neutral-400 hover:bg-white/60 hover:text-neutral-900",
-                    )}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Banner image */}
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-[13px] font-medium text-neutral-500">Banner image (optional)</span>
-              {imagePreview ? (
-                <div className="flex items-center gap-1">
-                  <label className="flex size-7 cursor-pointer items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600">
-                    <ImageIcon className="size-3.5" />
-                    <input type="file" accept="image/*" onChange={(e) => pickImage(e.target.files?.[0] ?? null)} className="hidden" />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => pickImage(null)}
-                    className="flex size-7 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600"
-                  >
-                    <XIcon className="size-3.5" />
-                  </button>
-                </div>
-              ) : null}
-            </div>
-            {imagePreview ? (
-              <div className="overflow-hidden rounded-[14px] border-[1.5px] border-neutral-200">
-                <img src={imagePreview} alt={announcement.image_alt || "Banner preview"} className="h-40 w-full object-cover" />
-              </div>
-            ) : (
-              <label className="flex h-[50px] cursor-pointer items-center gap-2 rounded-[14px] border-[1.5px] border-dashed border-neutral-300 px-4 text-[15px] font-medium text-neutral-500 transition-colors hover:bg-neutral-50">
-                <ImageIcon className="size-4" />
-                Choose a banner image
-                <input type="file" accept="image/*" onChange={(e) => pickImage(e.target.files?.[0] ?? null)} className="hidden" />
-              </label>
-            )}
-            <label className={cn(labelClass, "mt-2")}>
-              Image alt text
-              <input
-                maxLength={160}
-                value={announcement.image_alt}
-                onChange={(e) => setAnnouncement((v) => ({ ...v, image_alt: e.target.value }))}
-                placeholder="Describe the banner for screen readers"
-                className={inputClass}
-              />
-            </label>
-          </div>
-        </div>
-      </SheetDialog>
     </form>
   )
 }

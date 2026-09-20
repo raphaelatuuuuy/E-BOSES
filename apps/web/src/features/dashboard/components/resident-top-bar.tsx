@@ -3,7 +3,6 @@ import { Link } from "react-router-dom"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { geocodeCommunityStreet } from "@/features/auth/lib/forward-geocode"
 import { getResidentDashboardSummary } from "@/features/dashboard/api"
@@ -18,6 +17,7 @@ import {
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 import { streetLabelFromAddress } from "@/features/dashboard/components/feed-post-text"
 import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
   CONTENT_GAP,
   CONTENT_MAX,
@@ -91,7 +91,6 @@ export function ResidentMobileHeader({
 }) {
   const { user } = useAuthSession()
   const [profileOpen, setProfileOpen] = useState(false)
-  const avatarInitials = initials(user?.full_name || "Resident").charAt(0)
   const community = (user?.barangay || "Your community").replace(
     /^Barangay\s+/i,
     ""
@@ -157,9 +156,7 @@ export function ResidentMobileHeader({
           aria-label="Open settings"
           className="flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-50"
         >
-          <span className="flex size-9 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
-            {avatarInitials}
-          </span>
+          <UserAvatar user={user} online={Boolean(user)} size="sm" className="!size-9 text-[14px]" />
         </button>
       </div>
       <ResidentProfileDialog

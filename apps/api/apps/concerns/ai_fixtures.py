@@ -39,6 +39,18 @@ def gemma_result(
         "short_explanation": "The description and the photo were reviewed.",
     }
     details = gemma_details(**{**defaults, **detail_overrides})
+    # A successful image review always yields one verdict per photo. Tests that
+    # are actually about photo relevance pass their own `photo_verdicts`; every
+    # other test gets a supporting default so it exercises the path it is about
+    # instead of tripping the unsupported-photo guard.
+    if details.get("image_review_succeeded") is True and not details.get("photo_verdicts"):
+        details["photo_verdicts"] = [
+            {
+                "index": 0,
+                "relevance": "supports_report",
+                "note": "The photo shows the reported issue.",
+            }
+        ]
     return TextClassificationResult(
         label=f"related_{category}" if category and relevance == "VALID" else "needs_review",
         confidence=1.0 if category and relevance == "VALID" else 0.0,

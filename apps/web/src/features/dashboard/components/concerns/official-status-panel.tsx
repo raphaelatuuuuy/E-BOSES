@@ -32,6 +32,7 @@ import {
 import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
   slugifyStatus,
   statusLabel,
@@ -303,13 +304,13 @@ function UnitMemberAvatarGroup({ members }: { members: PublicUser[] }) {
       aria-label={`${members.length} unit member${members.length === 1 ? "" : "s"}`}
     >
       {members.slice(0, 5).map((member, index) => (
-        <span
+        <UserAvatar
           key={member.id}
-          className={`inline-flex size-5 items-center justify-center rounded-full border-2 border-white bg-slate-soft text-[8px] font-bold text-navy-muted ${index ? "-ml-1.5" : ""}`}
+          user={member}
+          size="sm"
+          className={`!size-5 border-2 border-white bg-slate-soft text-[8px] font-bold text-navy-muted ${index ? "-ml-1.5" : ""}`}
           title={`${member.full_name} · ${member.role.replace(/_/g, " ")}`}
-        >
-          {(member.initials || member.full_name || "U").charAt(0).toUpperCase()}
-        </span>
+        />
       ))}
       {members.length > 5 ? (
         <span className="-ml-1.5 inline-flex size-5 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[8px] font-semibold text-neutral-500">

@@ -43,8 +43,6 @@ import {
 const inputClass =
   "w-full rounded-[14px] border-[1.5px] border-neutral-300 bg-white px-4 py-3 text-[16px] text-neutral-900 outline-none transition-colors focus:border-neutral-500"
 
-const labelClass = "grid gap-1 text-[13px] font-semibold text-neutral-500"
-
 const NETWORK_FALLBACK_CENTER: [number, number] = [14.5995, 120.9842]
 /** Click radius, in screen pixels, for snapping onto an existing vertex. */
 const SNAP_PX = 14
@@ -858,10 +856,6 @@ export function AreaPicker({
 
   return (
     <div className="space-y-3">
-      <label htmlFor="area-search" className={labelClass}>
-        Search streets
-      </label>
-
       <div className="relative">
         <SearchIcon className="pointer-events-none absolute top-1/2 left-3.5 size-5 -translate-y-1/2 text-neutral-400" />
         <input

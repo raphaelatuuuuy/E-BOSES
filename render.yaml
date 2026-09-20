@@ -1,0 +1,12 @@
+services:
+  - type: static
+    name: e-boses
+    buildCommand: npm install && cd apps/web && npm run build
+    staticPublishPath: apps/web/dist
+    envVars:
+      - key: VITE_DEV_HTTPS
+        value: "false"
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

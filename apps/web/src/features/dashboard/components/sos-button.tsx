@@ -16,6 +16,7 @@ import {
 import { apiRequest } from "@/lib/api"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isResidentDevice } from "@/features/auth/resident-device"
 import { useApiReachability } from "@/lib/api-reachability"
 
 function isActiveAlert(alert: EmergencyAlert | null) {
@@ -191,7 +192,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
       setShellOpen(true)
       return
     }
-    const resident = !user || user.role === "resident"
+    const resident = isResidentDevice(user)
     if (!apiOnline) {
       const cached = readCachedSosAlert(user?.id ?? null)
       if (cached) {
@@ -285,7 +286,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
   }, [])
 
   const hasActiveEmergency = isActiveAlert(trackingAlert)
-  const residentShell = !user || user.role === "resident"
+  const residentShell = isResidentDevice(user)
 
   function armVeil() {
     if (suppressed || checkingActive || shellOpen || dutyDialogOpen) return

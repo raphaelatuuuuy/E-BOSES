@@ -2,6 +2,8 @@ import json
 import re
 
 from rest_framework import serializers
+
+from apps.notifications.presence import is_user_online
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.accounts.models import User
@@ -105,6 +107,7 @@ class ConcernMediaUploadSerializer(serializers.Serializer):
 class PublicUserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     initials = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
     # Street line only (first segment of residence address) for feed identity
     street = serializers.SerializerMethodField()
@@ -119,6 +122,7 @@ class PublicUserSerializer(serializers.ModelSerializer):
             "initials",
             "role",
             "last_seen_at",
+            "is_online",
             "avatar",
             "responder_unit",
             "is_on_duty",
@@ -143,6 +147,9 @@ class PublicUserSerializer(serializers.ModelSerializer):
         if not parts:
             return "U"
         return f"{parts[0][:1]}{parts[-1][:1] if len(parts) > 1 else ''}".upper()
+
+    def get_is_online(self, obj):
+        return is_user_online(obj.pk)
 
     def get_street(self, obj):
         if self.context.get("privacy_safe"):

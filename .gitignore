@@ -90,3 +90,6 @@ AGENTS.md
 backups/
 sample
 scripts
+/apps/web/dist/
+/apps/web/dist-native/
+/apps/web/android/app/src/main/assets/public/

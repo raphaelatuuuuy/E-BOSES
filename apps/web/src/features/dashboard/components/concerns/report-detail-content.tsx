@@ -263,7 +263,8 @@ export function ReportReporterCard({
   const name = report.reporter?.full_name?.trim() || report.reporter_full_name?.trim() || "Resident"
   const phone = report.reporter?.phone_number?.trim() || ""
   const isAnonymous = report.is_anonymous === true || report.reporter?.id === 0
-  const canCall = Boolean(phone) && user?.id !== report.reporter?.id
+  const redacted = report.status === "resolved"
+  const canCall = Boolean(phone) && user?.id !== report.reporter?.id && !redacted
 
   function callReporter() {
     if (!canCall || calling) return
@@ -288,7 +289,7 @@ export function ReportReporterCard({
           {name}
         </p>
         <p className="text-[12px] text-neutral-500">
-          {phone || (isAnonymous ? "Anonymous report" : "Resident")}
+          {redacted ? "Phone unavailable" : (phone || (isAnonymous ? "Anonymous report" : "Resident"))}
         </p>
       </div>
       {canCall ? (

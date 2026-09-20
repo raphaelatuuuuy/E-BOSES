@@ -648,6 +648,9 @@ export interface EmergencyChatMessage {
   } | null
   created_at: string
   is_mine: boolean
+  sender_online: boolean
+  via_sms_gateway?: boolean
+  sms_status?: string | null
   viaSms?: boolean
   sendFailed?: boolean
 }
@@ -669,10 +672,14 @@ export function sendEmergencyChat(
   body: string,
   file?: File | null
 ) {
-  const payload = file ? new FormData() : JSON.stringify({ body })
+  const clientMessageId = crypto.randomUUID()
+  const payload = file
+    ? new FormData()
+    : JSON.stringify({ body, client_message_id: clientMessageId })
   if (file && payload instanceof FormData) {
     payload.append("body", body)
     payload.append("attachment", file)
+    payload.append("client_message_id", clientMessageId)
   }
   return apiRequest<EmergencyChatMessage>(`/emergencies/${alertId}/chat/`, {
     method: "POST",

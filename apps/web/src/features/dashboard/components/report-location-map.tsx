@@ -271,28 +271,38 @@ export function ReportLocationMap({
     lat: number
     lng: number
   } | null>(null)
+  const [geocodeFailed, setGeocodeFailed] = useState(false)
   const resolvedGeocoded = geocoded?.address === streetAddress ? geocoded : null
   useEffect(() => {
     if (hasPinnedCoords || !streetAddress) return
     let cancelled = false
+    setGeocodeFailed(false)
     searchGeocode(streetAddress, 1).then((rows) => {
       if (cancelled) return
       const first = rows[0]
       const lat = Number(first?.lat)
       const lng = Number(first?.lon)
-      setGeocoded(
-        Number.isFinite(lat) && Number.isFinite(lng)
-          ? { address: streetAddress, lat, lng }
-          : null
-      )
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        setGeocoded({ address: streetAddress, lat, lng })
+        return
+      }
+      setGeocodeFailed(true)
+    }).catch(() => {
+      if (!cancelled) setGeocodeFailed(true)
     })
     return () => {
       cancelled = true
     }
   }, [hasPinnedCoords, streetAddress])
 
-  const lat = hasPinnedCoords ? rawLat : (resolvedGeocoded?.lat ?? NaN)
-  const lng = hasPinnedCoords ? rawLng : (resolvedGeocoded?.lng ?? NaN)
+  const approximate =
+    !hasPinnedCoords && !resolvedGeocoded && geocodeFailed && Boolean(streetAddress)
+  const lat = hasPinnedCoords
+    ? rawLat
+    : (resolvedGeocoded?.lat ?? (approximate ? 14.6507 : NaN))
+  const lng = hasPinnedCoords
+    ? rawLng
+    : (resolvedGeocoded?.lng ?? (approximate ? 121.1133 : NaN))
   const valid = Number.isFinite(lat) && Number.isFinite(lng)
   useEffect(() => {
     if (!valid || !containerRef.current) return
@@ -338,7 +348,8 @@ export function ReportLocationMap({
       const pinSelected = true
       const pinSize = concernMarkerSize(pinSelected)
 
-      L.marker([lat, lng], {
+      if (!approximate) {
+        L.marker([lat, lng], {
         icon: L.divIcon({
           className: "eboses-report-pin",
           html: `<div style="position:relative;width:${pinSize}px;height:${pinSize}px">${concernMarkerHtml(
@@ -356,6 +367,7 @@ export function ReportLocationMap({
         interactive: true,
         zIndexOffset: 900,
       }).addTo(map)
+      }
 
       const centerView = () => {
         map?.setView([lat, lng], 18, { animate: false })
@@ -501,6 +513,13 @@ export function ReportLocationMap({
               </MapControlButton>
             </MapControlStack>
           </div>
+        </div>
+      ) : null}
+      {approximate ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-[500] flex justify-center px-4">
+          <span className="rounded-full bg-neutral-900/80 px-3 py-1.5 text-[11px] font-medium text-white">
+            Approximate area — exact location unavailable
+          </span>
         </div>
       ) : null}
       {streetView ? (

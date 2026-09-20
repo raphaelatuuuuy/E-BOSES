@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
+import { disableNativePushForCurrentAccount } from "@/features/dashboard/native-push"
 
 import {
   HubRow,
@@ -94,6 +95,7 @@ export function SettingsWorkspace({
     subscribed: false,
   })
   const [browserBusy, setBrowserBusy] = useState(false)
+  const [nativePushBusy, setNativePushBusy] = useState(false)
   const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([])
   const [address, setAddress] = useState("")
   const [addressFlowOpen, setAddressFlowOpen] = useState(false)
@@ -248,6 +250,18 @@ export function SettingsWorkspace({
       toast.error(browserNotificationErrorMessage(error, "disable"))
     } finally {
       setBrowserBusy(false)
+    }
+  }
+
+  async function handleDisableNativePush() {
+    setNativePushBusy(true)
+    try {
+      await disableNativePushForCurrentAccount()
+      toast.success("Android push disabled for this account.")
+    } catch {
+      toast.error("Could not disable Android push for this account.")
+    } finally {
+      setNativePushBusy(false)
     }
   }
 
@@ -452,6 +466,8 @@ export function SettingsWorkspace({
                   browserBusy={browserBusy}
                   onEnableBrowserNotifications={() => void handleEnableBrowserNotifications()}
                   onDisableBrowserNotifications={() => void handleDisableBrowserNotifications()}
+                  nativePushBusy={nativePushBusy}
+                  onDisableNativePush={() => void handleDisableNativePush()}
                 />
               ) : null}
             </>
@@ -566,6 +582,8 @@ export function SettingsWorkspace({
               browserBusy={browserBusy}
               onEnableBrowserNotifications={() => void handleEnableBrowserNotifications()}
               onDisableBrowserNotifications={() => void handleDisableBrowserNotifications()}
+              nativePushBusy={nativePushBusy}
+              onDisableNativePush={() => void handleDisableNativePush()}
             />
           ) : null}
             </>

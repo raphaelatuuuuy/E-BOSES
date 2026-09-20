@@ -20,6 +20,7 @@ import {
 } from "@/features/dashboard/components/dialog"
 import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
 import { ReportPhotoPreview } from "@/features/dashboard/components/concerns/resolved-photo"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
   mediaDisplaySource,
   toMediaPreviewItem,
@@ -275,17 +276,9 @@ function ActorCard({
   actor: { actor: PublicUser; time: string }
   label: string
 }) {
-  const letter = (
-    actor.actor.full_name?.[0] ||
-    actor.actor.initials?.[0] ||
-    "U"
-  ).toUpperCase()
-
   return (
     <div className="flex items-center gap-3.5 rounded-2xl border border-neutral-200 bg-white px-4 py-3.5">
-      <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-soft text-[16px] font-bold text-navy-muted">
-        {letter}
-      </div>
+      <UserAvatar user={actor.actor} size="lg" className="!size-12 text-[16px]" />
       <div className="min-w-0">
         <p className="text-[12px] font-semibold text-neutral-500">{label}</p>
         <p className="truncate text-[16px] font-semibold text-neutral-900">

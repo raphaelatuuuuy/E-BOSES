@@ -6,11 +6,8 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   ArrowLeftIcon,
-  BellRingIcon,
-  CheckCircle2Icon,
   InboxIcon,
   CheckCheckIcon,
-  LoaderCircleIcon,
   Trash2Icon,
   XIcon,
   type LucideIcon,
@@ -30,15 +27,6 @@ import {
   toMediaPreviewItem,
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
-import {
-  browserNotificationErrorMessage,
-  disableBrowserNotifications,
-  enableBrowserNotifications,
-  getBrowserNotificationState,
-  showBrowserNotificationFeedback,
-  type BrowserNotificationState,
-} from "@/features/dashboard/browser-notifications"
-import { useAuthSession } from "@/features/auth/auth-session"
 import {
   notificationsPageFilter,
   openNotificationsPop,
@@ -247,39 +235,12 @@ export function NotificationsPanel({
     archiveAllRead,
     refresh,
   } = useNotifications()
-  const { user } = useAuthSession()
-
   const [view, setView] = useState<"inbox" | "archived">(
     () => initialView ?? (initialFilter === "archived" ? "archived" : "inbox")
   )
-  const [browserNotificationState, setBrowserNotificationState] =
-    useState<BrowserNotificationState | null>(null)
-  const [changingBrowserNotifications, setChangingBrowserNotifications] =
-    useState(false)
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem[] | null>(
     null
   )
-
-  useEffect(() => {
-    let active = true
-    void getBrowserNotificationState()
-      .then((nextState) => {
-        if (active) setBrowserNotificationState(nextState)
-      })
-      .catch(() => {
-        if (active) {
-          setBrowserNotificationState({
-            supported: false,
-            permission: "unsupported",
-            serverConfigured: false,
-            subscribed: false,
-          })
-        }
-      })
-    return () => {
-      active = false
-    }
-  }, [])
 
   useEffect(() => {
     function onViewChange(event: Event) {
@@ -382,57 +343,8 @@ export function NotificationsPanel({
     config.onOpen(item)
   }
 
-  async function enableNotifications() {
-    setChangingBrowserNotifications(true)
-    try {
-      await enableBrowserNotifications()
-      const nextState = await getBrowserNotificationState()
-      setBrowserNotificationState(nextState)
-      await showBrowserNotificationFeedback(user?.lastName, true).catch(
-        () => false
-      )
-      toast.success("Browser notifications enabled on this device.")
-    } catch (error) {
-      toast.error(browserNotificationErrorMessage(error, "enable"))
-    } finally {
-      setChangingBrowserNotifications(false)
-    }
-  }
-
-  async function disableNotifications() {
-    setChangingBrowserNotifications(true)
-    try {
-      await showBrowserNotificationFeedback(user?.lastName, false).catch(
-        () => false
-      )
-      await disableBrowserNotifications()
-      const nextState = await getBrowserNotificationState()
-      setBrowserNotificationState(nextState)
-      toast.success("Browser notifications disabled on this device.")
-    } catch (error) {
-      toast.error(browserNotificationErrorMessage(error, "disable"))
-    } finally {
-      setChangingBrowserNotifications(false)
-    }
-  }
-
   const iconFor = config.iconFor ?? notificationIconFor
   const darkTheme = Boolean(config.dark)
-  const browserNotificationsEnabled = Boolean(
-    browserNotificationState?.supported &&
-    browserNotificationState.permission === "granted" &&
-    browserNotificationState.subscribed
-  )
-  const browserNotificationsUnavailable = Boolean(
-    browserNotificationState &&
-    (!browserNotificationState.supported ||
-      !browserNotificationState.serverConfigured)
-  )
-  const browserNotificationsBlocked =
-    browserNotificationState?.permission === "denied"
-  const browserNotificationButtonLabel = browserNotificationsEnabled
-    ? "Disable"
-    : "Enable"
 
   const isEmpty = visible.length === 0
   const emptyTitle = isEmpty
@@ -578,47 +490,6 @@ export function NotificationsPanel({
         )}
       >
         <div className="mx-auto flex max-w-3xl min-w-0 flex-col gap-3">
-          <div className="rounded-2xl border border-neutral-200 bg-white p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-neutral-100 text-neutral-700">
-                  <BellRingIcon className="size-3.5" aria-hidden="true" />
-                </span>
-                <span className="text-[14px] font-semibold text-neutral-900">
-                  Push notification
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  void (browserNotificationsEnabled
-                    ? disableNotifications()
-                    : enableNotifications())
-                }
-                disabled={
-                  changingBrowserNotifications ||
-                  (!browserNotificationsEnabled &&
-                    (browserNotificationsUnavailable ||
-                      browserNotificationsBlocked ||
-                      !browserNotificationState))
-                }
-                className={cn(
-                  "flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 text-[12px] font-semibold transition-colors disabled:cursor-default disabled:opacity-60",
-                  browserNotificationsEnabled
-                    ? "text-emerald-700 hover:bg-emerald-50"
-                    : "border border-neutral-200 text-neutral-900 hover:bg-neutral-50"
-                )}
-              >
-                {changingBrowserNotifications || !browserNotificationState ? (
-                  <LoaderCircleIcon className="size-3.5 animate-spin" />
-                ) : browserNotificationsEnabled ? (
-                  <CheckCircle2Icon className="size-3.5" />
-                ) : null}
-                {browserNotificationButtonLabel}
-              </button>
-            </div>
-          </div>
-
           <nav
             aria-label="Notification filters"
             className="scrollbar-hide flex w-full gap-1 overflow-x-auto overscroll-x-contain rounded-full bg-neutral-100 p-1"

@@ -4,6 +4,7 @@ import {
   PhoneIcon,
   TriangleAlertIcon,
 } from "lucide-react"
+import type React from "react"
 
 /**
  * Review + countdown ("confirm & send") step. Combined into one file since
@@ -28,7 +29,7 @@ export function SosConfirmStep({
   mode: "review" | "countdown"
   submitError: string
   emergencySmsHref: string
-  onSmsFallbackClick: () => void
+  onSmsFallbackClick: (event: React.MouseEvent<HTMLAnchorElement>) => void
   typeLabel?: string
   locationLabel?: string
   triageSummary?: string
@@ -158,7 +159,7 @@ export function SosConfirmStep({
             <TriangleAlertIcon className="size-5" strokeWidth={2} aria-hidden="true" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold tracking-wide text-[#ff8a5c] uppercase">
+            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
               Type
             </p>
             <p className="mt-0.5 text-[15.5px] leading-snug font-semibold break-words text-white">
@@ -185,7 +186,7 @@ export function SosConfirmStep({
             <MapPinIcon className="size-5" strokeWidth={2} aria-hidden="true" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold tracking-wide text-[#ff8a5c] uppercase">
+            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
               Location
             </p>
             <p className="mt-0.5 text-[15.5px] leading-snug font-semibold break-words text-white">
@@ -212,7 +213,7 @@ export function SosConfirmStep({
             />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold tracking-wide text-[#ff8a5c] uppercase">
+            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
               Situation
             </p>
             {triageFlags.length ? (
@@ -242,7 +243,7 @@ export function SosConfirmStep({
 
       {/* Additional notes */}
       <div className="rounded-r-[14px] border-l-[3px] border-brand-orange bg-white/5 px-3.5 py-2.5">
-        <p className="text-[11px] font-bold tracking-wide text-[#ff8a5c] uppercase">
+        <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
           Additional notes
         </p>
         <p className="mt-0.5 text-[13.5px] text-white/80 italic">

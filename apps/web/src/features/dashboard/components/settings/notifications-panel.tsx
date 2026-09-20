@@ -8,6 +8,7 @@ import {
   SheetToggleRow,
 } from "@/features/dashboard/components/sheet-dialog"
 import { cn } from "@workspace/ui/lib/utils"
+import { Capacitor } from "@capacitor/core"
 
 export function NotificationsPanel({
   settings,
@@ -17,6 +18,8 @@ export function NotificationsPanel({
   browserBusy,
   onEnableBrowserNotifications,
   onDisableBrowserNotifications,
+  nativePushBusy,
+  onDisableNativePush,
 }: {
   settings: ResidentSettings | null
   savingSetting: SettingKey | null
@@ -25,6 +28,8 @@ export function NotificationsPanel({
   browserBusy: boolean
   onEnableBrowserNotifications: () => void
   onDisableBrowserNotifications: () => void
+  nativePushBusy: boolean
+  onDisableNativePush: () => void
 }) {
   const browserTitle = !browserState.supported
     ? "Not supported on this browser"
@@ -80,6 +85,25 @@ export function NotificationsPanel({
           }
         />
       </SheetList>
+
+      {Capacitor.getPlatform() === "android" ? (
+        <SheetList>
+          <SheetOptionRow
+            title="Android emergency push"
+            description="Disable push notifications for this signed-in account only."
+            trailing={
+              <button
+                type="button"
+                disabled={nativePushBusy}
+                onClick={onDisableNativePush}
+                className="shrink-0 rounded-full border border-neutral-300 px-4 py-1.5 text-[14px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {nativePushBusy ? "Working..." : "Disable"}
+              </button>
+            }
+          />
+        </SheetList>
+      ) : null}
 
       <SheetSectionLabel>What you get notified about</SheetSectionLabel>
       <SheetList>

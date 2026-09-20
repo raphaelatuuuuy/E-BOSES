@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 # Must match OutboundSmsMessage.idempotency_key. SQLite ignores varchar limits
 # and Postgres does not, so this is asserted by a test rather than trusted.
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
+MAX_CHAT_SMS_SEGMENTS = 5
 
 
 class SmsDeliveryError(Exception):
@@ -86,6 +87,20 @@ def count_segments(body: str) -> int:
         return 1 if length <= 160 else -(-length // 153)
     length = len(body)
     return 1 if length <= 70 else -(-length // 67)
+
+
+def fit_sms_segments(body: str, max_segments: int = MAX_CHAT_SMS_SEGMENTS) -> str:
+    text = (body or "").strip()
+    if count_segments(text) <= max_segments:
+        return text
+    suffix = "..."
+    fitted = ""
+    for char in text:
+        candidate = fitted + char
+        if count_segments(candidate + suffix) > max_segments:
+            break
+        fitted = candidate
+    return (fitted.rstrip() + suffix).strip()
 
 
 def non_gsm7_characters(body: str) -> list[str]:
@@ -384,6 +399,7 @@ def queue_sms(
     alert=None,
     recipient=None,
     in_reply_to=None,
+    chat_message=None,
 ) -> OutboundSmsMessage | None:
     """Record an outbound message and hand it to the sender.
 
@@ -417,6 +433,7 @@ def queue_sms(
         alert=alert,
         recipient=recipient,
         in_reply_to=in_reply_to,
+        chat_message=chat_message,
         driver=getattr(settings, "OUTBOUND_SMS_DRIVER", "disabled"),
     )
     message.set_destination(number)
@@ -453,6 +470,7 @@ def _dispatch(message_id: int, destination: str, body: str) -> None:
             SmsPurpose.EMERGENCY_ACK,
             SmsPurpose.DISPATCH,
             SmsPurpose.OFFICIAL_ALERT,
+            SmsPurpose.CHAT_UPDATE,
         })
         if critical or getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
             logger.warning("Celery unavailable for SMS #%s; using bounded inline delivery.", message_id)
@@ -475,23 +493,24 @@ def _dispatch(message_id: int, destination: str, body: str) -> None:
 
 def deliver(message_id: int, destination: str, body: str, timeout: float | None = None) -> str:
     """Perform one delivery attempt and record the outcome."""
-    message = OutboundSmsMessage.objects.filter(pk=message_id).first()
-    if not message:
-        return OutboundSmsMessage.Status.FAILED
-    if message.status in {OutboundSmsMessage.Status.SENT, OutboundSmsMessage.Status.DELIVERED}:
-        return message.status
-
-    if message.purpose in {SmsPurpose.EMERGENCY_ACK, SmsPurpose.DISPATCH, SmsPurpose.OFFICIAL_ALERT, SmsPurpose.COMMAND_REPLY} and not message.idempotency_key.startswith("sms-v2:"):
-        message.status = OutboundSmsMessage.Status.SKIPPED
-        message.last_error = "Retired emergency SMS format; not sent."
-        message.save(update_fields=["status", "last_error"])
-        return message.status
-
-    driver = get_driver()
-    message.status = OutboundSmsMessage.Status.SENDING
-    message.attempts += 1
-    message.driver = driver.name
-    message.save(update_fields=["status", "attempts", "driver"])
+    with transaction.atomic():
+        message = OutboundSmsMessage.objects.select_for_update().filter(pk=message_id).first()
+        if not message:
+            return OutboundSmsMessage.Status.FAILED
+        if message.status in {OutboundSmsMessage.Status.SENT, OutboundSmsMessage.Status.DELIVERED}:
+            return message.status
+        if message.status == OutboundSmsMessage.Status.SENDING:
+            return message.status
+        if message.purpose in {SmsPurpose.EMERGENCY_ACK, SmsPurpose.DISPATCH, SmsPurpose.OFFICIAL_ALERT, SmsPurpose.COMMAND_REPLY} and not message.idempotency_key.startswith("sms-v2:"):
+            message.status = OutboundSmsMessage.Status.SKIPPED
+            message.last_error = "Retired emergency SMS format; not sent."
+            message.save(update_fields=["status", "last_error"])
+            return message.status
+        driver = get_driver()
+        message.status = OutboundSmsMessage.Status.SENDING
+        message.attempts += 1
+        message.driver = driver.name
+        message.save(update_fields=["status", "attempts", "driver"])
 
     try:
         receipt = driver.send(destination, body, timeout=timeout)

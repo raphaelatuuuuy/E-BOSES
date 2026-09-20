@@ -550,6 +550,7 @@ export default function ResidentAlertsMapPage() {
       return isLocalGps(seed, mapMeta.boundary.geometry) ? seed : null
     }
   )
+  const [userPinVisible, setUserPinVisible] = useState(false)
   const mapApiRef = useRef<MapApi | null>(null)
   const isDesktop = useIsDesktop()
   const advisorySheetRef = useRef<HTMLDivElement>(null)
@@ -911,6 +912,7 @@ export default function ResidentAlertsMapPage() {
 
   useEffect(() => {
     if (!navigator.geolocation) return
+    setUserPinVisible(false)
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const next = { lat: pos.coords.latitude, lng: pos.coords.longitude }
@@ -1251,6 +1253,7 @@ export default function ResidentAlertsMapPage() {
         setLocating(false)
         if (!isLocalGps(next, mapMeta.boundary.geometry)) {
           setUserPos(null)
+          setUserPinVisible(false)
           toast.error(
             weatherPlace
               ? `Your location is outside ${weatherPlace}`
@@ -1264,6 +1267,7 @@ export default function ResidentAlertsMapPage() {
         }
         setUserPos(next)
         setUserKnownAt(pos.timestamp || Date.now())
+        setUserPinVisible(true)
         window.setTimeout(() => {
           mapApiRef.current?.invalidateSize()
           mapApiRef.current?.flyTo(next.lat, next.lng, 17)
@@ -1637,7 +1641,7 @@ export default function ResidentAlertsMapPage() {
           selectedId={selectedId}
           selectedEmergencyId={selectedEmergencyId}
           selectedAnnouncementId={selectedAnnouncementId}
-          userPos={userPos}
+          userPos={userPinVisible ? userPos : null}
           userPosAt={userKnownAt}
           viewerIsResponder={isResponder}
           onSelect={(id) => {

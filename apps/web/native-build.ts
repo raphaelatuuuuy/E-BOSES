@@ -13,7 +13,6 @@ export const nativePublicAssets = [
   "fonts",
   "icons",
   "tiles",
-  "eboses-sw.js",
 ]
 
 export function isPublicPageModule(id: string) {

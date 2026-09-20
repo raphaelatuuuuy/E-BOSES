@@ -3,6 +3,7 @@ import { toast } from "sonner"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
   assignEmergency,
   reassignEmergency,
@@ -23,6 +24,7 @@ export interface AssignableResponder {
   full_name: string
   responder_unit: string | null
   is_on_duty?: boolean
+  is_online?: boolean
   initials?: string | null
   latitude?: string | number | null
   longitude?: string | number | null
@@ -226,10 +228,12 @@ export function ResponderAssignment({
                 )}
               >
                 <div className="flex items-start gap-3">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
-                    {responder.initials ||
-                      responder.full_name.slice(0, 2).toUpperCase()}
-                  </div>
+                  <UserAvatar
+                    user={responder}
+                    online={responder.is_online}
+                    size="sm"
+                    className="!size-9 text-[14px]"
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-brand-navy">
                       {responder.full_name}

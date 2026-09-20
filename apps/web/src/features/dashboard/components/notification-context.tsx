@@ -172,6 +172,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   React.useEffect(() => {
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
+    let heartbeatTimer: number | undefined
     let closedByComponent = false
     let reconnectAttempts = 0
 
@@ -192,6 +193,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         socketLiveRef.current = true
         setConnectionState("live")
         reconnectAttempts = 0
+        socket?.send(JSON.stringify({ type: "presence.heartbeat" }))
+        heartbeatTimer = window.setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "presence.heartbeat" }))
+          }
+        }, 3000)
       }
       socket.onmessage = (event) => {
         try {
@@ -227,6 +234,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         }
       }
       socket.onclose = () => {
+        window.clearInterval(heartbeatTimer)
+        heartbeatTimer = undefined
         socketLiveRef.current = false
         setConnectionState("degraded")
         void fetchAll()
@@ -245,6 +254,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       socketLiveRef.current = false
       if (connectTimer) window.clearTimeout(connectTimer)
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      if (heartbeatTimer) window.clearInterval(heartbeatTimer)
       if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
         socket.close()
       }

@@ -42,6 +42,7 @@ export const defaultLayers: Record<LayerKey, boolean> = {
 export function emptyLiveMapSnapshot(): LiveMapSnapshot {
   return {
     home_community_id: null,
+    units: [],
     communities: [],
     map: {
       provider: "OpenStreetMap",

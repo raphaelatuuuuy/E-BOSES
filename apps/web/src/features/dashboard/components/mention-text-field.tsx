@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { searchResidentsForMention } from "@/features/auth/api"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
   displayToStorage,
   extractMentionStack,
@@ -280,9 +281,11 @@ export function MentionTextField({
                   insertMention(u)
                 }}
               >
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[12px] font-semibold text-navy-muted">
-                  {firstNameOf(u.full_name)[0]?.toUpperCase() ?? "U"}
-                </span>
+                <UserAvatar
+                  user={{ full_name: u.full_name }}
+                  size="sm"
+                  className="!size-7 text-[12px]"
+                />
                 <span className="min-w-0">
                   <span className="block font-semibold text-neutral-900">
                     {firstNameOf(u.full_name)}

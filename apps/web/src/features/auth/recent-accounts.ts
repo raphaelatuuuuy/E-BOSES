@@ -9,6 +9,7 @@ export interface RecentAccount {
   name: string
   identifier: string
   avatar?: string
+  role?: AuthUser["role"]
   savedAt: number
 }
 
@@ -20,6 +21,7 @@ function isRecentAccount(value: unknown): value is RecentAccount {
     typeof row.name === "string" &&
     typeof row.identifier === "string" &&
     row.identifier.includes("@") &&
+    (row.role === undefined || typeof row.role === "string") &&
     typeof row.savedAt === "number"
   )
 }
@@ -51,6 +53,7 @@ export function rememberRecentAccount(
     name,
     identifier: normalizedIdentifier,
     avatar: user.avatar || undefined,
+    role: user.role,
     savedAt: Date.now(),
   }
   const next = [

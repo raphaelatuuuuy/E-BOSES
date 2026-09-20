@@ -245,14 +245,14 @@ export function CameraCaptureDialog({
   const canSwitch = handset || devices.length > 1
 
   return createPortal(
-    <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/90 p-4">
+    <div className="fixed inset-0 z-[500] flex flex-col bg-black">
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Take photo"
-        className="relative w-full max-w-[440px] overflow-hidden rounded-[28px] bg-black shadow-2xl"
+        className="relative flex h-full w-full flex-1 flex-col overflow-hidden bg-black"
       >
-        <div className="relative aspect-[3/4] w-full bg-neutral-900">
+        <div className="relative w-full flex-1 bg-neutral-900">
           <video
             ref={videoRef}
             playsInline

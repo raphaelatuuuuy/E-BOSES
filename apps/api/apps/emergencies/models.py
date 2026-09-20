@@ -542,6 +542,29 @@ class EmergencyAlert(models.Model):
                 condition=models.Q(client_request_id__isnull=False),
                 name="unique_emergency_client_request",
             ),
+            models.UniqueConstraint(
+                fields=["reporter_contact_number"],
+                condition=models.Q(
+                    reporter_contact_number__gt="",
+                    status__in=[
+                        "submitted",
+                        "routing",
+                        "routed",
+                        "awaiting_acknowledgment",
+                        "acknowledged",
+                        "en_route",
+                        "nearby",
+                        "arrived",
+                        "resident_safe",
+                        "backup_requested",
+                        "backup_assigned",
+                        "in_progress",
+                        "transfer_required",
+                        "escalation_required",
+                    ],
+                ),
+                name="unique_active_alert_phone",
+            ),
         ]
         indexes = [
             models.Index(fields=["community", "status", "created_at"], name="emerg_alert_comm_status"),
@@ -943,12 +966,21 @@ class EmergencyChatMessage(models.Model):
         related_name="emergency_chat_messages",
     )
     body = models.TextField(max_length=2000, blank=True)
+    client_message_id = models.UUIDField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["alert", "sender", "client_message_id"],
+                condition=models.Q(client_message_id__isnull=False),
+                name="unique_emergency_chat_client_message",
+            ),
+        ]
         indexes = [
             models.Index(fields=["alert", "created_at"], name="emerg_chat_alert_created"),
+            models.Index(fields=["alert", "sender", "client_message_id"], name="emerg_chat_client_id"),
         ]
 
     def __str__(self):

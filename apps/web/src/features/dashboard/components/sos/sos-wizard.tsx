@@ -1,9 +1,9 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react"
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 import { ArrowLeftIcon, PhoneIcon } from "lucide-react"
 import { ApiError } from "@/lib/api"
 import { SosTakeover } from "@/features/dashboard/components/sos/sos-takeover"
-import { canSendSms, sendSmsText } from "@/lib/native-sms-inbox"
+import { canSendSms, openSmsApp, sendSmsText } from "@/lib/native-sms-inbox"
 import {
   normalizeSmsRecipient,
   smsBodyTooLong,
@@ -54,7 +54,6 @@ import {
   questionsForCategory,
 } from "@/features/dashboard/components/sos/triage-step"
 import { SosConfirmStep } from "@/features/dashboard/components/sos/confirm-step"
-import { SosStatusScreen } from "@/features/dashboard/components/sos/sos-status-screen"
 import { isEmergencyActive } from "@/features/dashboard/components/emergencies/lib"
 import {
   offlineCategoriesFromConfig,
@@ -67,7 +66,7 @@ import type { Hotline } from "@/features/dashboard/components/sos/duty-hours-dia
 const OFFLINE_SUBMIT_ERROR =
   "You’re offline. Reconnect to send online, or use the SMS backup below."
 
-type WizardStep = "category" | "triage" | "location" | "review" | "countdown" | "status"
+type WizardStep = "category" | "triage" | "location" | "review" | "countdown"
 
 const WIZARD_STEPS: WizardStep[] = [
   "category",
@@ -84,12 +83,10 @@ function stepTitle(step: WizardStep) {
   if (step === "triage") return "Quick questions"
   if (step === "location") return "Confirm your location"
   if (step === "review") return "Review & send"
-  if (step === "status") return "Emergency Status"
   return "Ongoing"
 }
 
 function stepIndex(step: WizardStep) {
-  if (step === "status") return WIZARD_STEPS.length + 1
   return WIZARD_STEPS.indexOf(step) + 1
 }
 
@@ -436,8 +433,15 @@ export function SosWizard({
         toast.success("Queued emergency sent")
         onSubmitted(alert)
         break
-      } catch {
-        /* retry later */
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409 && error.data && typeof error.data === "object") {
+          const active = (error.data as { active_emergency?: EmergencyAlert }).active_emergency
+          if (active && isActiveAlert(active)) {
+            await deleteQueuedSosEmergency(item.id)
+            onSubmitted(active)
+            break
+          }
+        }
       }
     }
   }
@@ -503,21 +507,11 @@ export function SosWizard({
       )
       return
     }
-    if (step === "status") {
-      resetWizard()
-      onClose()
-      return
-    }
     resetWizard()
     onClose()
   }
 
   function goBack() {
-    if (step === "status") {
-      resetWizard()
-      onClose()
-      return
-    }
     if (step === "countdown") {
       if (submitting) return
       setStep("review")
@@ -605,12 +599,7 @@ export function SosWizard({
   async function submitEmergency() {
     if (!location || !emergency || submitting) return
     if (!isOnline) {
-      setStep("status")
-      setDispatchCountdown(5)
-      if (mediaFiles.length > 0) {
-        toast.info("Photos need connection and were not included.")
-      }
-      await enqueueCurrentEmergency().catch(() => {})
+      await sendSmsAlert()
       return
     }
     setSubmitError("")
@@ -667,6 +656,15 @@ export function SosWizard({
         error instanceof Error
           ? error.message
           : "Could not send emergency alert."
+      if (error instanceof ApiError && error.status === 409 && error.data && typeof error.data === "object") {
+        const active = (error.data as { active_emergency?: EmergencyAlert }).active_emergency
+        if (active && isActiveAlert(active)) {
+          resetWizard()
+          toast.info("Your active emergency is already open.")
+          onSubmitted(active)
+          return
+        }
+      }
       if (mediaFiles.length > 0 && /photo|media|image/i.test(message)) {
         setSubmitError("")
         setMediaError(message)
@@ -709,7 +707,7 @@ export function SosWizard({
   }
 
   async function enqueueCurrentEmergency() {
-    if (!location || !emergency) return
+    if (!location || !emergency || !user?.id) return
     await enqueueSosEmergency({
       id: clientRequestIdRef.current,
       clientRequestId: clientRequestIdRef.current,
@@ -772,10 +770,21 @@ export function SosWizard({
         : `Emergency alert will send in ${dispatchCountdown} ${dispatchCountdown === 1 ? "second" : "seconds"}. Activate Cancel to stop it.`
       : ""
 
-  function announceSmsFallback() {
-    setStatusAnnouncement(
-      "Opening your SMS app with a draft. E-Boses cannot confirm delivery; review the message and activate Send."
-    )
+  async function handleSmsFallbackClick(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault()
+    if (smsSending) return
+    setSmsSending(true)
+    try {
+      setStatusAnnouncement(
+        "Opening your SMS app with a draft. E-Boses cannot confirm delivery; review the message and activate Send."
+      )
+      await enqueueCurrentEmergency().catch(() => undefined)
+      resetWizard()
+      onClose()
+      openSmsApp(SOS_SMS_NUMBER, smsBody)
+    } finally {
+      setSmsSending(false)
+    }
   }
 
   async function sendSmsAlert() {
@@ -787,15 +796,25 @@ export function SosWizard({
     }
     setSmsSending(true)
     try {
-      await sendSmsText(to, smsBody)
-      setStatusAnnouncement(
-        "Alert sent by SMS. Keep safe and wait for responders."
-      )
-      toast.success("Alert sent by SMS")
-      if (mediaFiles.length > 0) {
-        toast.info("Photos need connection and were not included.")
+      const nativeSmsAvailable = canSendSms()
+      if (nativeSmsAvailable) {
+        await sendSmsText(to, smsBody)
+        setStatusAnnouncement(
+          "Alert sent by SMS. Keep safe and wait for responders."
+        )
+        toast.success("Alert sent by SMS")
+        if (mediaFiles.length > 0) {
+          toast.info("Photos need connection and were not included.")
+        }
+      } else {
+        setStatusAnnouncement(
+          "Opening your SMS app with a draft. Review the message and activate Send."
+        )
       }
-      await enqueueCurrentEmergency().catch(() => {})
+      await enqueueCurrentEmergency().catch(() => undefined)
+      resetWizard()
+      onClose()
+      if (!nativeSmsAvailable) openSmsApp(to, smsBody)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Could not send SMS."
@@ -816,7 +835,7 @@ export function SosWizard({
   )
 
   const wizardFooter =
-    step !== "countdown" && step !== "status" ? (
+    step !== "countdown" ? (
       <>
         <div className="flex gap-2">
           <button
@@ -840,7 +859,7 @@ export function SosWizard({
             ) : emergencySmsHref ? (
               <a
                 href={emergencySmsHref}
-                onClick={announceSmsFallback}
+                onClick={handleSmsFallbackClick}
                 className="flex h-[60px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[17px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
               >
                 <PhoneIcon className="size-4" aria-hidden="true" />
@@ -931,7 +950,7 @@ export function SosWizard({
         subtitle={
           step === "countdown" ? "Tap cancel if this was accidental" : undefined
         }
-        showBack={step !== "category" && step !== "countdown" && step !== "location" && step !== "status"}
+        showBack={step !== "category" && step !== "countdown" && step !== "location"}
         onBack={goBack}
         footer={step === "location" ? undefined : wizardFooter}
         hideHeader={step === "location"}
@@ -939,7 +958,7 @@ export function SosWizard({
           step === "location" ? "p-0 pb-0 overflow-hidden" : undefined
         }
         progress={
-          step !== "countdown" && step !== "location" && step !== "status" ? (
+          step !== "countdown" && step !== "location" ? (
             <div className="flex gap-1.5" aria-hidden="true">
               {Array.from({ length: WIZARD_STEP_COUNT }).map((_, i) => {
                 const on = i < Math.min(stepIndex(step), WIZARD_STEP_COUNT)
@@ -1029,7 +1048,7 @@ export function SosWizard({
             mode={step}
             submitError={submitError}
             emergencySmsHref={useSmsDelivery ? emergencySmsHref : ""}
-            onSmsFallbackClick={announceSmsFallback}
+            onSmsFallbackClick={handleSmsFallbackClick}
             typeLabel={typeMeta?.label}
             locationLabel={locationLabel}
             triageSummary={describeTriage(triage, activeQuestions)}
@@ -1041,12 +1060,6 @@ export function SosWizard({
           />
         ) : null}
 
-        {step === "status" ? (
-          <SosStatusScreen
-            onGoHome={closeShell}
-            smsSentImmediately={isOnline}
-          />
-        ) : null}
       </SosShell>
     </>
   )

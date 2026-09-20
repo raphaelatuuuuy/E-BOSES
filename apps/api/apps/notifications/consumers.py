@@ -5,6 +5,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth import get_user_model
 
 from .tickets import consume_websocket_ticket
+from .presence import mark_presence
 
 
 @database_sync_to_async
@@ -23,6 +24,15 @@ def user_can_view_emergency(user, alert_id: int) -> bool:
 
     alert = EmergencyAlert.objects.filter(pk=alert_id).first()
     return bool(alert and can_track_alert(user, alert))
+
+
+@database_sync_to_async
+def touch_presence(user_id: int):
+    try:
+        mark_presence(user_id)
+    except Exception:
+        return False
+    return True
 
 
 @database_sync_to_async
@@ -47,7 +57,14 @@ class AuthenticatedJsonConsumer(AsyncJsonWebsocketConsumer):
         if not self.user or not self.user.is_authenticated:
             await self.close(code=4401)
             return False
+        await touch_presence(self.user.pk)
         return True
+
+    async def receive_json(self, content, **kwargs):
+        if self.user is not None:
+            await touch_presence(self.user.pk)
+        if isinstance(content, dict) and content.get("type") == "presence.heartbeat":
+            await self.send_json({"type": "presence.ack"})
 
 
 class NotificationConsumer(AuthenticatedJsonConsumer):

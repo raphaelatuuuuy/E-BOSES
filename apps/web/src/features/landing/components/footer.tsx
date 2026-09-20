@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import { DownloadIcon } from "lucide-react"
-import { APK_DOWNLOAD_URL } from "../constants"
+import { handleApkDownload } from "../constants"
 
 type PlatformLink = { label: string; href?: string; to?: string }
 
@@ -105,15 +105,14 @@ export function Footer() {
             <p className="mb-5 text-sm leading-relaxed text-white/50">
               Faster reporting and SOS alerts with the E-Boses Android app.
             </p>
-            <a
-              href={APK_DOWNLOAD_URL}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
+              onClick={handleApkDownload}
               className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-accent px-6 text-sm font-semibold text-white transition-colors hover:bg-brand-orange-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:w-auto"
             >
               <DownloadIcon className="size-4" strokeWidth={2} aria-hidden="true" />
               Download the app
-            </a>
+            </button>
             <p className="mt-3 text-xs text-white/40">Free for Android</p>
           </div>
         </div>

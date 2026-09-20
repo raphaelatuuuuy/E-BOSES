@@ -34,6 +34,7 @@ export interface PublicUser {
   initials: string
   role: string
   last_seen_at: string | null
+  is_online?: boolean
   responder_unit?: "tanod" | "bhw" | "bdrrmo" | ""
   is_on_duty?: boolean
   avatar?: string
@@ -1601,6 +1602,18 @@ export interface LiveMapEmergency {
   latitude: string
   longitude: string
   reporter: LiveMapPerson
+  assigned_unit: {
+    id: number
+    code: string
+    name: string
+    short_name: string
+  } | null
+  units: Array<{
+    id: number
+    code: string
+    name: string
+    short_name: string
+  }>
   current_assignment: {
     id: number
     responder: LiveMapPerson
@@ -1688,6 +1701,13 @@ export interface LiveMapAdvisory {
 
 export interface LiveMapSnapshot {
   home_community_id: string | null
+  /** Active units in the snapshot's community — the SOS unit filter options. */
+  units: Array<{
+    id: number
+    code: string
+    name: string
+    short_name: string | null
+  }>
   communities: Array<
     CommunitySummary & {
       center: { latitude: number; longitude: number }
@@ -1771,11 +1791,17 @@ export type LiveMapUpdate =
       payload: { alert_id: number; assignment_id?: number }
     }
 
-export function getOfficialLiveMap(communityId?: string) {
-  const query = communityId
-    ? `?community_id=${encodeURIComponent(communityId)}`
-    : ""
-  return apiRequest<LiveMapSnapshot>(`/dashboard/official/live-map/${query}`)
+export function getOfficialLiveMap(
+  communityId?: string,
+  unitId?: number | "all" | "unassigned",
+) {
+  const params = new URLSearchParams()
+  if (communityId) params.set("community_id", communityId)
+  if (unitId != null && unitId !== "all") params.set("unit_id", String(unitId))
+  const query = params.toString()
+  return apiRequest<LiveMapSnapshot>(
+    `/dashboard/official/live-map/${query ? `?${query}` : ""}`,
+  )
 }
 
 export interface ResidentMapConcern {

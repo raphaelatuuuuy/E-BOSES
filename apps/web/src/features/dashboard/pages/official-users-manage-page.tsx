@@ -3,17 +3,26 @@ import { CircleCheck, PencilIcon, PlusIcon, UserCogIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiRequest } from "@/lib/api"
-import { initials } from "@/lib/initials"
 import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { cn } from "@workspace/ui/lib/utils"
 import { SheetCompactActionRow, SheetDialog, SheetIconButton, SheetPrimaryButton, SheetSecondaryButton } from "@/features/dashboard/components/sheet-dialog"
 import { ConfigHeroAction, ConfigShell } from "@/features/dashboard/components/config/config-shell"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
 import { ConfigurationTable, ConfigurationTableEmpty } from "@/features/dashboard/components/config/configuration-table"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 
-type ManagedRole = "resident" | "barangay_official" | "first_responder"
+/* Selectable account roles. First Responder is intentionally absent: the role
+   still exists internally for legacy routing and responder dashboards, but a
+   new or edited account is only ever a Resident or an Official. */
+type ManagedRole = "resident" | "barangay_official"
 
-const MANAGED_ROLES: readonly string[] = ["resident", "barangay_official", "first_responder"]
+const MANAGED_ROLES: readonly string[] = ["resident", "barangay_official"]
+
+/* Legacy responder accounts are managed as Official-facing accounts with their
+   unit information, while their stored role is left untouched for routing. */
+function toDisplayRole(role: string): ManagedRole {
+  return role === "resident" ? "resident" : "barangay_official"
+}
 
 function toManagedRole(value: string, fallback: ManagedRole): ManagedRole {
   return MANAGED_ROLES.includes(value) ? (value as ManagedRole) : fallback
@@ -79,7 +88,7 @@ interface Designation {
 const ROLE_LABEL: Record<string, string> = {
   resident: "Resident",
   barangay_official: "Official",
-  first_responder: "Responder",
+  first_responder: "Official",
 }
 
 function unitLabel(user: StaffUser) {
@@ -279,9 +288,11 @@ export default function OfficialUsersManagePage({ embedded = false }: { embedded
           <tr key={user.id} className="transition-colors hover:bg-neutral-50">
             <td className="min-w-0 max-w-0 px-4 py-4 align-middle sm:px-6 sm:py-5">
             <div className="flex min-w-0 items-start gap-2">
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
-                {initials(user.full_name || user.email).charAt(0)}
-              </span>
+              <UserAvatar
+                user={{ full_name: user.full_name || user.email }}
+                size="sm"
+                className="!size-9 text-[14px]"
+              />
               <div className="min-w-0 flex-1">
               <p className="break-words text-[15px] leading-snug font-bold text-neutral-900">
                 {user.full_name || user.email}
@@ -358,7 +369,7 @@ function CreateUserDialog({
   const [email, setEmail] = useState("")
   const [phoneNumber, setPhoneNumber] = useState("")
   const [password, setPassword] = useState("")
-  const [role, setRole] = useState<ManagedRole>("first_responder")
+  const [role, setRole] = useState<ManagedRole>("barangay_official")
   const [communityId, setCommunityId] = useState("")
   const [departmentId, setDepartmentId] = useState("")
   const [positionId, setPositionId] = useState("")
@@ -368,7 +379,7 @@ function CreateUserDialog({
   function reset() {
     setFirstName(""); setMiddleName(""); setLastName(""); setGender("")
     setEmail(""); setPhoneNumber(""); setPassword("")
-    setRole("first_responder"); setCommunityId(""); setDepartmentId(""); setPositionId(""); setEditingField(null)
+    setRole("barangay_official"); setCommunityId(""); setDepartmentId(""); setPositionId(""); setEditingField(null)
   }
 
   const communities = useMemo(() => communitiesOf(departments), [departments])
@@ -446,9 +457,11 @@ function CreateUserDialog({
       <div className="pb-4">
         {/* Header — same shape as User Details, filled in as the form is typed */}
         <div className="flex items-start gap-4 mb-6">
-          <div className="flex size-14 shrink-0 items-center justify-center rounded-2xl bg-slate-soft text-navy-muted">
-            <span className="text-xl font-bold">{(firstName || "+").charAt(0).toUpperCase()}</span>
-          </div>
+          <UserAvatar
+            user={{ full_name: `${firstName} ${lastName}`.trim() || "New account" }}
+            size="lg"
+            className="!size-14 rounded-2xl text-xl"
+          />
           <div className="min-w-0">
             <h3 className="text-lg font-semibold text-neutral-900">
               {firstName || lastName ? `${firstName} ${lastName}`.trim() : "New account"}
@@ -544,7 +557,7 @@ function CreateUserDialog({
               <InlineDropdown
                 value={role}
                 onChange={(v) => { setRole(toManagedRole(v, role)); setDepartmentId(""); setPositionId(""); setEditingField(null) }}
-                options={[{ value: "resident", label: "Resident" }, { value: "first_responder", label: "Responder" }, { value: "barangay_official", label: "Official" }]}
+                options={[{ value: "resident", label: "Resident" }, { value: "barangay_official", label: "Official" }]}
               />
             )}
           </div>
@@ -644,7 +657,8 @@ function UserManageDialog({
   onClose: () => void
   onChanged: () => void
 }) {
-  const [role, setRole] = useState(user.role)
+  const accountRole = toDisplayRole(user.role)
+  const [role, setRole] = useState<ManagedRole>(accountRole)
   const [accountStatus, setAccountStatus] = useState(user.status)
   const [firstName, setFirstName] = useState(user.firstName ?? "")
   const [middleName, setMiddleName] = useState(user.middleName ?? "")
@@ -706,7 +720,7 @@ function UserManageDialog({
 
   const hasNewAssignment = Boolean(departmentId && positionId)
   const dirty =
-    role !== user.role ||
+    role !== accountRole ||
     accountStatus !== user.status ||
     hasNewAssignment ||
     communityChanged ||
@@ -722,7 +736,7 @@ function UserManageDialog({
     try {
       const body: Record<string, unknown> = {}
       if (communityChanged) body.community = Number(resolvedCommunityId)
-      if (role !== user.role) body.role = role
+      if (role !== accountRole) body.role = role
       if (accountStatus !== user.status) body.status = accountStatus
       if (firstName !== (user.firstName ?? "")) body.first_name = firstName
       if (middleName !== (user.middleName ?? "")) body.middle_name = middleName
@@ -801,9 +815,11 @@ function UserManageDialog({
       <div className="pb-4">
         {/* Header */}
         <div className="flex items-start gap-4 mb-6">
-          <div className="flex size-14 shrink-0 items-center justify-center rounded-2xl bg-slate-soft text-navy-muted">
-            <span className="text-xl font-bold">{(user.full_name || user.email)?.charAt(0)?.toUpperCase()}</span>
-          </div>
+          <UserAvatar
+            user={{ id: user.id, full_name: user.full_name || user.email }}
+            size="lg"
+            className="!size-14 rounded-2xl text-xl"
+          />
           <div className="min-w-0">
             <h3 className="text-lg font-semibold text-neutral-900">{user.full_name || user.email}</h3>
             <p className="text-sm text-neutral-500">{ROLE_LABEL[user.role]}</p>
@@ -901,7 +917,7 @@ function UserManageDialog({
             </div>
             {editingField === "role" && (
               <InlineDropdown value={role} onChange={(v) => { setRole(toManagedRole(v, role)); setEditingField(null) }}
-                options={[{ value: "resident", label: "Resident" }, { value: "first_responder", label: "Responder" }, { value: "barangay_official", label: "Official" }]} />
+                options={[{ value: "resident", label: "Resident" }, { value: "barangay_official", label: "Official" }]} />
             )}
           </div>
 

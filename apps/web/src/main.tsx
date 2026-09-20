@@ -31,3 +31,14 @@ createRoot(rootElement).render(
     <Toaster id="center" position="top-center" />
   </BrowserRouter>,
 )
+
+if (Capacitor.isNativePlatform()) {
+  window.requestAnimationFrame(() => {
+    document.getElementById("bootsplash")?.remove()
+    void import("@capacitor/splash-screen").then(({ SplashScreen }) =>
+      SplashScreen.hide().catch(() => undefined),
+    )
+  })
+} else {
+  document.getElementById("bootsplash")?.remove()
+}

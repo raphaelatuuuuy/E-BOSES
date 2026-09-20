@@ -363,6 +363,7 @@ export function EmergencyChatPanel({
       attachment: null,
       created_at: new Date().toISOString(),
       is_mine: true,
+      sender_online: false,
       viaSms: true,
       sendFailed: failed,
     }
@@ -690,7 +691,10 @@ export function EmergencyChatPanel({
           return (
             <Message key={msg.id} align={mine ? "end" : "start"}>
               <MessageAvatar>
-                <Avatar className={isDark ? "bg-white/15" : undefined}>
+                <Avatar
+                  className={isDark ? "bg-white/15" : undefined}
+                  online={msg.sender_online}
+                >
                   <AvatarFallback
                     className={isDark ? "bg-white/20 text-white" : undefined}
                   >

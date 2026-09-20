@@ -646,7 +646,7 @@ export function ReportChatPanel({
               return (
                 <Message key={entry.key} align={own ? "end" : "start"}>
                   <MessageAvatar>
-                    <Avatar>
+                    <Avatar online={appeal.appellant.is_online}>
                       <AvatarFallback>
                         {initialsFor(appeal.appellant).charAt(0)}
                       </AvatarFallback>
@@ -819,7 +819,7 @@ export function ReportChatPanel({
             return (
               <Message key={msg.id} align={mine ? "end" : "start"}>
                 <MessageAvatar>
-                  <Avatar>
+                  <Avatar online={msg.sender.is_online}>
                     {" "}
                     <AvatarFallback>
                       {initialsFor(msg.sender).charAt(0)}

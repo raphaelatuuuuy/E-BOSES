@@ -9,6 +9,7 @@ from apps.community_scope import community_ids_for_user
 
 OWNER = "owner"
 OPERATIONAL = "operational"
+SAME_PHONE = "same_phone"
 LOCAL_PUBLIC = "local_public"
 FOREIGN_READ_ONLY = "foreign_read_only"
 
@@ -90,6 +91,38 @@ def emergency_is_public(alert):
 def emergency_access_mode(user, alert):
     if user and user.is_authenticated and user.pk == alert.reporter_id:
         return OWNER
+    if (
+        user
+        and user.is_authenticated
+        and getattr(user, "role", None) == "resident"
+        and getattr(user, "status", None) == user.Status.VERIFIED
+    ):
+        from apps.sms.normalize import normalize_ph_mobile
+
+        user_phone = normalize_ph_mobile(getattr(user, "phone_number", ""))
+        alert_phone = normalize_ph_mobile(alert.reporter_contact_number)
+        if (
+            user_phone
+            and alert_phone
+            and user_phone == alert_phone
+            and alert.status in {
+                "submitted",
+                "routing",
+                "routed",
+                "awaiting_acknowledgment",
+                "acknowledged",
+                "en_route",
+                "nearby",
+                "arrived",
+                "resident_safe",
+                "backup_requested",
+                "backup_assigned",
+                "in_progress",
+                "transfer_required",
+                "escalation_required",
+            }
+        ):
+            return SAME_PHONE
     communities = community_ids_for_user(user)
     responder_unit_access = False
     if user and user.is_authenticated and getattr(user, "role", None) == "first_responder":

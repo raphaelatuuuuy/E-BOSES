@@ -5,6 +5,7 @@ import { ArrowRightIcon, CheckIcon, InfoIcon, WifiOffIcon } from "lucide-react"
 import { SOSButton } from "@/features/dashboard/components/sos-button"
 import { refreshOfflineSosConfig } from "@/features/dashboard/components/sos/offline-sos-config"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { isResidentDevice } from "@/features/auth/resident-device"
 import { probeApiReachability, useApiReachability } from "@/lib/api-reachability"
 
 export function GlobalSosCoordinator() {
@@ -19,7 +20,7 @@ export function GlobalSosCoordinator() {
     pathname === "/report-issue"
   const { refreshUser, user } = useAuthSession()
   const online = useApiReachability()
-  const resident = !user || user.role === "resident"
+  const resident = isResidentDevice(user)
   const [showReconnected, setShowReconnected] = useState(false)
   const [mounted, setMounted] = useState(() => !online)
   const [hiding, setHiding] = useState(false)

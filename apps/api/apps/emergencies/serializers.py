@@ -661,7 +661,7 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
         return emergency_access_mode(getattr(request, "user", None), obj)
 
     def get_can_interact(self, obj):
-        return self.get_access_mode(obj) in {"owner", "operational", "local_public"}
+        return self.get_access_mode(obj) in {"owner", "same_phone", "operational", "local_public"}
 
     def to_representation(self, instance):
         payload = super().to_representation(instance)
@@ -1100,20 +1100,56 @@ class EmergencyChatAttachmentSerializer(serializers.ModelSerializer):
 class EmergencyChatMessageSerializer(serializers.ModelSerializer):
     sender = PublicUserSerializer(read_only=True)
     is_mine = serializers.SerializerMethodField()
+    sender_online = serializers.SerializerMethodField()
+    via_sms_gateway = serializers.SerializerMethodField()
+    sms_status = serializers.SerializerMethodField()
     attachment = EmergencyChatAttachmentSerializer(read_only=True)
 
     class Meta:
         model = EmergencyChatMessage
-        fields = ("id", "alert", "sender", "body", "attachment", "created_at", "is_mine")
-        read_only_fields = ("id", "alert", "sender", "created_at", "is_mine")
+        fields = (
+            "id",
+            "alert",
+            "sender",
+            "body",
+            "attachment",
+            "created_at",
+            "is_mine",
+            "sender_online",
+            "via_sms_gateway",
+            "sms_status",
+        )
+        read_only_fields = (
+            "id",
+            "alert",
+            "sender",
+            "created_at",
+            "is_mine",
+            "sender_online",
+            "via_sms_gateway",
+            "sms_status",
+        )
 
     def get_is_mine(self, obj):
         request = self.context.get("request")
         user = getattr(request, "user", None)
         return bool(user and user.is_authenticated and obj.sender_id == user.pk)
 
+    def get_sender_online(self, obj):
+        from apps.notifications.presence import is_user_online
+
+        return is_user_online(obj.sender_id)
+
+    def get_via_sms_gateway(self, obj):
+        return obj.outbound_sms_messages.filter(purpose="chat_update").exists()
+
+    def get_sms_status(self, obj):
+        message = obj.outbound_sms_messages.filter(purpose="chat_update").order_by("-id").first()
+        return message.status if message else None
+
 
 class EmergencyChatCreateSerializer(serializers.Serializer):
+    client_message_id = serializers.UUIDField(required=False)
     body = serializers.CharField(max_length=2000, trim_whitespace=True, required=False, allow_blank=True)
     attachment = serializers.FileField(required=False, allow_empty_file=False)
 

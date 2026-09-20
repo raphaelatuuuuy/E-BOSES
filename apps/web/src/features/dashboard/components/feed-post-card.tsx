@@ -374,9 +374,11 @@ function NeighbourReportRow({
     <CommentRow
       trunk={trunk}
       avatar={
-        <span className="flex size-8 items-center justify-center rounded-full bg-slate-soft text-[13px] font-semibold text-navy-muted">
-          {entry.reporter_name.slice(0, 1).toUpperCase()}
-        </span>
+        <UserAvatar
+          user={{ full_name: entry.reporter_name }}
+          size="sm"
+          className="!size-8 text-[13px]"
+        />
       }
       name={entry.reporter_name}
       meta={`${timeAgo(entry.submitted_at)} · also reported this`}

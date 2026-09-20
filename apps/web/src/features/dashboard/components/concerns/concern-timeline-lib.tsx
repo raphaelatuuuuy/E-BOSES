@@ -19,6 +19,7 @@ import {
   type MediaPreviewItem,
 } from "@/features/dashboard/lib/authenticated-media"
 import { isResolvedRecord } from "@/features/dashboard/components/alerts-map/lib"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 
 export type ConcernTimelineState = "done" | "current" | "pending" | "cancelled"
 export type ConcernTimelineAccent =
@@ -131,7 +132,7 @@ function roleLabelOf(actor: PublicUser) {
 
 type TimelineAvatarMember = Pick<
   PublicUser,
-  "id" | "full_name" | "initials" | "role"
+  "id" | "full_name" | "initials" | "role" | "is_online"
 >
 
 function memberAvatarGroup(members: TimelineAvatarMember[], large = false) {
@@ -144,13 +145,13 @@ function memberAvatarGroup(members: TimelineAvatarMember[], large = false) {
       aria-label={`${members.length} assigned member${members.length === 1 ? "" : "s"}`}
     >
       {visible.map((member, index) => (
-        <span
+        <UserAvatar
           key={member.id}
-          className={`inline-flex items-center justify-center rounded-full border-2 border-white bg-slate-soft font-bold text-navy-muted ${large ? "size-8 text-[10px]" : "size-6 text-[8px]"} ${index ? (large ? "-ml-2" : "-ml-1.5") : ""}`}
+          user={member}
+          size="sm"
+          className={`border-2 border-white bg-slate-soft font-bold text-navy-muted ${large ? "!size-8 text-[10px]" : "!size-6 text-[8px]"} ${index ? (large ? "-ml-2" : "-ml-1.5") : ""}`}
           title={`${member.full_name} · ${member.role.replace(/_/g, " ")}`}
-        >
-          {(member.initials || member.full_name || "U").charAt(0).toUpperCase()}
-        </span>
+        />
       ))}
       {extra > 0 ? (
         <span className={large ? "-ml-2 inline-flex size-8 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[10px] font-semibold text-neutral-500" : "-ml-1.5 inline-flex size-6 items-center justify-center rounded-full border-2 border-white bg-neutral-100 text-[8px] font-semibold text-neutral-500"}>

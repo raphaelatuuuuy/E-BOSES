@@ -2,7 +2,6 @@ import { useEffect, useState } from "react"
 import { ChevronDownIcon, LoaderCircleIcon, MapPinIcon, PhoneIcon, UsersIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { initials } from "@/lib/initials"
 import type {
   EmergencyAlert,
   EmergencyRoute,
@@ -19,6 +18,7 @@ import { OpsContrastToggle } from "@/features/dashboard/components/responder/ops
 import { DutyToggle } from "@/features/dashboard/components/responder/duty-toggle"
 import { MetricTiles } from "@/features/dashboard/components/responder/metric-tiles"
 import { EmergencyChatPanel } from "@/features/dashboard/components/emergency-chat-panel"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import {
   CardHead,
   DispatchCard,
@@ -222,9 +222,11 @@ export function DispatchOverviewCard({
       <div className="overflow-hidden rounded-2xl border border-card-line bg-card-raised">
         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
-              {initials(reporterName).charAt(0)}
-            </span>
+            <UserAvatar
+              user={alert.reporter}
+              size="sm"
+              className="!size-9 text-[14px]"
+            />
             <div className="min-w-0">
               <p className="truncate text-heading text-foreground">{reporterName}</p>
               <p className="truncate text-body tabular-nums text-subtle-foreground">

@@ -8,27 +8,9 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { initials } from "@/lib/initials"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { useIsDesktop } from "@/features/dashboard/lib/shell"
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
-
-function LetterAvatar({
-  letter,
-  className,
-}: {
-  letter: string
-  className?: string
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full bg-slate-soft font-semibold text-navy-muted",
-        className,
-      )}
-    >
-      {letter}
-    </span>
-  )
-}
 
 /**
  * Account menu:
@@ -122,7 +104,7 @@ export function ProfileAccountMenu({
           )}
           aria-label="Account menu"
         >
-          <LetterAvatar letter={letter} className="size-9 text-[16px]" />
+          <UserAvatar user={{ full_name: letter }} online={Boolean(user)} showStatus={false} className="size-9 text-[16px]" />
           <span
             className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-neutral-300"
             aria-hidden
@@ -136,7 +118,7 @@ export function ProfileAccountMenu({
           side="bottom"
         >
           <div className="flex flex-col items-center px-5 pb-4 pt-6 text-center">
-            <LetterAvatar letter={letter} className="size-16 text-2xl" />
+            <UserAvatar user={{ full_name: letter }} online={Boolean(user)} showStatus={false} className="size-16 text-2xl" />
             <p className="mt-3 text-[16px] font-semibold leading-tight text-neutral-900">
               {displayName}
             </p>
@@ -210,7 +192,7 @@ export function ProfileAccountMenu({
             <aside className="relative flex h-full w-[min(88vw,300px)] flex-col bg-white shadow-[-12px_0_40px_rgba(15,23,42,0.2)]">
               {/* Header — avatar, name, place (Nextdoor spacing) */}
               <div className="px-5 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))]">
-                <LetterAvatar letter={letter} className="size-[52px] text-[20px]" />
+                <UserAvatar user={{ full_name: letter }} online={Boolean(user)} showStatus={false} className="size-[52px] text-[20px]" />
                 <p className="mt-3.5 text-[18px] font-bold leading-tight tracking-tight text-neutral-900">
                   {displayName}
                 </p>
@@ -297,7 +279,7 @@ export function ProfileAccountMenu({
         aria-label="Account menu"
         aria-expanded={open}
       >
-        <LetterAvatar letter={letter} className="size-9 text-[16px]" />
+        <UserAvatar user={{ full_name: letter }} online={Boolean(user)} showStatus={false} className="size-9 text-[16px]" />
       </button>
       {sheet}
     </>

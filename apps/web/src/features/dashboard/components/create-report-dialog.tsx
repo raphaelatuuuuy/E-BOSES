@@ -40,6 +40,7 @@ import {
 } from "@/features/dashboard/api"
 import { CameraCaptureDialog } from "@/features/dashboard/components/camera-capture-dialog"
 import { Dialog, DialogBody } from "@/features/dashboard/components/dialog"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { ReportDetailsDialog } from "@/features/dashboard/components/report-details-dialog"
 import {
   duplicatePhotoFeedLocation,
@@ -517,11 +518,6 @@ export function CreateReportDialog({
     : user
       ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Resident"
       : "Resident"
-  const letter = (
-    guest
-      ? "C"
-      : user?.firstName?.[0] || user?.lastName?.[0] || displayName[0] || "U"
-  ).toUpperCase()
   const rawStreet = (user?.address || "").split(",")[0]?.trim() || ""
   const userStreet =
     !rawStreet || rawStreet.toLowerCase() === "pending" ? "" : rawStreet
@@ -1617,9 +1613,11 @@ export function CreateReportDialog({
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                   {/* Identity */}
                   <div className="flex items-center gap-3 px-4 pt-4 sm:px-5">
-                    <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-slate-soft text-[17px] font-semibold text-navy-muted sm:size-12 sm:text-[18px]">
-                      {letter}
-                    </span>
+                    <UserAvatar
+                      user={guest ? { full_name: "Community reporter" } : user}
+                      online={Boolean(user) && !guest}
+                      className="!size-11 text-[17px] sm:!size-12 sm:text-[18px]"
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[16px] leading-tight font-semibold text-neutral-900">
                         {displayName}

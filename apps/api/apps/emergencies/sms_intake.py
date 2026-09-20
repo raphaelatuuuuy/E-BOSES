@@ -182,11 +182,11 @@ def create_alert_from_sms(parsed, *, sender_number: str, match: SenderMatch, inb
     elif parsed.latitude is not None and parsed.longitude is not None:
         location_classification = classify_location(parsed.latitude, parsed.longitude)
         acceptance = location_classification.get("acceptance_zone") or {}
-        if (
-            not location_classification.get("accepted")
-            or location_classification.get("zone") != "barangay"
-            or acceptance.get("within") is False
-        ):
+        zone = location_classification.get("zone")
+        accepted = zone == "barangay" or (
+            zone == "acceptance_zone" and acceptance.get("within") is True
+        )
+        if not accepted:
             invalid_reason = "Reported location is outside the configured service area."
 
     alert = EmergencyAlert(

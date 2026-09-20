@@ -32,7 +32,6 @@ from apps.accounts.views import request_meta, touch_last_seen
 from apps.docs_schema import PAGE_PARAMETERS, list_envelope_response
 from apps.pagination import paginate_response
 from apps.notifications.services import (
-    broadcast_emergency_chat_message,
     broadcast_emergency_update,
     create_emergency_notification,
     notify_emergency_status,
@@ -290,9 +289,9 @@ def can_track_alert(user, alert):
     """Full SOS tracking is limited to its owner and operational participants."""
     if not user or not user.is_authenticated:
         return False
-    from apps.community_access import OPERATIONAL, OWNER, emergency_access_mode
+    from apps.community_access import OPERATIONAL, OWNER, SAME_PHONE, emergency_access_mode
 
-    return emergency_access_mode(user, alert) in {OWNER, OPERATIONAL}
+    return emergency_access_mode(user, alert) in {OWNER, OPERATIONAL, SAME_PHONE}
 
 
 def scoped_alert_or_404(user, pk, *, lock=False):
@@ -301,6 +300,10 @@ def scoped_alert_or_404(user, pk, *, lock=False):
     candidate = EmergencyAlert.objects.filter(pk=pk).prefetch_related("assignments").first()
     if candidate and emergency_access_mode(user, candidate) == "foreign_read_only":
         raise ForeignCommunityReadOnly()
+    if candidate and emergency_access_mode(user, candidate) == "same_phone":
+        if lock:
+            return get_object_or_404(EmergencyAlert.objects.select_for_update(), pk=pk)
+        return get_object_or_404(EmergencyAlert.objects, pk=pk)
     if not lock:
         return get_object_or_404(scope_emergency_queryset(EmergencyAlert.objects.all(), user), pk=pk)
     # PostgreSQL rejects SELECT ... FOR UPDATE on a DISTINCT query, and
@@ -361,7 +364,9 @@ def post_responder_chat(alert, sender, body: str):
         EmergencyChatMessage.objects.select_related("sender", "sender__resident_profile")
         .get(pk=message.pk)
     )
-    transaction.on_commit(lambda m=message: broadcast_emergency_chat_message(m))
+    from .chat_services import schedule_chat_message_delivery
+
+    schedule_chat_message_delivery(message)
     return message
 
 
@@ -1067,8 +1072,39 @@ def normalize_category_text(value):
 
 
 def active_alert_for_reporter(reporter):
-    return (
+    direct = (
         EmergencyAlert.objects.filter(reporter=reporter, status__in=ACTIVE_STATUSES)
+        .order_by("-created_at", "-id")
+        .first()
+    )
+    if direct:
+        return direct
+    from apps.sms.normalize import normalize_ph_mobile
+
+    number = normalize_ph_mobile(getattr(reporter, "phone_number", ""))
+    if not number:
+        return None
+    return (
+        EmergencyAlert.objects.filter(
+            reporter_contact_number=number,
+            status__in=ACTIVE_STATUSES,
+        )
+        .order_by("-created_at", "-id")
+        .first()
+    )
+
+
+def active_alert_for_phone(phone_number):
+    from apps.sms.normalize import normalize_ph_mobile
+
+    number = normalize_ph_mobile(phone_number)
+    if not number:
+        return None
+    return (
+        EmergencyAlert.objects.filter(
+            reporter_contact_number=number,
+            status__in=ACTIVE_STATUSES,
+        )
         .order_by("-created_at", "-id")
         .first()
     )
@@ -1400,6 +1436,21 @@ class EmergencyCreateView(APIView):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
+        from apps.sms.normalize import normalize_ph_mobile
+
+        reporter_phone = normalize_ph_mobile(getattr(request.user, "phone_number", "")) or (
+            getattr(request.user, "phone_number", "") or ""
+        )
+        phone_alert = active_alert_for_phone(reporter_phone)
+        if phone_alert:
+            return Response(
+                {
+                    "detail": "This phone number already has an active emergency alert.",
+                    "active_emergency": serialize_alert(phone_alert, request),
+                    "duplicate_suppressed": True,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         lat = serializer.validated_data.get("latitude")
         lng = serializer.validated_data.get("longitude")
         from .location_resolution import resolve_incident_location
@@ -1463,32 +1514,46 @@ class EmergencyCreateView(APIView):
             media_files.append((uploaded_file, validated_file, media_hash, media_phash))
 
         profile = getattr(request.user, "resident_profile", None)
-        alert = EmergencyAlert.objects.create(
-            client_request_id=client_request_id,
-            reporter=request.user,
-            community=incident_community,
-            type=serializer.validated_data["type"],
-            note=serializer.validated_data.get("note", ""),
-            latitude=location_resolution.latitude,
-            longitude=location_resolution.longitude,
-            location_source=location_resolution.source,
-            location_freshness=location_resolution.freshness,
-            location_age_seconds=location_resolution.age_seconds,
-            canonical_street=location_resolution.canonical_street,
-            location_evidence=location_resolution.payload(),
-            location_accuracy=serializer.validated_data.get("location_accuracy"),
-            address=serializer.validated_data.get("address", ""),
-            reported_area=serializer.validated_data.get("reported_area", ""),
-            triage=serializer.validated_data.get("triage") or {},
-            reporter_contact_number=getattr(request.user, "phone_number", "") or "",
-            media_warnings=media_warnings,
-            barangay=incident_community.name,
-            ip_asn=ip_meta.get("asn", ""),
-            ip_country=ip_meta.get("country", ""),
-            ip_org=ip_meta.get("org", ""),
-            ip_verdict=ip_meta.get("verdict", ""),
-            ip_score=ip_meta.get("score"),
-        )
+        try:
+            with transaction.atomic():
+                alert = EmergencyAlert.objects.create(
+                    client_request_id=client_request_id,
+                    reporter=request.user,
+                    community=incident_community,
+                    type=serializer.validated_data["type"],
+                    note=serializer.validated_data.get("note", ""),
+                    latitude=location_resolution.latitude,
+                    longitude=location_resolution.longitude,
+                    location_source=location_resolution.source,
+                    location_freshness=location_resolution.freshness,
+                    location_age_seconds=location_resolution.age_seconds,
+                    canonical_street=location_resolution.canonical_street,
+                    location_evidence=location_resolution.payload(),
+                    location_accuracy=serializer.validated_data.get("location_accuracy"),
+                    address=serializer.validated_data.get("address", ""),
+                    reported_area=serializer.validated_data.get("reported_area", ""),
+                    triage=serializer.validated_data.get("triage") or {},
+                    reporter_contact_number=reporter_phone,
+                    media_warnings=media_warnings,
+                    barangay=incident_community.name,
+                    ip_asn=ip_meta.get("asn", ""),
+                    ip_country=ip_meta.get("country", ""),
+                    ip_org=ip_meta.get("org", ""),
+                    ip_verdict=ip_meta.get("verdict", ""),
+                    ip_score=ip_meta.get("score"),
+                )
+        except IntegrityError:
+            phone_alert = active_alert_for_phone(reporter_phone)
+            if phone_alert:
+                return Response(
+                    {
+                        "detail": "This phone number already has an active emergency alert.",
+                        "active_emergency": serialize_alert(phone_alert, request),
+                        "duplicate_suppressed": True,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            raise
         alert.location_confidence = classify_location_confidence(alert)
         alert.save(update_fields=["location_confidence"])
         create_status_event(alert, EmergencyAlert.Status.SUBMITTED, request.user, event_key="received_app")
@@ -1831,12 +1896,7 @@ class MyActiveEmergencyView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
-        alert = (
-            EmergencyAlert.objects
-            .filter(reporter=request.user, status__in=ACTIVE_STATUSES)
-            .order_by("-created_at")
-            .first()
-        )
+        alert = active_alert_for_reporter(request.user)
         if not alert:
             return Response(status=status.HTTP_204_NO_CONTENT)
         return Response(serialize_alert(alert, request))
@@ -2757,11 +2817,35 @@ class EmergencyChatView(APIView):
             except ValidationError as exc:
                 return Response({"attachment": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
         with transaction.atomic():
-            message = EmergencyChatMessage.objects.create(
-                alert=alert,
-                sender=request.user,
-                body=serializer.validated_data["body"],
-            )
+            client_message_id = serializer.validated_data.get("client_message_id")
+            message = None
+            message_created = False
+            if client_message_id:
+                message = EmergencyChatMessage.objects.filter(
+                    alert=alert,
+                    sender=request.user,
+                    client_message_id=client_message_id,
+                ).first()
+            if message is None:
+                try:
+                    with transaction.atomic():
+                        message = EmergencyChatMessage.objects.create(
+                            alert=alert,
+                            sender=request.user,
+                            body=serializer.validated_data["body"],
+                            client_message_id=client_message_id,
+                        )
+                    message_created = True
+                except IntegrityError:
+                    if not client_message_id:
+                        raise
+                    message = EmergencyChatMessage.objects.get(
+                        alert=alert,
+                        sender=request.user,
+                        client_message_id=client_message_id,
+                    )
+            if not message_created or EmergencyChatAttachment.objects.filter(message=message).exists():
+                validated_attachment = None
             if validated_attachment:
                 attachment = EmergencyChatAttachment(
                     message=message,
@@ -2788,33 +2872,12 @@ class EmergencyChatView(APIView):
             )
             .get(pk=message.pk)
         )
+        from .chat_services import deliver_chat_message
+
+        if message_created:
+            deliver_chat_message(message.pk)
         payload = EmergencyChatMessageSerializer(message, context={"request": request}).data
-        recipient_ids = set(
-            alert.assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES)
-            .exclude(responder_id=request.user.pk)
-            .values_list("responder_id", flat=True)
-        )
-        if alert.reporter_id != request.user.pk:
-            recipient_ids.add(alert.reporter_id)
-        User = get_user_model()
-        recipients = User.objects.filter(
-            pk__in=recipient_ids,
-            is_active=True,
-            status=User.Status.VERIFIED,
-        )
-        message_preview = message.body[:240] or "New emergency chat attachment"
-        for recipient in recipients:
-            create_emergency_notification(
-                alert=alert,
-                recipient=recipient,
-                type="chat_message",
-                title="New emergency message",
-                body=message_preview,
-                event_key=f"emergency-chat:{message.pk}:{recipient.pk}",
-            )
-        # Live delivery via emergency tracking websocket; REST poll is fallback
-        transaction.on_commit(lambda m=message: broadcast_emergency_chat_message(m))
-        return Response(payload, status=status.HTTP_201_CREATED)
+        return Response(payload, status=status.HTTP_201_CREATED if message_created else status.HTTP_200_OK)
 
 
 class EmergencyCancelView(APIView):

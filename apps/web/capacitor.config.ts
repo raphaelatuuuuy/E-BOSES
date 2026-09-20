@@ -14,6 +14,18 @@ const config: CapacitorConfig = {
     : {
         androidScheme: "https",
       },
+  plugins: {
+    SplashScreen: {
+      launchShowDuration: 0,
+      launchAutoHide: false,
+      backgroundColor: "#07145f",
+      androidSplashResourceName: "splash",
+      androidScaleType: "CENTER",
+      showSpinner: false,
+      splashFullScreen: true,
+      splashImmersive: true,
+    },
+  },
 }
 
 export default config

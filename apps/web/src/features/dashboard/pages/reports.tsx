@@ -37,6 +37,7 @@ import {
   concernReporterName,
 } from "@/features/dashboard/components/concerns/concern-queue-item"
 import { ReportDetailHeader } from "@/features/dashboard/components/concerns/report-detail-header"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { ReportUpdatesPane } from "@/features/dashboard/components/concerns/report-updates-pane"
 import {
   MobileEmergencyReportDetailPage,
@@ -597,7 +598,6 @@ function OfficialConcernDashboard({
               selectedAlert.reporter_display ||
               selectedAlert.reporter?.full_name ||
               "Unknown reporter"
-            const initials = reporterName.charAt(0).toUpperCase()
             const submitted = new Date(selectedAlert.created_at)
             return (
               <div className="shrink-0 px-0 pt-0 lg:px-6 lg:pt-5">
@@ -623,14 +623,11 @@ function OfficialConcernDashboard({
                 </div>
 
                 <div className="mt-4 flex flex-col items-center text-center">
-                  <span
-                    className={cn(
-                      "flex size-14 items-center justify-center rounded-full text-[18px] font-bold",
-                      avatarTone
-                    )}
-                  >
-                    {initials}
-                  </span>
+                  <UserAvatar
+                    user={selectedAlert.reporter ?? { full_name: reporterName }}
+                    size="lg"
+                    className={cn("!size-14 text-[18px]", avatarTone)}
+                  />
                   <p className="mt-2 text-[17px] leading-tight font-bold text-foreground">
                     {reporterName}
                   </p>

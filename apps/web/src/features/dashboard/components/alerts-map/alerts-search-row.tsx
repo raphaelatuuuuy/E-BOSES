@@ -9,6 +9,9 @@ export function AlertsSearchRow({
   onToggleFilter,
   chip,
   onSelectChip,
+  units,
+  unitValue,
+  onSelectUnit,
 }: {
   query: string
   onQuery: (value: string) => void
@@ -16,6 +19,10 @@ export function AlertsSearchRow({
   onToggleFilter: () => void
   chip: string
   onSelectChip: (key: string) => void
+  /** Optional SOS unit filter — only the official alerts map passes these. */
+  units?: { value: string; label: string }[]
+  unitValue?: string
+  onSelectUnit?: (value: string) => void
 }) {
   return (
     <div className="relative">
@@ -84,6 +91,40 @@ export function AlertsSearchRow({
                 </button>
               )
             })}
+            {units && units.length > 0 && onSelectUnit ? (
+              <>
+                <p className="px-4 pt-2 pb-1 text-meta font-semibold tracking-wide text-neutral-400 uppercase">
+                  Unit
+                </p>
+                {units.map((option) => {
+                  const selected = unitValue === option.value
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      onClick={() => {
+                        onSelectUnit(option.value)
+                        onToggleFilter()
+                      }}
+                      className="flex w-full items-center gap-3 rounded-[12px] px-4 py-2.5 text-left transition hover:bg-neutral-50"
+                    >
+                      <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-neutral-900">
+                        {option.label}
+                      </span>
+                      {selected ? (
+                        <CircleCheck
+                          className="size-4 shrink-0 text-green-600"
+                          strokeWidth={2}
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                    </button>
+                  )
+                })}
+              </>
+            ) : null}
           </div>
         </>
       ) : null}

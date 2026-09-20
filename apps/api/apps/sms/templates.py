@@ -28,7 +28,12 @@ def emergency_ack(alert, *, unit_name=""):
 
 
 def pending_response(alert):
-    return f"{resident_greeting(alert)} Your emergency was received. We are still arranging responders."
+    return f"{resident_greeting(alert)} Your emergency was received. We are still arranging a response unit."
+
+
+def ongoing_emergency():
+    """Tell a resident that a second SOS will not create or move an alert."""
+    return "You already have an ongoing SOS emergency."
 
 
 def resident_progress(alert, status, *, unit_name=""):

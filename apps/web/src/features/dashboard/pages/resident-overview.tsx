@@ -5,7 +5,6 @@ import { Skeleton } from "@workspace/ui/components/skeleton"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { geocodeCommunityStreet } from "@/features/auth/lib/forward-geocode"
 import { usePageTitle } from "@/hooks/use-page-title"
-import { initials } from "@/lib/initials"
 import {
   getConcern,
   getResidentDashboardSummary,
@@ -30,6 +29,7 @@ import {
 import { streetLabelFromAddress } from "@/features/dashboard/components/feed-post-text"
 import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
 import { ResidentNotificationsButton } from "@/features/dashboard/components/resident/resident-account-dialogs"
+import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
 import { StatTiles } from "@/features/dashboard/components/resident-overview/stat-tiles"
 import { WeekChart } from "@/features/dashboard/components/resident-overview/week-chart"
@@ -203,9 +203,7 @@ export default function ResidentOverviewPage() {
           aria-label="Open settings"
           className="flex size-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-neutral-50"
         >
-          <span className="flex size-9 items-center justify-center rounded-full bg-slate-soft text-[14px] font-bold text-navy-muted">
-            {initials(user?.full_name || displayName).charAt(0)}
-          </span>
+          <UserAvatar user={user} online={Boolean(user)} size="sm" className="!size-9 text-[14px]" />
         </button>
       </div>
 

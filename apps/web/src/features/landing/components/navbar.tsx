@@ -3,7 +3,7 @@ import { DownloadIcon, MenuIcon, MinusIcon } from "lucide-react"
 import { useEffect, useRef, useState, type MouseEvent } from "react"
 import { createPortal } from "react-dom"
 
-import { APK_DOWNLOAD_URL } from "../constants"
+import { handleApkDownload } from "../constants"
 
 type NavLink = { label: string; href?: string; to?: string }
 
@@ -115,15 +115,14 @@ export function Navbar() {
           </Link>
 
           <div className="ml-auto flex shrink-0 items-center gap-3">
-              <a
-                href={APK_DOWNLOAD_URL}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={handleApkDownload}
                 className={`${NAV_REPORT_CTA} ${menuOpen ? "hidden" : "inline-flex"}`}
               >
                 <DownloadIcon className="size-3.5" strokeWidth={2} aria-hidden="true" />
                 Download the app
-              </a>
+              </button>
             <button
               ref={menuButtonRef}
               type="button"
@@ -173,15 +172,14 @@ export function Navbar() {
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-landing-bg via-landing-bg to-transparent px-5 pt-12 pb-[max(1.5rem,env(safe-area-inset-bottom))] md:px-10 lg:px-16">
             <div className="mx-auto w-full max-w-7xl">
               <div className="flex flex-col gap-3">
-                <a
-                  href={APK_DOWNLOAD_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
+                  onClick={handleApkDownload}
                   tabIndex={tab}
                   className={`${SOLID_CTA} flex min-h-14 w-full justify-center py-3`}
                 >
                   Download the app <DownloadIcon className="size-5" strokeWidth={2} aria-hidden="true" />
-                </a>
+                </button>
               </div>
             </div>
           </div>

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom"
 import {
   ActivityIcon,
   ChevronRightIcon,
+  RefreshCwIcon,
   ScrollTextIcon,
 } from "lucide-react"
 
@@ -94,14 +95,6 @@ function availabilityLabel(availability: Availability): string {
   return `${rounded}% availability`
 }
 
-function groupStatusWord(group: ServiceGroup): string {
-  if (group.modules.some((mod) => mod.status === "down")) return "Needs attention"
-  if (group.modules.some((mod) => mod.status === "degraded")) return "Running slow"
-  if (group.modules.some((mod) => mod.status === "unknown")) return "Not verified"
-  if (group.modules.some((mod) => mod.status === "not_configured")) return "Needs setup"
-  return ""
-}
-
 const WINDOW_DAYS = 90
 
 /* ── Status marks ── */
@@ -113,13 +106,6 @@ const MESSAGE_TONE: Record<number, string> = {
   1: "text-neutral-500",
   2: "text-severity-moderate",
   3: "text-sos",
-}
-
-function severityOf(status: ModuleStatus): number {
-  if (status === "down") return 3
-  if (status === "degraded") return 2
-  if (status === "operational") return 0
-  return 1
 }
 
 function StatusMark({ severity, className }: { severity: number; className?: string }) {
@@ -271,30 +257,6 @@ function StatusBar({ days, className }: { days: DayEntry[]; className?: string }
   )
 }
 
-/* ── Window nav ── */
-
-function windowLabel(days: DayEntry[]): string {
-  const measured = days.filter((day) => day.checks_total > 0)
-  if (measured.length === 0) return "No measured history"
-  const fmt = (iso: string) => {
-    const [y, m] = iso.split("-").map(Number)
-    return new Date(y!, (m ?? 1) - 1, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" })
-  }
-  const first = fmt(measured[0]!.date)
-  const last = fmt(measured[measured.length - 1]!.date)
-  return first === last ? first : `${first} – ${last}`
-}
-
-function checkedLabel(timestamp?: number): string {
-  if (!timestamp) return ""
-  return `Checked ${new Date(timestamp * 1000).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })}`
-}
-
 interface AuditLogEntry {
   id: number
   action: string
@@ -321,10 +283,6 @@ function auditDate(iso: string) {
   })
 }
 
-function auditAction(value: string) {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
-}
-
 function AuditLogSheet({
   open,
   onClose,
@@ -339,6 +297,7 @@ function AuditLogSheet({
   const [loadedKey, setLoadedKey] = useState("")
   const [error, setError] = useState("")
   const [offset, setOffset] = useState(0)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
   const requestKey = `${open}|${activeCategory}|${search}`
   const loading = open && loadedKey !== requestKey
 
@@ -348,7 +307,7 @@ function AuditLogSheet({
     const params = new URLSearchParams({
       category: activeCategory,
       days: "30",
-      limit: "100",
+      limit: "200",
       offset: "0",
     })
     if (search.trim()) params.set("search", search.trim())
@@ -371,23 +330,30 @@ function AuditLogSheet({
     }
   }, [activeCategory, open, requestKey, search])
 
+  const filteredEntries = entries
   const filterOptions = [
     { key: "all", label: "Everything", count: entries.length },
-    ...categories.filter((category) => category.key !== "all").map((category) => ({ key: category.key, label: category.label })),
+    ...categories.filter((category) => category.key !== "all").map((category) => ({
+      key: category.key,
+      label: category.label,
+      count: entries.filter((entry) => entry.category === category.key).length,
+    })),
   ]
-  const visibleEntries = entries.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
+  const visibleEntries = filteredEntries.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
 
   return (
     <SheetDialog
       open={open}
       onClose={onClose}
-      title="Audit log"
-      description="Review configuration changes and sensitive access events."
+      onBack={onClose}
+      showClose={false}
+      title={<>Audit <span className="text-brand-orange">log</span></>}
+      titleClassName="text-center"
       size="wide"
       draggable
       bodyScrollable={false}
-      className="h-[min(720px,92dvh)]"
-      bodyClassName="px-5 sm:px-7"
+      className="h-auto max-h-[min(720px,92dvh)]"
+      bodyClassName="px-5 sm:px-7 pb-0"
     >
       <div className="space-y-4">
         <ConfigurationListToolbar
@@ -404,36 +370,75 @@ function AuditLogSheet({
             {error}
           </p>
         ) : loading ? (
-          <div className="overflow-hidden rounded-2xl border border-neutral-200">
+          <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white divide-y divide-neutral-100">
             {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="h-[76px] animate-pulse border-b border-neutral-100 bg-neutral-50 last:border-0" />
+              <div key={index} className="h-[76px] animate-pulse bg-neutral-50" />
             ))}
           </div>
         ) : entries.length === 0 ? (
-          <p className="rounded-2xl border border-neutral-200 px-4 py-10 text-center text-[14px] text-neutral-500">
-            No activity matches this view.
-          </p>
+          <div className="py-16 text-center">
+            <ScrollTextIcon className="mx-auto size-7 text-neutral-300" aria-hidden />
+            <h2 className="mt-4 text-row font-semibold text-brand-navy">No activity matches this view</h2>
+          </div>
         ) : (
-          <ConfigurationTable label="Audit activity">
-            {visibleEntries.map((entry) => (
-              <ConfigurationInfoRow
-                key={entry.id}
-                icon={ScrollTextIcon}
-                title={<>{entry.label}{entry.sensitive ? <span className="ml-2 text-meta font-semibold text-brand-orange">Private data</span> : null}</>}
-                subtext={auditAction(entry.action)}
-                description={<>{entry.actor?.name || "System automation"} · {auditDate(entry.created_at)}</>}
-                actions={<span className="px-2 text-[13px] text-neutral-400" aria-label="No action">—</span>}
-              />
-            ))}
-          </ConfigurationTable>
-        )}
-
-        {!loading && entries.length > 0 ? (
           <>
-            <ConfigurationPager key={offset} offset={offset} total={entries.length} onChange={setOffset} noun="audit events" className="py-1" inline />
-            <p className="text-[12px] text-neutral-400">Showing the latest activity from the last 30 days.</p>
+            <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white divide-y divide-neutral-100">
+              {visibleEntries.map((entry) => {
+                const expanded = expandedId === entry.id
+                const categoryLabel =
+                  categories.find((category) => category.key === entry.category)?.label ??
+                  entry.category
+                return (
+                  <div key={entry.id}>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedId((current) => (current === entry.id ? null : entry.id))}
+                      className="group flex w-full items-center gap-3 p-4 text-left"
+                      aria-expanded={expanded}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block break-words text-[15px] leading-snug font-bold text-neutral-900">
+                          {entry.label}
+                          {entry.sensitive ? (
+                            <span className="ml-2 text-[12px] font-semibold text-brand-orange">Private data</span>
+                          ) : null}
+                        </span>
+                        <span className="mt-1 block break-words text-[13px] text-neutral-500">
+                          {entry.actor?.name || "System automation"} · {auditDate(entry.created_at)}
+                        </span>
+                      </span>
+                      <ChevronRightIcon
+                        className={cn(
+                          "size-5 shrink-0 text-neutral-400 transition-all duration-200 group-hover:text-neutral-700",
+                          expanded && "rotate-90",
+                        )}
+                        strokeWidth={1.9}
+                        aria-hidden
+                      />
+                    </button>
+                    {expanded && (
+                      <dl className="max-h-[220px] space-y-1.5 overflow-y-auto px-4 pb-4 text-[13px]">
+                        <div className="flex justify-between gap-3">
+                          <dt className="text-neutral-400">Category</dt>
+                          <dd className="text-right font-medium text-neutral-900">{categoryLabel}</dd>
+                        </div>
+                        <div className="flex justify-between gap-3">
+                          <dt className="text-neutral-400">Actor</dt>
+                          <dd className="text-right font-medium text-neutral-900">{entry.actor?.name || "System automation"}</dd>
+                        </div>
+                        <div className="flex justify-between gap-3">
+                          <dt className="text-neutral-400">Date</dt>
+                          <dd className="text-right font-medium text-neutral-900">{auditDate(entry.created_at)}</dd>
+                        </div>
+                      </dl>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <ConfigurationPager key={offset} offset={offset} total={filteredEntries.length} onChange={setOffset} noun="audit events" className="py-0" inline />
           </>
-        ) : null}
+        )}
       </div>
     </SheetDialog>
   )
@@ -451,8 +456,10 @@ export function ServiceStatusSection({ initialOpen, embedded = false }: { initia
   const [checking, setChecking] = useState(false)
   const [open, setOpen] = useState(initialOpen === "system")
   const [auditOpen, setAuditOpen] = useState(initialOpen === "audit")
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const [expandedMod, setExpandedMod] = useState<string | null>(null)
   const [offset, setOffset] = useState(0)
+  const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState("all")
 
   useEffect(() => {
     let alive = true
@@ -475,41 +482,39 @@ export function ServiceStatusSection({ initialOpen, embedded = false }: { initia
     }
   }, [])
 
-  const totalDays = status?.history_days ?? WINDOW_DAYS
-  const maxOffset = Math.max(0, Math.ceil((totalDays - WINDOW_DAYS) / 30))
-
   const slice = useMemo(() => {
-    return (history: DayEntry[]) => {
-      const end = history.length - offset * 30
-      return history.slice(Math.max(0, end - WINDOW_DAYS), Math.max(0, end))
-    }
-  }, [offset])
+    return (history: DayEntry[]) => history.slice(-WINDOW_DAYS)
+  }, [])
 
-  const counts = status?.counts
-  const worst = status?.worst ?? 0
+  const allModules = useMemo(
+    () =>
+      (status?.groups ?? []).flatMap((group) =>
+        group.modules.map((mod) => ({ ...mod, groupTitle: group.title }))
+      ),
+    [status]
+  )
+  const attentionModules = allModules.filter(
+    (mod) => mod.status === "down" || mod.status === "degraded"
+  )
+  const statusFilters = [
+    { key: "all", label: "Everything", count: allModules.length },
+    { key: "attention", label: "Needs attention", count: attentionModules.length },
+  ]
+  const filteredModules = allModules.filter((mod) => {
+    if (statusFilter === "attention" && mod.status !== "down" && mod.status !== "degraded")
+      return false
+    const query = search.trim().toLowerCase()
+    if (!query) return true
+    return (
+      mod.label.toLowerCase().includes(query) ||
+      (mod.message || "").toLowerCase().includes(query) ||
+      mod.groupTitle.toLowerCase().includes(query)
+    )
+  })
+  const modulePage = filteredModules.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
 
-  const headline = error || status?.headline || "Checking the system…"
-  const subline = error
-    ? "Open this page again in a moment."
-    : worst >= 3
-      ? "Some parts are not responding. Reports and alerts may be delayed."
-      : worst === 2
-        ? "Some parts are slow. The system still works."
-        : counts && counts.unknown > 0
-          ? `${counts.unknown} ${counts.unknown === 1 ? "service has" : "services have"} no recent end-to-end proof.`
-        : counts && counts.not_configured > 0
-          ? `${counts.not_configured} ${counts.not_configured === 1 ? "service is" : "services are"} not configured.`
-          : "Every operational check passed."
-
-  const firstWindow = status?.groups[0] ? slice(status.groups[0].history) : undefined
-
-  function toggleGroup(title: string) {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(title)) next.delete(title)
-      else next.add(title)
-      return next
-    })
+  function toggleMod(key: string) {
+    setExpandedMod((current) => (current === key ? null : key))
   }
 
   async function runChecks() {
@@ -552,174 +557,124 @@ export function ServiceStatusSection({ initialOpen, embedded = false }: { initia
       <SheetDialog
         open={open}
         onClose={() => setOpen(false)}
-        title="System status"
-        description="Records, messaging, ID checks and map services"
+        onBack={() => setOpen(false)}
+        showClose={false}
+        title={<>System <span className="text-brand-orange">status</span></>}
+        titleClassName="text-center"
         size="wide"
         draggable
         bodyScrollable={false}
-        className="h-[min(720px,92dvh)]"
-        bodyClassName="px-5 sm:px-7"
+        className="h-auto max-h-[min(720px,92dvh)]"
+        bodyClassName="px-5 sm:px-7 pb-0"
       >
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-neutral-200 py-5">
-              <div className="flex items-center gap-3">
-                <StatusMark severity={error ? 1 : worst} className="size-6" />
-                <div>
-                  <p className="text-section font-normal text-brand-navy">{headline}</p>
-                  <p className="mt-1 text-meta text-neutral-500">
-                    {subline} {checkedLabel(status?.checked_at)}
+                  <div className="space-y-4">
+                <ConfigurationListToolbar
+                  search={search}
+                  onSearch={(value) => { setSearch(value); setOffset(0) }}
+                  placeholder="Search services"
+                  filters={statusFilters}
+                  activeFilter={statusFilter}
+                  onFilter={(value) => { setStatusFilter(value); setOffset(0) }}
+                  trailing={
+                    <button
+                      type="button"
+                      onClick={() => void runChecks()}
+                      disabled={checking}
+                      aria-label="Run checks"
+                      title="Run checks"
+                      className="flex size-12 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-700 transition-colors hover:bg-neutral-200 disabled:opacity-60"
+                    >
+                      <RefreshCwIcon className={cn("size-5", checking && "animate-spin")} aria-hidden="true" />
+                    </button>
+                  }
+                />
+                {error ? (
+                  <p className="py-8 text-meta text-neutral-500">
+                    The status check did not answer. Nothing is known about the services right now.
                   </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={() => void runChecks()}
-                  disabled={checking}
-                  className="text-meta font-normal text-neutral-500 transition-colors hover:text-accent disabled:cursor-wait disabled:opacity-50"
-                >
-                  {checking ? "Checking…" : "Run checks"}
-                </button>
-              {firstWindow && firstWindow.length > 0 && (
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setOffset((o) => Math.min(maxOffset, o + 1))}
-                    disabled={offset >= maxOffset}
-                    aria-label="Earlier days"
-                    className={cn(
-                      "rounded-md p-1 transition-colors",
-                      offset < maxOffset
-                        ? "text-neutral-500 hover:bg-neutral-100 hover:text-foreground"
-                        : "text-neutral-300",
-                    )}
-                  >
-                    <svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <path d="M10 3L5 8l5 5" />
-                    </svg>
-                  </button>
-                  <span className="text-meta text-neutral-500 tabular-nums">{windowLabel(firstWindow)}</span>
-                  <button
-                    type="button"
-                    onClick={() => setOffset((o) => Math.max(0, o - 1))}
-                    disabled={offset === 0}
-                    aria-label="Later days"
-                    className={cn(
-                      "rounded-md p-1 transition-colors",
-                      offset > 0
-                        ? "text-neutral-500 hover:bg-neutral-100 hover:text-foreground"
-                        : "text-neutral-300",
-                    )}
-                  >
-                    <svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <path d="M6 3l5 5-5 5" />
-                    </svg>
-                  </button>
-                </div>
-              )}
-              </div>
-            </div>
-
-            {error ? (
-                <p className="py-8 text-meta text-neutral-500">
-                The status check did not answer. Nothing is known about the services right now.
-              </p>
-            ) : !status ? (
-              <p className="py-8 text-meta text-neutral-500">Checking every service…</p>
-            ) : status.groups.length === 0 ? (
-              <p className="py-8 text-meta text-neutral-500">There are no services to show.</p>
-            ) : (
-              <div className="divide-y divide-neutral-200">
-                {status.groups.map((group) => {
-                  const expanded = expandedGroups.has(group.title)
-                  const days = slice(group.history)
-                  const measured = days.some((d) => d.checks_total > 0)
-                  const operationalNow = group.modules.filter((mod) => mod.status === "operational").length
-                  const groupStatus = groupStatusWord(group)
-                  const completeHistory = group.modules.every((mod) => mod.availability.measured_checks > 0)
-                  return (
-                    <div key={group.title} className="py-5">
-                      <button
-                        type="button"
-                        onClick={() => toggleGroup(group.title)}
-                        className="group flex w-full items-center gap-3 text-left"
-                      >
-                        {/* Once open, each service states its own condition —
-                            a summary mark on top of them only repeats it. */}
-                        {!expanded && <StatusMark severity={group.worst} />}
-                        <span className="text-row font-normal text-brand-navy transition-colors group-hover:text-accent">
-                          {group.title}
-                        </span>
-                        <span className="text-meta text-neutral-400">
-                          {group.modules.length} {group.modules.length === 1 ? "service" : "services"}
-                        </span>
-                        <span className="ml-auto flex shrink-0 items-center gap-3">
-                          <span className="text-meta text-neutral-500 tabular-nums">
-                            {operationalNow}/{group.modules.length} operational · {completeHistory ? availabilityLabel(group.availability) : "Not enough history"}
-                          </span>
-                          {groupStatus && (
-                            <span className="text-meta font-normal text-foreground transition-colors group-hover:text-accent">
-                              {groupStatus}
-                            </span>
-                          )}
-                          <ChevronRightIcon
-                            className={cn(
-                              "size-5 shrink-0 text-neutral-400 transition-colors duration-200 group-hover:text-accent",
-                              expanded && "rotate-90",
-                            )}
-                            strokeWidth={1.7}
-                            aria-hidden
-                          />
-                        </span>
-                      </button>
-
-                      {days.length > 0 && <StatusBar days={days} className="mt-3" />}
-                      {!measured && (
-                        <p className="mt-2 text-meta text-neutral-400">
-                          No history for these days yet. It builds up as the system runs.
-                        </p>
-                      )}
-
-                      {expanded && (
-                        <div className="mt-5 space-y-5 border-t border-neutral-200 pt-5">
-                          {group.modules.map((mod) => {
-                            const modDays = slice(mod.history)
-                            return (
-                              <div key={mod.key}>
-                                <div className="flex items-center gap-2.5">
-                                  <StatusMark severity={severityOf(mod.status)} />
-                                  <span className="text-row font-normal text-foreground transition-colors group-hover:text-accent">{mod.label}</span>
-                                  <span
-                                    className={cn(
-                                      "min-w-0 truncate text-meta leading-snug",
-                                      mod.message
-                                        ? MESSAGE_TONE[severityOf(mod.status)]
-                                        : "text-neutral-400",
-                                    )}
-                                  >
+                ) : !status ? (
+                  <p className="py-8 text-meta text-neutral-500">Checking every service…</p>
+                ) : filteredModules.length === 0 ? (
+                  <div className="py-16 text-center">
+                    <ActivityIcon className="mx-auto size-7 text-neutral-300" aria-hidden />
+                    <h2 className="mt-4 text-row font-semibold text-brand-navy">
+                      {search.trim() || statusFilter !== "all"
+                        ? "No services match this view"
+                        : "There are no services to show"}
+                    </h2>
+                  </div>
+                ) : (
+                  <>
+                    <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white divide-y divide-neutral-100">
+                      {modulePage.map((mod) => {
+                        const key = `${mod.groupTitle}|${mod.key}`
+                        const expanded = expandedMod === key
+                        const modDays = slice(mod.history)
+                        const active = mod.status === "operational"
+                        return (
+                          <div key={key}>
+                            <button
+                              type="button"
+                              onClick={() => toggleMod(key)}
+                              className="group flex w-full items-center gap-3 p-4 text-left"
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className="block break-words text-[15px] leading-snug font-bold text-neutral-900">
+                                  {mod.label}
+                                </span>
+                                <span className="mt-1 block break-words text-[13px] text-neutral-500">
+                                  {mod.groupTitle}
+                                </span>
+                              </span>
+                              <span className={cn(
+                                "shrink-0 text-[13px] font-semibold",
+                                active
+                                  ? "text-emerald-700"
+                                  : mod.status === "down"
+                                    ? "text-sos"
+                                    : mod.status === "degraded"
+                                      ? "text-severity-moderate"
+                                      : "text-neutral-500",
+                              )}>
+                                {active ? "Active" : (STATUS_WORD[mod.status] ?? mod.status)}
+                              </span>
+                              <ChevronRightIcon
+                                className={cn(
+                                  "size-5 shrink-0 text-neutral-400 transition-all duration-200 group-hover:text-neutral-700",
+                                  expanded && "rotate-90",
+                                )}
+                                strokeWidth={1.9}
+                                aria-hidden
+                              />
+                            </button>
+                            {expanded && (
+                              <div className="max-h-[220px] overflow-y-auto px-4 pb-4">
+                                {mod.message || mod.description ? (
+                                  <p className="mb-2 break-words text-[13px] leading-relaxed text-neutral-600">
                                     {mod.message || mod.description}
-                                  </span>
-                                  <span className="ml-auto flex shrink-0 items-center gap-3">
-                                    {STATUS_WORD[mod.status] && (
-                                      <span className="text-meta font-normal text-foreground transition-colors group-hover:text-accent">
-                                        {STATUS_WORD[mod.status]}
-                                      </span>
-                                    )}
-                                    <span className="text-meta text-neutral-500 tabular-nums">
-                                      {availabilityLabel(mod.availability)}
-                                    </span>
-                                  </span>
-                                </div>
-                                {modDays.length > 0 && <StatusBar days={modDays} className="mt-2.5" />}
+                                  </p>
+                                ) : null}
+                                <p className="mb-2 text-[12px] tabular-nums text-neutral-500">
+                                  {availabilityLabel(mod.availability)}
+                                </p>
+                                {modDays.length > 0 ? (
+                                  <StatusBar days={modDays} />
+                                ) : (
+                                  <p className="text-[12px] text-neutral-400">
+                                    No history for this service yet. It builds up as the system runs.
+                                  </p>
+                                )}
                               </div>
-                            )
-                          })}
-                        </div>
-                      )}
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
-                  )
-                })}
+                    <ConfigurationPager key={offset} offset={offset} total={filteredModules.length} onChange={setOffset} noun="services" className="py-0" inline />
+                  </>
+                )
+                }
               </div>
-            )}
           </SheetDialog>
       <AuditLogSheet open={auditOpen} onClose={() => setAuditOpen(false)} />
     </PageSection>

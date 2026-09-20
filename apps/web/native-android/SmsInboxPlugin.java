@@ -9,21 +9,33 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.telephony.SmsManager;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import com.google.android.gms.auth.api.phone.SmsRetriever;
 import com.google.android.gms.auth.api.phone.SmsRetrieverClient;
 import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.Status;
 
-@CapacitorPlugin(name = "SmsInbox", requestCodes = { SmsInboxPlugin.CONSENT_REQUEST })
+@CapacitorPlugin(
+    name = "SmsInbox",
+    requestCodes = { SmsInboxPlugin.CONSENT_REQUEST },
+    permissions = {
+        @Permission(alias = SmsInboxPlugin.SMS_ALIAS, strings = { android.Manifest.permission.SEND_SMS })
+    }
+)
 public class SmsInboxPlugin extends Plugin {
     static final int CONSENT_REQUEST = 9021;
+    static final String SMS_ALIAS = "smsSend";
+    private static final int MAX_SEND_PARTS = 5;
     private static final long SAFETY_TIMEOUT_MS = 6 * 60 * 1000L;
 
     private PluginCall pendingCall;
@@ -31,6 +43,68 @@ public class SmsInboxPlugin extends Plugin {
     private BroadcastReceiver consentReceiver;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable safetyTimeout;
+    private PluginCall pendingSendCall;
+
+    @PluginMethod
+    public void sendSms(PluginCall call) {
+        String to = call.getString("to", "");
+        String body = call.getString("body", "");
+        if (to == null || !to.matches("\\+?\\d{7,15}")) {
+            call.reject("Recipient number is invalid.");
+            return;
+        }
+        if (body == null || body.trim().isEmpty()) {
+            call.reject("Message body is empty.");
+            return;
+        }
+        if (pendingSendCall != null) {
+            call.reject("Another SMS send is already running.");
+            return;
+        }
+        if (getPermissionState(SMS_ALIAS) != PermissionState.GRANTED) {
+            pendingSendCall = call;
+            requestPermissionForAlias(SMS_ALIAS, call, "smsPermissionCallback");
+            return;
+        }
+        transmit(call);
+    }
+
+    @PermissionCallback
+    private void smsPermissionCallback(PluginCall call) {
+        PluginCall pending = pendingSendCall;
+        pendingSendCall = null;
+        if (pending == null) return;
+        if (getPermissionState(SMS_ALIAS) == PermissionState.GRANTED) {
+            transmit(pending);
+        } else {
+            pending.reject("SMS permission was denied.");
+        }
+    }
+
+    private void transmit(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null || activity.isFinishing()) {
+            call.reject("The app is not ready to send SMS.");
+            return;
+        }
+        String to = call.getString("to", "");
+        String body = call.getString("body", "");
+        try {
+            SmsManager sms = activity.getSystemService(SmsManager.class);
+            if (sms == null) sms = SmsManager.getDefault();
+            java.util.ArrayList<String> parts = sms.divideMessage(body);
+            if (parts == null || parts.isEmpty() || parts.size() > MAX_SEND_PARTS) {
+                call.reject("Message is too long for SMS.");
+                return;
+            }
+            sms.sendMultipartTextMessage(to, null, parts, null, null);
+            JSObject result = new JSObject();
+            result.put("parts", parts.size());
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("SMS could not be sent.");
+        }
+    }
 
     @PluginMethod
     public void requestSmsUpdate(PluginCall call) {

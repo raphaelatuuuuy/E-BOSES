@@ -8,7 +8,11 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import ResidentProfile
 from apps.concerns.test_helpers import active_test_community
 from apps.concerns.units import sync_responder_designation
-from apps.emergencies.models import EmergencyAlert, ResponderShift
+from apps.emergencies.models import (
+    EmergencyAlert,
+    EmergencyChatMessage,
+    ResponderShift,
+)
 from apps.sms.models import InboundSmsMessage, OutboundSmsMessage
 
 
@@ -114,13 +118,21 @@ class SmsInboundTests(APITestCase):
         self.assertEqual(EmergencyAlert.objects.count(), 1)
         self.assertEqual(OutboundSmsMessage.objects.count(), outbound_count)
 
-    def test_second_active_emergency_is_suppressed_without_status_chatter(self):
+    def test_second_active_emergency_sends_only_the_ongoing_warning(self):
         self.post(WIZARD_MESSAGE, id="first-message")
         outbound_count = OutboundSmsMessage.objects.count()
-        response = self.post(WIZARD_MESSAGE.replace("Fire", "Flood"), id="second-message")
+        chat_count = EmergencyChatMessage.objects.count()
+        second_body = WIZARD_MESSAGE.replace("Fire", "Flood")
+        response = self.post(second_body, id="second-message")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(EmergencyAlert.objects.count(), 1)
-        self.assertEqual(OutboundSmsMessage.objects.count(), outbound_count)
+        # Exactly one extra message: the duplicate warning.
+        new_messages = list(OutboundSmsMessage.objects.order_by("id")[outbound_count:])
+        self.assertEqual(len(new_messages), 1)
+        self.assertEqual(new_messages[0].body, "You already have an ongoing SOS emergency.")
+        # The repeated SOS is never shown in the active chat.
+        self.assertEqual(EmergencyChatMessage.objects.count(), chat_count)
+        self.assertFalse(EmergencyChatMessage.objects.filter(body=second_body).exists())
 
     def test_retired_commands_and_unknown_text_send_no_reply(self):
         for index, body in enumerate(("STATUS", "SAFE", "CANCEL", "GUIDE", "ACCEPT", "DECLINE", "HELPP FIER")):

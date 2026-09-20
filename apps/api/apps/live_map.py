@@ -599,7 +599,11 @@ def emergency_payload(alert):
     active = alert.status in _emergency_active_statuses()
     assignments = list(alert.assignments.filter(
         status__in=["assigned", "acknowledged", "en_route", "arrived", "assisting"]
-    ).select_related("responder", "responder__resident_profile").order_by("assigned_at", "id"))
+    ).select_related(
+        "responder",
+        "responder__resident_profile",
+        "role_map__department",
+    ).order_by("assigned_at", "id"))
     assignment_payloads = [
         {
             "id": assignment.pk,
@@ -611,6 +615,36 @@ def emergency_payload(alert):
     ]
     media = list(alert.media.all()) if hasattr(alert, "media") else []
     from apps.emergencies.description import fallback_description
+    from apps.emergencies.views import preferred_departments_for
+    from apps.concerns.units import department_for_responder_unit
+
+    assigned_departments = []
+    for assignment in assignments:
+        department = getattr(getattr(assignment, "role_map", None), "department", None)
+        if department is None:
+            department = department_for_responder_unit(
+                getattr(assignment.responder, "responder_unit", ""),
+                getattr(alert, "community", None),
+            )
+        if department is not None and department not in assigned_departments:
+            assigned_departments.append(department)
+
+    configured_departments = list(
+        preferred_departments_for(alert.type, getattr(alert, "community", None))
+    )
+    all_departments = []
+    for department in [*assigned_departments, *configured_departments]:
+        if department is not None and department not in all_departments:
+            all_departments.append(department)
+
+    def unit_payload(department):
+        return {
+            "id": department.pk,
+            "code": department.code,
+            "name": department.name,
+            "short_name": department.short_name or department.name,
+        }
+
     ai_assist = alert.ai_assist or {}
     display_description = str(ai_assist.get("description") or "").strip()[:320] or fallback_description(alert)
     return {
@@ -635,12 +669,62 @@ def emergency_payload(alert):
         "latitude": decimal_string(alert.latitude),
         "longitude": decimal_string(alert.longitude),
         "reporter": person_payload(alert.reporter),
+        # `assigned_unit` is the actual active assignment. `units` also carries
+        # configured fallback units so an unassigned SOS remains visible in the
+        # correct unit queue and on the live-map unit filter.
+        "assigned_unit": unit_payload(assigned_departments[0]) if assigned_departments else None,
+        "units": [unit_payload(department) for department in all_departments],
         "active_assignments": assignment_payloads,
         "current_assignment": assignment_payloads[0] if assignment_payloads else None,
         "created_at": alert.created_at,
         "updated_at": alert.updated_at,
         "resolved_at": alert.resolved_at,
     }
+
+
+UNASSIGNED_UNIT_FILTER = "unassigned"
+
+
+def _scope_live_map_emergencies(queryset, *, unit_id=None, community=None):
+    """Apply the official SOS map's unit rule to an emergency queryset.
+
+    An SOS belongs to a unit when an *active* assignment answers to it, or when
+    the SOS is still unassigned and that unit is configured for its type. The
+    two conditions are built as separate querysets and OR-ed so a multi-valued
+    join can never accidentally match an assignment from a different unit.
+    """
+    if unit_id is None:
+        return queryset
+
+    active_assignment = models.Q(assignments__status__in=ACTIVE_ASSIGNMENT_STATUSES)
+    if unit_id == UNASSIGNED_UNIT_FILTER:
+        return queryset.exclude(active_assignment)
+
+    from apps.emergencies.views import preferred_departments_for
+
+    unit_types = {
+        emergency_type
+        for emergency_type, _label in EmergencyAlert.Type.choices
+        if any(
+            department.pk == unit_id
+            for department in preferred_departments_for(emergency_type, community)
+        )
+    }
+
+    assigned_to_unit = queryset.filter(
+        active_assignment,
+        models.Q(assignments__role_map__department_id=unit_id)
+        | models.Q(
+            assignments__responder__designations__department_id=unit_id,
+            assignments__responder__designations__is_active=True,
+        ),
+    )
+    unassigned_for_unit = (
+        queryset.filter(type__in=unit_types).exclude(active_assignment)
+        if unit_types
+        else queryset.none()
+    )
+    return (assigned_to_unit | unassigned_for_unit).distinct()
 
 
 def _osrm_route(*, origin_lat, origin_lng, dest_lat, dest_lng, profile="car", cache_key, refresh=False):
@@ -955,7 +1039,7 @@ def advisory_payload(announcement, street_index):
     }
 
 
-def live_map_snapshot(request=None):
+def live_map_snapshot(request=None, *, unit_id=None):
     from apps.geo_services import dispatch_policy_payload
 
     from apps.community_scope import community_ids_for_user, department_ids_for_user, scope_emergency_queryset, selected_community
@@ -976,6 +1060,19 @@ def live_map_snapshot(request=None):
 
         department_ids &= set(Department.objects.filter(community=community).values_list("id", flat=True))
     static_map = static_map_payload(community)
+    from apps.concerns.models import Department
+    from apps.dashboard_views import official_unit_payload
+
+    # The SOS map's unit filter offers every active unit in the community the
+    # official is currently scoped to, so triage can span units without the
+    # client having to guess which units exist.
+    filter_units = [
+        official_unit_payload(unit)
+        for unit in Department.objects.filter(
+            community_id__in=community_ids,
+            is_active=True,
+        ).order_by("sort_order", "name")
+    ]
     people = [
         person_payload(user)
         for user in User.objects.filter(
@@ -1046,12 +1143,16 @@ def live_map_snapshot(request=None):
     if is_responder:
         emergency_scope = emergency_scope.filter(assignments__responder=user).distinct()
     alerts = list(
-        emergency_scope.filter(
+        _scope_live_map_emergencies(
+            emergency_scope.filter(
             models.Q(status__in=EMERGENCY_ACTIVE)
             | models.Q(
                 status__in={"resolved", "closed", "cancelled", "false_alarm"},
                 updated_at__gte=recently_settled_cutoff,
             )
+            ),
+            unit_id=unit_id,
+            community=community,
         )
         .select_related("reporter", "reporter__resident_profile")
         .prefetch_related("assignments__responder", "assignments__responder__resident_profile", "assignments__location_pings", "media")
@@ -1063,6 +1164,11 @@ def live_map_snapshot(request=None):
     )
     if is_responder:
         active_emergency_scope = active_emergency_scope.filter(assignments__responder=user).distinct()
+    active_emergency_scope = _scope_live_map_emergencies(
+        active_emergency_scope,
+        unit_id=unit_id,
+        community=community,
+    )
     active_emergency_count = active_emergency_scope.count()
 
     from apps.concerns.announcement_services import announcement_is_active
@@ -1087,6 +1193,7 @@ def live_map_snapshot(request=None):
     return {
         "home_community_id": str(community.public_id) if community else None,
         "communities": public_snapshot["communities"],
+        "units": filter_units,
         "map": {
             "provider": "OpenStreetMap",
             "center": {
@@ -1173,7 +1280,26 @@ class OfficialLiveMapView(APIView):
         touch_last_seen(request.user)
         if not (is_official(request.user) or request.user.role == request.user.Role.FIRST_RESPONDER):
             return Response({"detail": "You do not have permission to view the staff live map."}, status=status.HTTP_403_FORBIDDEN)
-        return Response(live_map_snapshot(request=request))
+
+        raw_unit_id = (request.query_params.get("unit_id") or "").strip().lower()
+        unit_id = None
+        if raw_unit_id and raw_unit_id not in {"all", "none"}:
+            if raw_unit_id == UNASSIGNED_UNIT_FILTER:
+                unit_id = UNASSIGNED_UNIT_FILTER
+            else:
+                try:
+                    unit_id = int(raw_unit_id)
+                except ValueError:
+                    return Response({"detail": "unit_id must be a valid unit id, all, or unassigned."}, status=status.HTTP_400_BAD_REQUEST)
+
+                from apps.community_scope import community_ids_for_user
+                from apps.concerns.models import Department
+
+                allowed = Department.objects.filter(pk=unit_id, is_active=True, community_id__in=community_ids_for_user(request.user)).exists()
+                if not allowed:
+                    return Response({"detail": "You do not have access to that unit."}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response(live_map_snapshot(request=request, unit_id=unit_id))
 
 
 def public_reporter_payload(user):
