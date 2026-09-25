@@ -116,6 +116,23 @@ def non_gsm7_characters(body: str) -> list[str]:
 # Drivers
 # ---------------------------------------------------------------------------
 
+def resolve_sim_slot() -> int:
+    """SIM slot the handset should send from.
+
+    ``SMS_GATE_SIM_NUMBER`` is what the operator copies out of the SMSGate app,
+    so it wins over the older ``OUTBOUND_SMS_SIM_SLOT``. Both are strings by the
+    time they reach here, so anything non-numeric is ignored with a warning
+    rather than shipped to the gateway as a slot it cannot resolve.
+    """
+    for name in ("SMS_GATE_SIM_NUMBER", "OUTBOUND_SMS_SIM_SLOT"):
+        text = str(getattr(settings, name, "") or "").strip()
+        if text.isdigit() and int(text) > 0:
+            return int(text)
+        if text:
+            logger.warning("%s=%r is not a usable SIM slot; ignoring it.", name, text)
+    return 1
+
+
 class BaseSmsDriver:
     name = "base"
 
@@ -193,7 +210,7 @@ class HttpJsonSmsDriver(BaseSmsDriver):
         values = {
             "{to}": destination,
             "{body}": body,
-            "{sim_slot}": 1,
+            "{sim_slot}": resolve_sim_slot(),
             "{timestamp}": int(time.time() * 1000),
             "{from}": getattr(settings, "SMS_GATEWAY_NUMBER", "") or "",
         }
@@ -286,10 +303,53 @@ class HttpJsonSmsDriver(BaseSmsDriver):
             return None
         if not isinstance(data, dict):
             return None
+        provider_message_id = self._find_message_id(data)
+        provider_state = self._find_state(data)
+        if not provider_message_id:
+            logger.warning(
+                "parse_receipt: no message id found in 202 response. Keys present: %s",
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+            )
         return {
-            "provider_message_id": str(data.get("id") or "")[:64],
-            "provider_state": str(data.get("state") or "")[:24],
+            "provider_message_id": str(provider_message_id)[:64],
+            "provider_state": str(provider_state)[:24],
         }
+
+    @staticmethod
+    def _find_message_id(data: dict) -> str:
+        id_keys = (
+            "id", "messageId", "message_id", "gatewayMessageId",
+            "gateway_message_id", "msgId", "msg_id", "smsId", "sms_id",
+            "messageid",
+        )
+        for key in id_keys:
+            value = data.get(key)
+            if value and str(value).strip():
+                return str(value)
+        for nested_key in ("data", "message", "response", "result", "payload"):
+            nested = data.get(nested_key)
+            if isinstance(nested, dict):
+                for key in id_keys:
+                    value = nested.get(key)
+                    if value and str(value).strip():
+                        return str(value)
+        return ""
+
+    @staticmethod
+    def _find_state(data: dict) -> str:
+        state_keys = ("state", "status", "provider_state")
+        for key in state_keys:
+            value = data.get(key)
+            if value and str(value).strip():
+                return str(value)
+        for nested_key in ("data", "message", "response", "result", "payload"):
+            nested = data.get(nested_key)
+            if isinstance(nested, dict):
+                for key in state_keys:
+                    value = nested.get(key)
+                    if value and str(value).strip():
+                        return str(value)
+        return ""
 
 
 class SmsForwarderDriver(HttpJsonSmsDriver):
@@ -320,6 +380,9 @@ class AndroidSmsGatewayDriver(HttpJsonSmsDriver):
     to the bare cloud host returns 301, which is why the path matters.
     """
 
+    # `simNumber` is a JSON number in the SMSGate API (1-3), and
+    # `withDeliveryReport` is what makes the handset post the sms:delivered
+    # webhook the app records as a real delivery receipt.
     name = "android_sms_gateway"
     default_template = (
         '{"textMessage":{"text":"{body}"},"phoneNumbers":["{to}"],'

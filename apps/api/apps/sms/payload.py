@@ -46,7 +46,10 @@ TIMESTAMP_KEYS = (
 # Prefer the message's nested messageId over the webhook delivery envelope's
 # own id. SMSGate uses both in the same payload and delivery reconciliation
 # must match the former to the id returned by the send API.
-MESSAGE_ID_KEYS = ("message_id", "messageid", "msg_id", "sms_id", "uuid", "id")
+MESSAGE_ID_KEYS = (
+    "messageid", "message_id", "msgid", "msg_id", "smsid", "sms_id",
+    "gatewaymessageid", "gateway_message_id", "uuid", "id",
+)
 
 # Gateways that wrap the message in an envelope. android-sms-gateway sends
 # {"event": "sms:received", "deviceId": ..., "payload": {"message": ...,
@@ -205,18 +208,24 @@ class InboundPayload:
 
 def extract_inbound(request) -> InboundPayload:
     merged = _merge_sources(request)
-    # Drop the auth token if the operator put it in the query string, so it is
-    # never written into the stored raw payload.
+    return inbound_payload_from_dict(merged)
+
+
+def inbound_payload_from_dict(data: dict) -> InboundPayload:
+    """Construct an InboundPayload from a flat dict of string key-value pairs.
+
+    Safe for Celery tasks where no request object is available.
+    """
     safe_raw = {
         key: value
-        for key, value in merged.items()
+        for key, value in data.items()
         if "token" not in str(key).lower() and "secret" not in str(key).lower()
     }
     return InboundPayload(
-        body=_first(merged, BODY_KEYS),
-        sender=_first(merged, SENDER_KEYS),
-        gateway_timestamp=_parse_timestamp(_first(merged, TIMESTAMP_KEYS)),
-        gateway_message_id=_first(merged, MESSAGE_ID_KEYS)[:120],
+        body=_first(data, BODY_KEYS),
+        sender=_first(data, SENDER_KEYS),
+        gateway_timestamp=_parse_timestamp(_first(data, TIMESTAMP_KEYS)),
+        gateway_message_id=(_first(data, MESSAGE_ID_KEYS) or "")[:120],
         raw=safe_raw,
-        event=_first(merged, ("event", "type", "event_type")),
+        event=_first(data, ("event", "type", "event_type")),
     )

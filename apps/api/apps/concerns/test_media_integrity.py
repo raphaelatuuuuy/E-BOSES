@@ -18,10 +18,11 @@ from io import BytesIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, TransactionTestCase
 from PIL import Image, ImageDraw
+
+from apps.accounts.models import AuditLog
 
 from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.gemma_analyzer import (
@@ -188,7 +189,7 @@ class ConcernIntegrityActionTests(TransactionTestCase):
     """Each configured action, and what the resident and the queue end up with."""
 
     def setUp(self):
-        cache.delete(ConcernClassificationConfiguration.CLASSIFICATION_CONFIG_CACHE_KEY)
+        ConcernClassificationConfiguration.clear_cached()
         self.resident = User.objects.create_user(
             email="integrity-resident@example.com",
             phone_number="+639181112221",
@@ -308,6 +309,7 @@ class ConcernIntegrityActionTests(TransactionTestCase):
         concern = self._concern_with_photo()
         uncertain = gemma_result(
             category=Concern.Category.ENVIRONMENT,
+            evidence_relationship="supports_report",
             image_review_succeeded=True,
             ai_result_uncertain=True,
             media_integrity=[integrity_finding()],
@@ -347,7 +349,7 @@ class DecisionLogTests(TransactionTestCase):
         # The singleton config is cached for 60 seconds and the cache is not
         # per-test, so a config another test saved would otherwise decide this
         # one's outcome.
-        cache.delete(ConcernClassificationConfiguration.CLASSIFICATION_CONFIG_CACHE_KEY)
+        ConcernClassificationConfiguration.clear_cached()
         self.resident = User.objects.create_user(
             email="log-resident@example.com",
             phone_number="+639181114441",
@@ -422,6 +424,29 @@ class DecisionLogTests(TransactionTestCase):
             {Concern.ValidationStatus.ACCEPTED, Concern.ValidationStatus.PENDING},
         )
 
+    def test_audit_log_is_written_for_concern_ai_decision(self):
+        concern = self._run()
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="concern.ai_decided",
+                target_user=concern.reporter,
+            ).exists(),
+            "Expected an AuditLog entry for the concern AI decision.",
+        )
+        entry = AuditLog.objects.get(action="concern.ai_decided", target_user=concern.reporter)
+        self.assertEqual(entry.actor, None)
+        self.assertEqual(entry.metadata["concern_id"], concern.pk)
+        self.assertIn(entry.metadata["decision"], ["accepted", "held", "rejected", "pending", ""])
+        self.assertEqual(entry.metadata["concern_title"], concern.title)
+        self.assertEqual(entry.metadata["model_version"], "gemma4:cloud")
+
+    def test_audit_log_has_reason_in_metadata(self):
+        concern = self._run()
+        entry = AuditLog.objects.get(action="concern.ai_decided", target_user=concern.reporter)
+        self.assertIn("reason", entry.metadata)
+        self.assertIn("decision", entry.metadata)
+        self.assertIn("concern_title", entry.metadata)
+
 
 class ConfigApiTests(TestCase):
     """The Report checking screen must actually reach the pipeline's config."""
@@ -429,7 +454,7 @@ class ConfigApiTests(TestCase):
     def setUp(self):
         from rest_framework.test import APIClient
 
-        cache.delete(ConcernClassificationConfiguration.CLASSIFICATION_CONFIG_CACHE_KEY)
+        ConcernClassificationConfiguration.clear_cached()
         self.official = User.objects.create_user(
             email="config-official@example.com",
             phone_number="+639181115551",
@@ -486,7 +511,7 @@ class TesterPreviewTests(TestCase):
     """The official tester must run the real check, not a description of it."""
 
     def setUp(self):
-        cache.delete(ConcernClassificationConfiguration.CLASSIFICATION_CONFIG_CACHE_KEY)
+        ConcernClassificationConfiguration.clear_cached()
         self.config = ConcernClassificationConfiguration.current_fresh()
 
     def _preview(self, details, images, **kwargs):

@@ -789,6 +789,10 @@ export default function LocationPickerModal({
 
       map.on("moveend", () => {
         if (ignoreMove.current || !map) return
+        // The center pin is the selected report location. Once the resident
+        // manually pans it, the old GPS marker is no longer a second selected
+        // location and must not remain on the map.
+        setGpsFix(null)
         const c = pinLatLng(map)
         scheduleReverseAndValidateRef.current(c.lat, c.lng)
       })
@@ -879,7 +883,7 @@ export default function LocationPickerModal({
     void import("leaflet").then((L) => {
       if (cancelled || youLayerRef.current !== group) return
       group.clearLayers()
-      if (!gpsFix) return
+      if (!gpsFix || sosStreetSearch) return
       const size = 12
       L.marker([gpsFix.lat, gpsFix.lng], {
         icon: L.divIcon({
@@ -895,7 +899,7 @@ export default function LocationPickerModal({
     return () => {
       cancelled = true
     }
-  }, [open, mapReady, gpsFix])
+  }, [open, mapReady, gpsFix, sosStreetSearch])
 
   function offlineSosCoverage(): CoverageInput {
     const config = loadOfflineSosConfig()
@@ -1302,6 +1306,7 @@ export default function LocationPickerModal({
       const map = mapRef.current
       if (!map) return
       ignoreMove.current = true
+      setGpsFix(null)
       const target = zoom ?? map.getZoom()
       map.setView(pinAdjustedCenter(map, lat, lng, target), target)
       setPreviewLatLng({ lat, lng })

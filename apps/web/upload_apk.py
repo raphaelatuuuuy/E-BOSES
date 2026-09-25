@@ -33,6 +33,8 @@ GITHUB_TAG = "v1"
 
 NPM = "npm.cmd" if IS_WINDOWS else "npm"
 NPX = "npx.cmd" if IS_WINDOWS else "npx"
+GITHUB_CONNECT_TIMEOUT = 30
+GITHUB_TRANSFER_TIMEOUT = 180
 
 
 def run(cmd, cwd=None):
@@ -105,6 +107,45 @@ def file_hash(path, algorithm):
         return hashlib.file_digest(source, algorithm).hexdigest()
 
 
+def verify_github_asset(asset_id, expected_size, expected_sha256):
+    """Download the published release asset and verify its exact bytes."""
+    headers = github_headers()
+    asset_url = (
+        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+        f"/releases/assets/{asset_id}"
+    )
+    response = requests.get(
+        asset_url,
+        headers={**headers, "Accept": "application/octet-stream"},
+        stream=True,
+        timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Could not download uploaded GitHub asset for verification: "
+            f"{response.status_code} {response.text[:500]}"
+        )
+
+    byte_count = 0
+    digest = hashlib.sha256()
+    for chunk in response.iter_content(chunk_size=1024 * 1024):
+        if not chunk:
+            continue
+        byte_count += len(chunk)
+        digest.update(chunk)
+    actual_sha256 = digest.hexdigest()
+    if byte_count != expected_size or actual_sha256 != expected_sha256:
+        raise RuntimeError(
+            "GitHub APK byte verification failed: "
+            f"expected {expected_size} bytes/{expected_sha256}, "
+            f"received {byte_count} bytes/{actual_sha256}"
+        )
+    print(
+        f"Verified GitHub APK bytes: {byte_count} bytes, "
+        f"SHA-256 {actual_sha256}"
+    )
+
+
 def verify_native_web_assets():
     source_dir = WEB_DIR / "dist-native"
     missing = []
@@ -143,8 +184,11 @@ def verify_native_web_assets():
 def verify_native_sms_plugin():
     plugin = ANDROID_DIR / "app" / "src" / "main" / "java" / "com" / "eboses" / "app" / "SmsInboxPlugin.java"
     activity = ANDROID_DIR / "app" / "src" / "main" / "java" / "com" / "eboses" / "app" / "MainActivity.java"
-    if not plugin.is_file() or "void sendSms(PluginCall call)" not in plugin.read_text(encoding="utf-8"):
+    plugin_text = plugin.read_text(encoding="utf-8") if plugin.is_file() else ""
+    if "void sendSms(PluginCall call)" not in plugin_text:
         raise RuntimeError("SmsInboxPlugin.sendSms is missing from the Android project")
+    if "void openSms(PluginCall call)" not in plugin_text:
+        raise RuntimeError("SmsInboxPlugin.openSms is missing from the Android project")
     if not activity.is_file() or "registerPlugin(SmsInboxPlugin.class)" not in activity.read_text(encoding="utf-8"):
         raise RuntimeError("SmsInboxPlugin is not registered in MainActivity")
     print("Verified native SMS plugin registration and outbound SMS capability")
@@ -184,11 +228,22 @@ def upload_to_github_releases(apk_path):
     print("Step 4: Upload to GitHub Releases")
     print("=" * 60)
     headers = github_headers()
+    expected_size = apk_path.stat().st_size
+    expected_sha256 = file_hash(apk_path, "sha256")
+    with apk_path.open("rb") as source:
+        file_data = source.read()
+    if len(file_data) != expected_size:
+        raise RuntimeError(
+            f"APK changed while reading: stat={expected_size} bytes, "
+            f"read={len(file_data)} bytes"
+        )
+    print(f"Local APK: {expected_size} bytes, SHA-256 {expected_sha256}")
 
     release_id = None
     r = requests.get(
         f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tags/{GITHUB_TAG}",
         headers=headers,
+        timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
     )
     if r.status_code == 200:
         release = r.json()
@@ -200,6 +255,7 @@ def upload_to_github_releases(apk_path):
         r = requests.delete(
             f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/{release_id}",
             headers=headers,
+            timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
         )
         if r.status_code not in (204,):
             raise RuntimeError(f"Failed to delete release: {r.status_code} {r.text}")
@@ -215,6 +271,7 @@ def upload_to_github_releases(apk_path):
             "draft": False,
             "prerelease": False,
         },
+        timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
     )
     if r.status_code not in (201,):
         raise RuntimeError(f"Failed to create release: {r.status_code} {r.text}")
@@ -227,20 +284,35 @@ def upload_to_github_releases(apk_path):
     upload_url = re.sub(r"\{[^}]*\}", "", upload_url)
 
     print(f"Uploading {FILE_NAME}...")
-    with open(apk_path, "rb") as f:
-        file_data = f.read()
-
+    upload_headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(len(file_data)),
+    }
     r = requests.post(
-        upload_url,
-        params={"name": FILE_NAME},
-        headers={
-            "Authorization": f"Bearer {GITHUB_TOKEN}",
-        },
-        files={"file": (FILE_NAME, file_data, "application/octet-stream")},
+        upload_url + f"?name={FILE_NAME}",
+        headers=upload_headers,
+        data=file_data,
+        timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
     )
 
     if r.status_code not in (201, 202):
         raise RuntimeError(f"Upload failed: {r.status_code} {r.text[:500]}")
+
+    asset = r.json()
+    asset_id = asset.get("id")
+    if not asset_id:
+        raise RuntimeError("GitHub upload response did not contain an asset id")
+    if asset.get("size") is not None and int(asset["size"]) != expected_size:
+        raise RuntimeError(
+            f"GitHub reported {asset.get('size')} bytes, expected {expected_size}"
+        )
+    reported_digest = (asset.get("digest") or "").lower()
+    if reported_digest and reported_digest != f"sha256:{expected_sha256}":
+        raise RuntimeError(
+            f"GitHub reported digest {reported_digest}, expected sha256:{expected_sha256}"
+        )
+    verify_github_asset(asset_id, expected_size, expected_sha256)
 
     download_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/{GITHUB_TAG}/{FILE_NAME}"
     print(f"Uploaded: {download_url}")

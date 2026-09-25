@@ -1,4 +1,9 @@
-"""Acknowledgment timeout, backup, transfer and the unable-to-respond path."""
+"""Backup, transfer, travel and the declined-response path.
+
+The acknowledgement-timeout sweep was removed on purpose: an assignment that
+nobody answers stays with its responder instead of being silently handed to
+someone else. These tests pin the lifecycle that replaced it.
+"""
 
 import uuid
 from datetime import timedelta
@@ -116,13 +121,14 @@ class DispatchLifecycleTests(APITestCase):
 
     # -- routing configuration -------------------------------------------
 
-    def test_timeout_comes_from_the_routing_rule_not_a_global_constant(self):
-        from .views import acknowledgment_timeout_for
-
+    def test_every_routing_rule_carries_its_own_timeout(self):
+        # The automatic timeout sweep is gone, but the per-category timeout
+        # stays on the routing rule so operations keep one place to read how
+        # long a unit is expected to answer.
         alert, _ = self.alert_with_assignment()
-        rule = EmergencyTypeRoleMap.objects.filter(emergency_type="fire").first()
+        rule = EmergencyTypeRoleMap.objects.filter(emergency_type=alert.type, is_active=True).first()
         self.assertIsNotNone(rule)
-        self.assertEqual(acknowledgment_timeout_for(alert), rule.acknowledgment_timeout_seconds)
+        self.assertGreater(rule.acknowledgment_timeout_seconds, 0)
 
     def test_every_seeded_category_has_a_support_and_escalation_unit(self):
         for rule in EmergencyTypeRoleMap.objects.filter(emergency_type__in=["fire", "medical", "crime", "flood"]):
@@ -146,23 +152,20 @@ class DispatchLifecycleTests(APITestCase):
         self.alert_with_assignment(assigned_ago_seconds=5)
         self.assertEqual(escalate_overdue_assignments(), [])
 
-    def test_timeout_reassigns_to_the_next_responder(self):
+    def test_an_overdue_assignment_is_never_reassigned_behind_the_responders_back(self):
+        # Replacing the silent responder left residents with an alert nobody
+        # was coming to and responders with a queue that changed underneath
+        # them, so the sweep now leaves the assignment alone.
         alert, assignment = self.alert_with_assignment(assigned_ago_seconds=600)
 
-        escalations = escalate_overdue_assignments()
+        self.assertEqual(escalate_overdue_assignments(), [])
 
-        self.assertEqual(len(escalations), 1)
+        alert.refresh_from_db()
         assignment.refresh_from_db()
-        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ESCALATED)
-        self.assertTrue(
-            alert.assignments.filter(
-                responder=self.second, status=EmergencyResponderAssignment.Status.ASSIGNED
-            ).exists()
-        )
-        self.assertTrue(
-            alert.assignment_logs.filter(action="acknowledgment_timeout").exists()
-        )
-        self.assertTrue(alert.assignment_logs.filter(action="reassigned_after_timeout").exists())
+        self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
+        self.assertFalse(alert.escalations.exists())
+        self.assertFalse(alert.assignment_logs.filter(action="acknowledgment_timeout").exists())
 
     def test_timeout_with_nobody_left_keeps_the_responder_assigned(self):
         self.second.is_on_duty = False
@@ -175,7 +178,6 @@ class DispatchLifecycleTests(APITestCase):
         assignment.refresh_from_db()
         self.assertEqual(alert.status, EmergencyAlert.Status.ROUTED)
         self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
-        self.assertTrue(alert.assignment_logs.filter(action="acknowledgment_reminder").exists())
         self.assertFalse(alert.escalations.exists())
         self.assertIn(alert.status, __import__("apps.emergencies.views", fromlist=["x"]).ACTIVE_STATUSES)
 
@@ -249,7 +251,7 @@ class DispatchLifecycleTests(APITestCase):
         alert, assignment = self.alert_with_assignment(assigned_ago_seconds=600)
         escalate_overdue_assignments()
         self.assertTrue(alert.assignments.filter(pk=assignment.pk, responder=self.first).exists())
-        self.assertTrue(alert.escalations.filter(previous_assignment=assignment).exists())
+        self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
 
     # -- responder actions over HTTP -------------------------------------
 
@@ -257,7 +259,7 @@ class DispatchLifecycleTests(APITestCase):
         alert, _ = self.alert_with_assignment()
         self.client.force_authenticate(self.first)
 
-        response = self.client.post(f"/api/emergencies/{alert.pk}/respond/", {}, format="json")
+        response = self.client.post(f"/api/emergencies/{alert.pk}/en-route/", {}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         alert.refresh_from_db()
@@ -286,29 +288,44 @@ class DispatchLifecycleTests(APITestCase):
     def test_respond_is_refused_for_an_unassigned_responder(self):
         alert, _ = self.alert_with_assignment()
         self.client.force_authenticate(self.second)
-        response = self.client.post(f"/api/emergencies/{alert.pk}/respond/", {}, format="json")
+        response = self.client.post(f"/api/emergencies/{alert.pk}/en-route/", {}, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_unable_requires_a_reason(self):
-        alert, _ = self.alert_with_assignment()
+        alert, assignment = self.alert_with_assignment()
         self.client.force_authenticate(self.first)
-        response = self.client.post(f"/api/emergencies/{alert.pk}/unable/", {"reason": ""}, format="json")
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/assignments/{assignment.pk}/status/",
+            {"status": EmergencyResponderAssignment.Status.DECLINED, "note": ""},
+            format="json",
+        )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_unable_with_a_reason_assigns_the_next_responder(self):
+    def test_unable_with_a_reason_closes_the_assignment_without_a_replacement(self):
+        # Declining used to hand the incident to the next responder
+        # automatically. That hid a declined dispatch from the officials who
+        # needed to dispatch manually, so a decline now only closes the
+        # assignment and the alert returns to the routing queue.
         alert, assignment = self.alert_with_assignment()
         self.client.force_authenticate(self.first)
 
         response = self.client.post(
-            f"/api/emergencies/{alert.pk}/unable/",
-            {"reason": "Already at another incident"},
+            f"/api/emergencies/{alert.pk}/assignments/{assignment.pk}/status/",
+            {
+                "status": EmergencyResponderAssignment.Status.DECLINED,
+                "note": "Already at another incident",
+            },
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         assignment.refresh_from_db()
         self.assertEqual(assignment.status, EmergencyResponderAssignment.Status.DECLINED)
-        self.assertTrue(alert.assignments.filter(responder=self.second).exists())
+        self.assertFalse(
+            alert.assignments.exclude(pk=assignment.pk)
+            .filter(status__in=["assigned", "acknowledged", "en_route", "arrived"])
+            .exists()
+        )
 
     # -- backup ----------------------------------------------------------
 

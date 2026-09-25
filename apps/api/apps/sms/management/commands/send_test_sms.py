@@ -70,7 +70,7 @@ class Command(BaseCommand):
         message.save()
 
         try:
-            get_driver().send(number, body)
+            receipt = get_driver().send(number, body)
         except Exception as exc:
             message.status = OutboundSmsMessage.Status.FAILED
             message.last_error = f"{type(exc).__name__}: {exc}"[:255]
@@ -90,7 +90,12 @@ class Command(BaseCommand):
 
         message.status = OutboundSmsMessage.Status.SENT
         message.sent_at = timezone.now()
-        message.save(update_fields=["status", "sent_at"])
+        updated = ["status", "sent_at"]
+        if isinstance(receipt, dict):
+            message.provider_message_id = receipt.get("provider_message_id", "")
+            message.provider_state = receipt.get("provider_state", "")
+            updated += ["provider_message_id", "provider_state"]
+        message.save(update_fields=updated)
         self.stdout.write(self.style.SUCCESS(
             "\nSENT. Check the handset - if no text arrives, the gateway accepted "
             "the request but did not deliver it."

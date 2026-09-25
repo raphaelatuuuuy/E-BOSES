@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from apps.accounts.storage import PrivateMediaStorage, PublicMediaStorage
 
@@ -985,6 +986,84 @@ class EmergencyChatMessage(models.Model):
 
     def __str__(self):
         return f"Chat #{self.pk} on alert {self.alert_id}"
+
+
+class EmergencyChatReadState(models.Model):
+    """How far one participant has got through one alert's conversation.
+
+    A watermark per participant, not a row per message per reader. The question
+    the UI asks is "has everyone reached this message", and one integer per person
+    answers it for the whole thread at a fraction of the rows.
+
+    `delivered` means the device has the message; `read` means the thread was on
+    screen. Watermarks only ever move forward, so a receipt that arrives out of
+    order cannot un-tick a message that somebody already saw.
+    """
+
+    alert = models.ForeignKey(
+        EmergencyAlert,
+        on_delete=models.CASCADE,
+        related_name="chat_read_states",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="emergency_chat_read_states",
+    )
+    delivered_through_id = models.PositiveBigIntegerField(default=0)
+    read_through_id = models.PositiveBigIntegerField(default=0)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["alert", "user"],
+                name="unique_emergency_chat_read_state",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["alert", "user"], name="emerg_chat_read_alert_user"),
+        ]
+
+    def __str__(self):
+        return f"Read state on alert {self.alert_id} for user {self.user_id}"
+
+    def advance(self, *, through: int, state: str) -> bool:
+        """Move the watermark forward. Returns True when something changed."""
+        try:
+            through = int(through)
+        except (TypeError, ValueError):
+            return False
+        if through <= 0 or state not in {"delivered", "read"}:
+            return False
+
+        now = timezone.now()
+        updated: list[str] = []
+        if state == "read":
+            if through > self.read_through_id:
+                self.read_through_id = through
+                self.read_at = now
+                updated += ["read_through_id", "read_at"]
+            # Reading a message implies the device had it.
+            if through > self.delivered_through_id:
+                self.delivered_through_id = through
+                self.delivered_at = self.delivered_at or now
+                updated += ["delivered_through_id", "delivered_at"]
+        else:
+            # A delivery receipt must never overtake a read receipt: read is the
+            # stronger claim, and letting delivery win would jump ticks backwards.
+            target = max(through, self.read_through_id)
+            if target > self.delivered_through_id:
+                self.delivered_through_id = target
+                self.delivered_at = self.delivered_at or now
+                updated += ["delivered_through_id", "delivered_at"]
+
+        if not updated:
+            return False
+        self.save(update_fields=[*updated, "updated_at"])
+        return True
 
 
 class EmergencyChatAttachment(models.Model):

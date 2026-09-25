@@ -20,72 +20,14 @@ import {
   type NotificationItem,
 } from "@/features/dashboard/components/notification-context"
 import {
-  AuthenticatedMediaImage,
-  MediaLightbox,
-} from "@/features/dashboard/components/authenticated-media"
-import {
-  toMediaPreviewItem,
-  type MediaPreviewItem,
-} from "@/features/dashboard/lib/authenticated-media"
-import {
   notificationsPageFilter,
   openNotificationsPop,
 } from "@/features/dashboard/components/notifications/notifications-event"
-import { notificationIconFor, notificationActionLink } from "@/features/dashboard/components/notifications/notification-visuals"
+import { notificationIconFor } from "@/features/dashboard/components/notifications/notification-visuals"
 
 type NotificationView = "inbox" | "archived"
 const notificationViewEvent = "eboses:notification-view"
 const holdTimers = new WeakMap<HTMLElement, number>()
-
-function NotificationImage({
-  item,
-  onPreview,
-}: {
-  item: NotificationItem
-  onPreview: (items: MediaPreviewItem[]) => void
-}) {
-  const images = item.images?.length
-    ? item.images
-    : item.image_url
-      ? [
-          {
-            url: item.image_url,
-            filename: "Notification photo",
-            mime_type: "image",
-          },
-        ]
-      : []
-  if (!images.length) return null
-
-  const previewItems = images.map((image) =>
-    toMediaPreviewItem(image.url, image.filename, image.mime_type)
-  )
-
-  return (
-    <button
-      type="button"
-      aria-label={`Preview ${images.length === 1 ? "photo" : `${images.length} photos`}`}
-      onClick={(event) => {
-        event.stopPropagation()
-        onPreview(previewItems)
-      }}
-      onPointerDown={(event) => event.stopPropagation()}
-      className="group relative mt-2 block w-full overflow-hidden rounded-lg border border-neutral-200 text-left empty:hidden focus-visible:ring-2 focus-visible:ring-brand-orange focus-visible:outline-none"
-    >
-      <AuthenticatedMediaImage
-        src={images[0].url}
-        alt={`Photo attached to ${item.display_title || item.title}`}
-        className="h-32 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
-        hideOnError
-      />
-      {images.length > 1 ? (
-        <span className="absolute right-2 bottom-2 rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
-          1 / {images.length}
-        </span>
-      ) : null}
-    </button>
-  )
-}
 
 export function NotificationViewActions({
   initialView = "inbox",
@@ -160,7 +102,7 @@ export type NotificationsConfig = {
   /** Buckets an item into one of the role's group filters (null → the neutral bucket). */
   groupOf: (item: NotificationItem) => string | null
   /** Defaults to group chips (emergency red, announcement amber, rest neutral). */
-  iconFor?: (item: NotificationItem) => { Icon: LucideIcon; chipClass: string }
+  iconFor?: (item: NotificationItem) => { Icon: LucideIcon; chipClass: string; iconBgClass: string }
   /** Legacy compatibility switch; responder notifications now stay light. */
   dark?: boolean
   filterStorageKey: string
@@ -237,9 +179,6 @@ export function NotificationsPanel({
   } = useNotifications()
   const [view, setView] = useState<"inbox" | "archived">(
     () => initialView ?? (initialFilter === "archived" ? "archived" : "inbox")
-  )
-  const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem[] | null>(
-    null
   )
 
   useEffect(() => {
@@ -554,26 +493,18 @@ export function NotificationsPanel({
               </p>
             </div>
           ) : (
-            <ul className="space-y-2">
+            <ul className="divide-y divide-neutral-200 rounded-2xl border border-neutral-200 bg-white overflow-hidden">
               {visible.map((item) => {
                 const configuredIcon = iconFor(item)
-                const urgent = item.priority === "urgent"
                 const Icon = configuredIcon.Icon
-                const iconClass = configuredIcon.chipClass
-                const iconColorClass = iconClass.replace(/\bbg-\S+/g, "").trim()
                 const body = (item.display_body || item.body || "")
                   .replace(/\s+/g, " ")
                   .trim()
-                const hasMedia = Boolean(item.images?.length || item.image_url)
                 return (
                   <li
                     key={item.id}
                     className={cn(
-                      "relative touch-pan-y overflow-hidden rounded-2xl border border-neutral-200 bg-white transition-colors",
-                      !item.is_read && urgent ? "bg-sos/5" : null,
-                      !item.is_read && urgent
-                        ? "hover:bg-sos/10"
-                        : "hover:bg-neutral-100"
+                      "relative touch-pan-y overflow-hidden bg-white transition-colors hover:bg-neutral-100"
                     )}
                   >
                     <button
@@ -588,7 +519,6 @@ export function NotificationsPanel({
                       }}
                       className={cn(
                         "flex w-full items-start gap-2.5 bg-transparent px-3 py-2.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:outline-none focus-visible:ring-inset",
-                        hasMedia ? "pb-1" : "",
                       )}
                       onPointerDown={(event) => {
                         document
@@ -700,12 +630,7 @@ export function NotificationsPanel({
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
                           <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                            <span className="flex size-5 shrink-0 items-center justify-center">
-                              <Icon
-                                className={cn("size-3.5", iconColorClass)}
-                                aria-hidden="true"
-                              />
-                            </span>
+                  <Icon className="size-3.5 text-black" aria-hidden="true" />
                             <span
                               className={cn(
                                 "min-w-0 text-[14px] leading-5 font-normal text-neutral-950"
@@ -719,34 +644,12 @@ export function NotificationsPanel({
                           </span>
                         </span>
                         {body ? (
-                          <span className="mt-0.5 block text-[13px] leading-[1.35] break-words whitespace-normal text-neutral-700">
+                          <span className="mt-0.5 ml-2 block pl-3 text-[12px] leading-[1.35] break-words whitespace-normal text-neutral-500">
                             {body}
                           </span>
                         ) : null}
-                        {item.safety_limited ? (
-                          <span className="mt-1.5 block text-[13px] leading-5 text-sos">
-                            <span className="font-semibold">Nearby safety alert.</span>{" "}
-                            {item.safety_guidance || "Stay clear of the area and do not intervene."}
-                          </span>
-                        ) : null}
-                        {(() => {
-                          const link = notificationActionLink(item)
-                          return link ? (
-                            <span className="mt-1.5 block text-right">
-                              <span className="text-[11px] font-medium text-neutral-500">{link}</span>
-                            </span>
-                          ) : null
-                        })()}
                       </span>
                     </button>
-                    {hasMedia ? (
-                      <div className="mr-11 ml-3.5 pb-3.5">
-                        <NotificationImage
-                          item={item}
-                          onPreview={setMediaPreview}
-                        />
-                      </div>
-                    ) : null}
                     <span
                       data-notification-actions
                       className="pointer-events-none absolute inset-0 z-10 flex shrink-0 flex-row items-stretch justify-center gap-0 bg-neutral-100 opacity-0 transition-[opacity,transform] duration-200"
@@ -818,13 +721,6 @@ export function NotificationsPanel({
           ) : null}
         </div>
       </div>
-      {mediaPreview ? (
-        <MediaLightbox
-          items={mediaPreview}
-          index={0}
-          onClose={() => setMediaPreview(null)}
-        />
-      ) : null}
     </div>
   )
 }

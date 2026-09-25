@@ -39,7 +39,11 @@ class LocalCacheRateThrottle(SimpleRateThrottle):
         super().__init__()
 
     def allow_request(self, request, view):
-        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+        # Local development skips the counters so a developer is not locked out
+        # of their own machine. Tests must still exercise them: a suite that
+        # cannot reach a 429 would never notice a public endpoint losing its
+        # ceiling.
+        if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) and not getattr(settings, "IS_TEST_RUN", False):
             return True
         return super().allow_request(request, view)
 

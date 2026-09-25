@@ -15,7 +15,8 @@ from rest_framework.test import APIClient
 
 from apps.concerns.models import Concern, ConcernAiAssessment, ConcernStatusEvent
 from apps.concerns.test_helpers import active_test_community, ensure_test_profile, grant_position
-from apps.emergencies.models import Community
+from apps.dashboard_views import official_recent_reports
+from apps.emergencies.models import Community, EmergencyAlert
 
 URL = "/api/dashboard/official/analytics/"
 RESIDENT_URL = "/api/dashboard/resident/summary/"
@@ -139,6 +140,23 @@ class OfficialAnalyticsTests(TestCase):
         self.assertEqual(payload["unit_totals"], {"total": 1, "active": 1, "resolved": 0})
         self.assertEqual(payload["community_totals"]["total"], 2)
         self.assertEqual(len(payload["recent_reports"]), 1)
+
+    def test_emergency_recent_report_uses_shared_location_fallback(self):
+        alert = EmergencyAlert.objects.create(
+            reporter=self.resident,
+            community=self.community,
+            type=EmergencyAlert.Type.FIRE,
+            status=EmergencyAlert.Status.ROUTED,
+            address="",
+            reported_area="Champaca Street",
+        )
+
+        rows = official_recent_reports(
+            Concern.objects.none(),
+            EmergencyAlert.objects.filter(pk=alert.pk),
+        )
+
+        self.assertEqual(rows[0]["address"], "Champaca Street")
 
     def test_critical_target_prefers_selected_unit(self):
         unit_critical = self.file(

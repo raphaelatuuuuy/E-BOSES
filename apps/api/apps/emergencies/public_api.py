@@ -741,8 +741,26 @@ def served_barangay_names():
     Barangays this deployment actually runs, not every barangay it holds a
     boundary for. The PSGC import stores the whole country, so "has an active
     boundary row" would answer forty thousand.
+
+    A barangay counts as running once it holds records - a verified resident, a
+    report, an emergency - even while its own Community row is still a draft.
+    That is the only evidence the coverage editor has that a neighbour is
+    already dispatching for itself.
     """
-    return set(Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE).values_list("name", flat=True))
+    names = set(
+        Community.objects.filter(status=Community.Status.ACTIVE).values_list("name", flat=True)
+    )
+    for queryset in (
+        ResidentProfile.objects.exclude(barangay=""),
+        Concern.objects.exclude(barangay=""),
+        EmergencyAlert.objects.exclude(barangay=""),
+    ):
+        names.update(
+            name.strip()
+            for name in queryset.values_list("barangay", flat=True)
+            if name and name.strip()
+        )
+    return names
 
 
 def build_communities_payload():

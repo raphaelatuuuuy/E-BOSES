@@ -70,6 +70,13 @@ def _valid_description(value) -> str:
 
 
 def stored_notification_copy(notification) -> tuple[str, str] | None:
+    # A community alert is re-derived from the live alert record instead of a
+    # stored sentence: reverse geocoding can hand back the street after the
+    # fan-out, and a stored copy would keep reading "the area" long after the
+    # street is known.
+    if getattr(notification, "type", "") == "witness_alert":
+        return None
+
     metadata = getattr(notification, "metadata", None)
     if not isinstance(metadata, dict):
         return None
@@ -190,6 +197,32 @@ def _model_copy(notification) -> tuple[str, str] | None:
     return _parse_model_response(response)
 
 
+def witness_alert_copy(notification) -> tuple[str, str]:
+    """The safety sentence every resident near an emergency reads.
+
+    Deterministic on purpose: a community alert must always name the street to
+    avoid and always carry the same instruction, so it never goes through the
+    model. The street can also arrive *after* the fan-out, because reverse
+    geocoding runs post-dispatch, which is why the wording is re-derived from
+    the alert record instead of being stored.
+    """
+    from apps.emergencies.location_services import alert_street_address
+
+    alert = getattr(notification, "emergency", None)
+    emergency_type = _phrase((_context_for(notification) or {}).get("subject"), "Emergency")
+    street = alert_street_address(alert) if alert is not None else ""
+    if not street:
+        # Better the barangay than "the area": the resident already knows
+        # which area they are in, and the vague phrase reads like the system
+        # failed to look.
+        street = _phrase(getattr(alert, "barangay", "") if alert is not None else "", "the area")
+    recipient = getattr(notification, "recipient", None)
+    recipient_name = _clean(getattr(recipient, "first_name", "")) or "resident"
+    title = "Community Alert"
+    body = f"Good day, {recipient_name}. {emergency_type} emergency near {street}, stay clear and keep safe. Call emergency services if you need to. Thank you."
+    return title, body
+
+
 def _fallback_copy(notification) -> tuple[str, str]:
     type_value = _clean(getattr(notification, "type", "notification")).lower()
     context = _context_for(notification)
@@ -283,7 +316,7 @@ def _fallback_copy(notification) -> tuple[str, str]:
         emergency_type = _phrase(context.get("subject"), "Emergency")
         status = _phrase(context.get("status"), "updated")
         if type_value == "witness_alert":
-            return "Nearby safety alert", f"A {emergency_type.lower()} emergency was reported near {location}; stay clear and wait for official instructions."
+            return witness_alert_copy(notification)
         emergency_headers = {
             "emergency_submitted": "Emergency received",
             "emergency_routed": "Emergency dispatched",
@@ -337,7 +370,9 @@ def _fallback_copy(notification) -> tuple[str, str]:
 
 
 def generate_notification_copy(notification, *, use_model: bool = True) -> tuple[tuple[str, str], str]:
-    if use_model:
+    # A community alert is safety copy: always the same street and the same
+    # instruction, so it never goes through the model.
+    if use_model and getattr(notification, "type", "") != "witness_alert":
         generated = _model_copy(notification)
         if generated:
             return generated, "model"

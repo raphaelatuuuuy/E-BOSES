@@ -44,6 +44,7 @@ def webhook_body(message, phone=RESIDENT, event="sms:received", message_id="msg-
     OUTBOUND_SMS_USERNAME="sms",
     OUTBOUND_SMS_PASSWORD="oJkay91V",
     OUTBOUND_SMS_PAYLOAD_TEMPLATE="",
+    SMS_GATE_SIM_NUMBER="2",
 )
 class AndroidGatewayDriverTests(SimpleTestCase):
     def test_send_payload_uses_a_phone_numbers_array(self):
@@ -53,7 +54,7 @@ class AndroidGatewayDriverTests(SimpleTestCase):
             {
                 "textMessage": {"text": "hello"},
                 "phoneNumbers": ["+639171234821"],
-                "simNumber": 1,
+                "simNumber": 2,
                 "withDeliveryReport": True,
             },
         )

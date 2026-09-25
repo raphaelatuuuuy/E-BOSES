@@ -515,6 +515,26 @@ def run_content_moderation_ai_task(self, flag_id):
         )
         return {"flag_id": flag_id, "skipped": True, "skip_reason": "error"}
 
+    try:
+        from apps.accounts.services import create_audit_log
+
+        create_audit_log(
+            "content.flag_auto_reviewed",
+            actor=None,
+            target_user=flag.concern.reporter if flag.concern_id else flag.reporter,
+            metadata={
+                "flag_id": flag.pk,
+                "content_type": flag.target_kind,
+                "matched_reason": result.get("matched_reason", ""),
+                "action_taken": "taken_down" if flag.auto_moderated else "dismissed",
+                "model_version": model_version or "",
+                "backfilled": True,
+            },
+            request_meta={},
+        )
+    except Exception:
+        logger.debug("Content flag auto-review audit log failed for flag_id=%s", flag_id, exc_info=True)
+
     return {"flag_id": flag_id, "auto_moderated": flag.auto_moderated}
 
 

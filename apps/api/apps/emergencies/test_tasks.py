@@ -130,6 +130,7 @@ class BeatScheduleTests(TestCase):
         "purge-approved-id-images",
         "purge-ocr-test-runs",
         "recover-missing-emergency-previews",
+        "recover-stuck-inbound-sms",
         "emergency-assignment-escalation",
         "refresh-map-service-pois",
         "periodic-housekeeping",

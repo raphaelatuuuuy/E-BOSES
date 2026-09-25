@@ -202,7 +202,7 @@ def fallback_description(alert) -> str:
                 "not trapped": "with no one trapped",
             }.get(detail, f"that is currently {detail}"))
     if people:
-        people_text = {"few": "2–5 people", "many": "6 or more people", "one": "one person"}.get(people, people)
+        people_text = {"few": "2-5 people", "many": "6 or more people", "one": "one person"}.get(people, people)
         natural.append("with the number of people affected unknown" if people == "unknown" else f"affecting {people_text}")
     if injuries in {"yes", "true"}:
         natural.append("with reported injuries")

@@ -202,12 +202,13 @@ export function AuthenticatedMediaVideo({
   return <video src={objectUrl} controls playsInline className={className} />
 }
 
-type PreviewFilter = "concern" | "resolution"
+type PreviewFilter = "concern" | "resolution" | "road"
 
 function previewFilterFor(item: MediaPreviewItem): PreviewFilter | null {
   const badge = (item.badge ?? "").trim().toLowerCase()
   if (badge === "reported issue") return "concern"
   if (badge === "resolved case") return "resolution"
+  if (badge === "road-area") return "road"
   return null
 }
 
@@ -216,12 +217,15 @@ export function MediaLightbox({
   index,
   onClose,
   simpleCounter = false,
+  hideCounter = false,
 }: {
   items: MediaPreviewItem[]
   index: number
   onClose: () => void
   /** Report previews use a centered image counter instead of status pills. */
   simpleCounter?: boolean
+  /** Hide the top counter + arrow navigation row. */
+  hideCounter?: boolean
 }) {
   const [active, setActive] = useState(index)
   const [requestedIndex, setRequestedIndex] = useState(index)
@@ -347,7 +351,7 @@ export function MediaLightbox({
           </div>
         ) : null}
 
-        {simpleCounter ? (
+        {simpleCounter && !hideCounter ? (
           <div className="mb-3 flex w-full items-center justify-center gap-1 text-white">
             <button
               type="button"
@@ -408,7 +412,7 @@ export function MediaLightbox({
           </div>
         </div>
 
-        {!simpleCounter &&
+        {!simpleCounter && !hideCounter &&
         (items.length > 1 || isResolvedBadge || isReportedBadge) ? (
           <div className="mt-3 flex items-center justify-center gap-2">
             {items.length > 1 ? (

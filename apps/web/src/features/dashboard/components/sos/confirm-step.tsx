@@ -1,7 +1,7 @@
 import {
   MapPinIcon,
   MessageSquareIcon,
-  PhoneIcon,
+  PencilIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 import type React from "react"
@@ -24,7 +24,6 @@ export function SosConfirmStep({
   submitting,
   dispatchCountdown,
   onEditStep,
-  isOnline,
 }: {
   mode: "review" | "countdown"
   submitError: string
@@ -37,7 +36,6 @@ export function SosConfirmStep({
   submitting: boolean
   dispatchCountdown: number
   onEditStep?: (step: "category" | "triage" | "location") => void
-  isOnline?: boolean
 }) {
   const triageFlags = (triageSummary || "")
     .split(",")
@@ -126,137 +124,118 @@ export function SosConfirmStep({
             <a
               href={emergencySmsHref}
               onClick={onSmsFallbackClick}
-              className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-full bg-brand-orange px-3.5 text-[13px] font-bold text-white hover:bg-brand-orange-strong"
+              className="mt-3 inline-flex h-10 items-center justify-center rounded-full bg-sos px-3.5 text-[13px] font-bold text-white hover:opacity-90"
             >
-              <PhoneIcon className="size-4" />
-              Send Alert
+              Send SOS
             </a>
           ) : null}
         </div>
       ) : null}
 
-      {isOnline && !submitError ? (
-        <div
-          style={{ background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", borderRadius: "18px", padding: "12px 16px", display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}
-          role="status"
-        >
-          <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px rgba(16,185,129,0.6)", flexShrink: 0 }} />
-          <div>
-            <p style={{ fontSize: "14px", fontWeight: 700, color: "#6ee7b7" }}>Connection restored</p>
-            <p style={{ fontSize: "12px", lineHeight: "1.5", color: "rgba(255,255,255,0.6)", marginTop: "2px" }}>Your alert will be sent online. Details are still here.</p>
-          </div>
-        </div>
-      ) : null}
+      {/* Page description */}
+      <p className="text-[15px] leading-5 text-white/70 px-0.5">
+        Review your SOS details and confirm before broadcasting to nearby responders.
+      </p>
 
       {/* Timeline */}
-      <div className="px-0.5 pt-1">
-        <div className="relative flex gap-3 pb-[18px]">
-          <span
-            aria-hidden="true"
-            className="absolute top-[42px] bottom-0 left-[19px] w-[2px] bg-[linear-gradient(rgba(255,106,26,0.6),rgba(255,106,26,0.08))]"
-          />
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
-            <TriangleAlertIcon className="size-5" strokeWidth={2} aria-hidden="true" />
+      <div className="px-0.5 pt-4">
+        <div className="relative flex gap-3 pb-[32px]">
+          <span className="self-center flex size-12 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
+            <TriangleAlertIcon className="size-6" strokeWidth={2} aria-hidden="true" />
           </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
-              Type
+           <div className="min-w-0 flex-1">
+          <p className="text-[14px] font-bold tracking-wide text-brand-orange uppercase">
+              <span>Type</span>
+              {onEditStep ? (
+                <button
+                  type="button"
+                  onClick={() => onEditStep("category")}
+                  className="ml-1 inline-flex items-center justify-center text-brand-orange hover:text-white transition-colors"
+                  aria-label="Edit type"
+                >
+                  <PencilIcon className="size-[14px]" strokeWidth={2} aria-hidden="true" />
+                </button>
+              ) : null}
             </p>
-            <p className="mt-0.5 text-[15.5px] leading-snug font-semibold break-words text-white">
+            <p className="mt-0.5 text-[22px] leading-snug break-words text-white">
               {typeLabel ?? "—"}
             </p>
           </div>
-          {onEditStep ? (
-            <button
-              type="button"
-              onClick={() => onEditStep("category")}
-              className="flex min-h-11 shrink-0 items-center justify-center self-start rounded-[10px] px-3 text-[12px] font-bold text-white transition-colors hover:bg-white/10 active:scale-95"
-            >
-              Change
-            </button>
-          ) : null}
         </div>
 
-        <div className="relative flex gap-3 pb-[18px]">
-          <span
-            aria-hidden="true"
-            className="absolute top-[42px] bottom-0 left-[19px] w-[2px] bg-[linear-gradient(rgba(255,106,26,0.6),rgba(255,106,26,0.08))]"
-          />
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
-            <MapPinIcon className="size-5" strokeWidth={2} aria-hidden="true" />
+        <div className="relative flex gap-3 pb-[32px]">
+          <span className="self-center flex size-12 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
+            <MapPinIcon className="size-6" strokeWidth={2} aria-hidden="true" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
-              Location
+          <p className="text-[14px] font-bold tracking-wide text-brand-orange uppercase">
+              <span>Location</span>
+              {onEditStep ? (
+                <button
+                  type="button"
+                  onClick={() => onEditStep("location")}
+                  className="ml-1 inline-flex items-center justify-center text-brand-orange hover:text-white transition-colors"
+                  aria-label="Edit location"
+                >
+                  <PencilIcon className="size-[14px]" strokeWidth={2} aria-hidden="true" />
+                </button>
+              ) : null}
             </p>
-            <p className="mt-0.5 text-[15.5px] leading-snug font-semibold break-words text-white">
+            <p className="mt-0.5 text-[22px] leading-snug break-words text-white">
               {locationLabel || "—"}
             </p>
           </div>
-          {onEditStep ? (
-            <button
-              type="button"
-              onClick={() => onEditStep("location")}
-              className="flex min-h-11 shrink-0 items-center justify-center self-start rounded-[10px] px-3 text-[12px] font-bold text-white transition-colors hover:bg-white/10 active:scale-95"
-            >
-              Change
-            </button>
-          ) : null}
         </div>
 
-        <div className="relative flex gap-3 pb-1">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
+        <div className="relative flex gap-3 pb-[32px]">
+          <span className="self-center flex size-12 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(160deg,#ff8a3d_0%,#f2541b_60%,#d9480f_100%)] text-white shadow-[0_6px_16px_rgba(242,84,27,0.4)]">
             <MessageSquareIcon
-              className="size-5"
+              className="size-6"
               strokeWidth={2}
               aria-hidden="true"
             />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
-              Situation
+          <p className="text-[14px] font-bold tracking-wide text-brand-orange uppercase">
+              <span>Situation</span>
+              {onEditStep ? (
+                <button
+                  type="button"
+                  onClick={() => onEditStep("triage")}
+                  className="ml-1 inline-flex items-center justify-center text-brand-orange hover:text-white transition-colors"
+                  aria-label="Edit situation"
+                >
+                  <PencilIcon className="size-[14px]" strokeWidth={2} aria-hidden="true" />
+                </button>
+              ) : null}
             </p>
             {triageFlags.length ? (
               <ul className="mt-1 space-y-1">
                 {triageFlags.map((flag) => (
-                  <li key={flag} className="flex items-start gap-2 text-[14px] text-white/90">
+                  <li key={flag} className="flex items-start gap-2 text-[22px] text-white/90">
                     <span className="mt-[9px] h-[5px] w-[5px] shrink-0 rounded-full bg-white/60" />
                     <span className="leading-snug">{flag}</span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="mt-0.5 text-[14px] text-white/55">Not answered</p>
+              <p className="mt-0.5 text-[17px] text-white/55">Not answered</p>
             )}
           </div>
-          {onEditStep ? (
-            <button
-              type="button"
-              onClick={() => onEditStep("triage")}
-              className="flex min-h-11 shrink-0 items-center justify-center self-start rounded-[10px] px-3 text-[12px] font-bold text-white transition-colors hover:bg-white/10 active:scale-95"
-            >
-              Change
-            </button>
-          ) : null}
         </div>
       </div>
 
       {/* Additional notes */}
-      <div className="rounded-r-[14px] border-l-[3px] border-brand-orange bg-white/5 px-3.5 py-2.5">
-        <p className="text-[11px] font-bold tracking-wide text-brand-orange uppercase">
-          Additional notes
-        </p>
-        <p className="mt-0.5 text-[13.5px] text-white/80 italic">
+      <div className="border-l-[3px] border-brand-orange bg-white/5 px-3.5 py-2.5">
+          <p className="text-[14px] font-bold tracking-wide text-brand-orange uppercase">
+              Additional notes
+            </p>
+            <p className="mt-0.5 text-[16px] text-white/80 italic">
           {note.trim() || "None"}
         </p>
-      </div>
-
-      {/* Warning */}
-      <div className="flex items-start gap-2">
-        <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-red-300/90" strokeWidth={2} aria-hidden="true" />
-        <p className="text-[12px] leading-5 text-red-300/90">
-          False or misleading alerts are logged and repeated abuse can suspend your account.
-        </p>
+          <p className="mt-1 text-[14px] leading-5 text-red-400">
+            False or misleading alerts are logged and repeated abuse can suspend your account.
+          </p>
       </div>
     </div>
   )

@@ -4,7 +4,6 @@ import {
   MapPinIcon,
   NewspaperIcon,
   PencilLineIcon,
-  InfoIcon,
 } from "lucide-react"
 
 import { getConcern, type Concern } from "@/features/dashboard/api"
@@ -147,6 +146,7 @@ export function OverviewReportDetailSheet({
                 ? "Report details"
                 : "Your report"
         }
+        titleClassName={view === "chat" ? "text-center" : undefined}
         description={
           view === "update"
             ? "What the resident will see in the Updates timeline."
@@ -163,6 +163,7 @@ export function OverviewReportDetailSheet({
           ) : undefined
         }
         size="wide"
+        onBack={view === "chat" ? () => setView("details") : undefined}
         backdropScrim={false}
         backdropInteractive
         className="h-auto max-h-[min(760px,72dvh)] sm:max-h-[min(760px,82vh)]"
@@ -201,10 +202,6 @@ export function OverviewReportDetailSheet({
                 <NewspaperIcon className="size-5" strokeWidth={2} />
               </SheetIconButton>
             </div>
-          ) : view === "chat" ? (
-            <SheetIconButton label="Show report details" onClick={() => setView("details")}>
-              <InfoIcon className="size-5" strokeWidth={2} />
-            </SheetIconButton>
           ) : undefined
         }
         footer={

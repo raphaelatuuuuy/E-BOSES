@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E-Boses Notification Preview</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f5f5f5; padding:24px; }
+  h1 { font-size:20px; font-weight:700; color:#1a1a1a; margin-bottom:4px; }
+  .subtitle { font-size:13px; color:#888; margin-bottom:24px; }
+  .section-title { font-size:15px; font-weight:600; color:#555; margin:24px 0 8px 0; padding-bottom:4px; border-bottom:1px solid #e0e0e0; }
+  .card {
+    background:#fff; border:1px solid #e5e5e5; border-radius:16px; padding:10px 12px; margin-bottom:0;
+    display:flex; align-items:flex-start; gap:10px; cursor:pointer; transition:background .15s;
+    max-width:480px; border-bottom:none;
+  }
+  .card:hover { background:#fafafa; }
+  .card.urgent { background:#fef2f2; }
+  .card.urgent:hover { background:#fef2f2; }
+  .card + .card { border-top:1px solid #e5e5e5; border-radius:0; }
+  .card:first-child { border-radius:16px 16px 0 0; }
+  .card:last-child { border-radius:0 0 16px 16px; border-bottom:1px solid #e5e5e5; }
+  .icon-wrap { width:14px; height:14px; flex-shrink:0; margin-top:3px; }
+  .icon-wrap svg { width:14px; height:14px; }
+  .content { flex:1; min-width:0; }
+  .row-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .title-row { display:flex; align-items:center; gap:6px; flex:1; min-width:0; }
+  .title { font-size:14px; line-height:20px; font-weight:400; color:#171717; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .time { font-size:11px; color:#525252; flex-shrink:0; }
+  .body { font-size:13px; line-height:1.35; color:#404040; margin-top:2px; word-break:break-word; }
+  .safety { font-size:13px; line-height:20px; color:#dc2626; margin-top:4px; }
+  .safety strong { font-weight:600; }
+  .link { font-size:11px; font-weight:500; color:#737373; text-align:right; margin-top:4px; }
+  .media { margin:4px 0 0 26px; padding-bottom:4px; }
+  .media img { width:120px; height:80px; object-fit:cover; border-radius:8px; background:#e5e5e5; display:block; }
+  .badge { font-size:10px; font-weight:600; padding:1px 6px; border-radius:4px; background:#fee2e2; color:#dc2626; margin-left:4px; }
+
+  /* Push notification card (status bar style) */
+  .push-card {
+    background:#1f1f1f; border-radius:20px; padding:10px 14px; margin-bottom:12px; max-width:400px;
+    display:flex; align-items:flex-start; gap:10px;
+  }
+  .push-card .push-icon { width:36px; height:36px; border-radius:50%; flex-shrink:0; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+  .push-card .push-icon.info { background:#1a5fb4; }
+  .push-card .push-icon.alert { background:#dc2626; }
+  .push-card .push-icon.witness { background:#dc2626; color:#fff; }
+  .push-card .push-icon svg { width:20px; height:20px; }
+  .push-card .push-body { flex:1; }
+  .push-card .push-app { font-size:12px; font-weight:500; color:#a3a3a3; }
+  .push-card .push-time { font-size:11px; color:#737373; }
+  .push-card .push-title { font-size:14px; font-weight:600; color:#f5f5f5; margin-top:2px; }
+  .push-card .push-text { font-size:13px; color:#d4d4d4; margin-top:1px; line-height:1.4; }
+</style>
+</head>
+<body>
+
+<h1>E-Boses Notification Preview</h1>
+<p class="subtitle">All notification types as they currently appear in the app</p>
+
+<!-- In-App Notification Cards -->
+<div class="section-title">In-App Notification Cards</div>
+
+<!-- Announcement -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Barangay Clean-Up Drive this Weekend</span>
+        <span class="time">2h ago</span>
+      </div>
+    </div>
+    <span class="body">The barangay will conduct a clean-up drive in Brgy. San Roque this Saturday at 7:00 AM. All residents are encouraged to participate.</span>
+    <span class="link">View announcement →</span>
+  </div>
+</div>
+
+<!-- Report Submitted -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Report received</span>
+        <span class="time">5h ago</span>
+      </div>
+    </div>
+    <span class="body">Your report about Pothole on Manggahan St. was received in Marikina Heights and is ready for review.</span>
+    <span class="link">View Report →</span>
+  </div>
+</div>
+
+<!-- Report Under Review -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Report under review</span>
+        <span class="time">8h ago</span>
+      </div>
+    </div>
+    <span class="body">Your report about Pothole on Manggahan St. is being reviewed by the barangay team.</span>
+    <span class="link">View Report →</span>
+  </div>
+</div>
+
+<!-- Report Resolved -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Report resolved</span>
+        <span class="time">1d ago</span>
+      </div>
+    </div>
+    <span class="body">Your report about Pothole on Manggahan St. was marked resolved by the barangay team.</span>
+    <span class="link">View Report →</span>
+  </div>
+</div>
+
+<!-- Report Rejected -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Report decision</span>
+        <span class="time">1d ago</span>
+      </div>
+    </div>
+    <span class="body">Your report about Pothole on Manggahan St. was not accepted for action in Marikina Heights.</span>
+    <span class="link">View Details →</span>
+  </div>
+</div>
+
+<!-- Clarification Requested -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Clarification needed</span>
+        <span class="time">2d ago</span>
+      </div>
+    </div>
+    <span class="body">The barangay team needs more information about your report on Pothole on Manggahan St.</span>
+    <span class="link">Reply →</span>
+  </div>
+</div>
+
+<!-- Concern Mention -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">You were mentioned</span>
+        <span class="time">3h ago</span>
+      </div>
+    </div>
+    <span class="body">You were mentioned in the community discussion about Pothole on Manggahan St.</span>
+    <span class="link">View Thread →</span>
+  </div>
+</div>
+
+<!-- New Report Message (Chat) -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">New report message</span>
+        <span class="time">30m ago</span>
+      </div>
+    </div>
+    <span class="body">There is a new message about Pothole on Manggahan St. in your report discussion.</span>
+    <span class="link">Reply →</span>
+  </div>
+</div>
+
+<!-- Emergency / Urgent -->
+<div class="card urgent">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Vehicle collision reported near Champaca Street</span>
+        <span class="time">12m ago</span>
+      </div>
+    </div>
+    <span class="body">Keep safe and stay clear of the area.</span>
+    <span class="link">View Incident →</span>
+  </div>
+</div>
+
+<!-- Emergency Updated -->
+<div class="card urgent">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Emergency dispatched</span>
+        <span class="time">15m ago</span>
+      </div>
+    </div>
+    <span class="body">Fire in Barangay San Roque has been dispatched to the nearest fire station.</span>
+    <span class="link">View Incident →</span>
+  </div>
+</div>
+
+<!-- Witness Alert -->
+<div class="card urgent">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Vehicle collision reported near Champaca Street</span>
+        <span class="time">10m ago</span>
+      </div>
+    </div>
+    <span class="body">Keep safe and stay clear of the area.</span>
+    <span class="link">View Incident →</span>
+  </div>
+</div>
+
+<!-- Appeal Submitted -->
+<div class="card">
+  <div class="icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="content">
+    <div class="row-top">
+      <div class="title-row">
+        <span class="title">Appeal submitted</span>
+        <span class="time">4h ago</span>
+      </div>
+    </div>
+    <span class="body">The appeal for your report about Pothole on Manggahan St. has been submitted.</span>
+    <span class="link">View Report →</span>
+  </div>
+</div>
+
+<!-- Push Notification Previews -->
+<div class="section-title">Push Notifications (Status Bar Style)</div>
+
+<!-- Push: New Message -->
+<div class="push-card">
+  <div class="push-icon info"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></div>
+  <div class="push-body">
+    <div class="push-top"><span class="push-app">E-Boses</span><span class="push-time">11:13 PM</span></div>
+    <div class="push-title">New report message</div>
+    <div class="push-text">There is a new message about Vehicle Collision in your report discussion.</div>
+  </div>
+</div>
+
+<!-- Push: Emergency -->
+<div class="push-card">
+  <div class="push-icon alert"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-triangle-alert"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></div>
+  <div class="push-body">
+    <div class="push-top"><span class="push-app">E-Boses</span><span class="push-time">3:42 PM</span></div>
+    <div class="push-title">Emergency dispatched</div>
+    <div class="push-text">Fire in Barangay San Roque has been dispatched to the nearest fire station.</div>
+  </div>
+</div>
+
+<!-- Push: Announcement -->
+<div class="push-card">
+  <div class="push-icon info"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></div>
+  <div class="push-body">
+    <div class="push-top"><span class="push-app">E-Boses</span><span class="push-time">9:00 AM</span></div>
+    <div class="push-title">Barangay Clean-Up Drive</div>
+    <div class="push-text">The barangay will conduct a clean-up drive in Brgy. San Roque this Saturday at 7:00 AM.</div>
+  </div>
+</div>
+
+<!-- Push: Witness Alert -->
+<div class="push-card">
+  <div class="push-icon witness"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-asterisk"><path d="M12 5v14"/><path d="m18.065 8.496-12.125 7"/><path d="m5.94 8.504 12.125 7"/></svg></div>
+  <div class="push-body">
+    <div class="push-top"><span class="push-app">E-Boses</span><span class="push-time">8:22 AM</span></div>
+    <div class="push-title">Vehicle collision reported</div>
+    <div class="push-text">Keep safe and stay clear of the area.</div>
+  </div>
+</div>
+
+<div class="subtitle" style="margin-top:32px;">White icons on colored circles: Info (light blue) for messages/updates, Alert (red) for emergencies, Witness (red) for safety alerts. Configure PushNotifications plugin in capacitor.config.ts to use notification_icon drawables.</div>
+
+</body>
+</html>

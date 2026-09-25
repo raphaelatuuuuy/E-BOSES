@@ -146,7 +146,7 @@ function OfflineColdStartPage({
               }
               className="mt-6 inline-flex min-h-[54px] w-full items-center justify-center gap-2 rounded-full bg-sos px-4 text-[16px] font-bold text-white focus-visible:ring-2 focus-visible:ring-sos focus-visible:ring-offset-2 focus-visible:outline-none"
             >
-              Open SOS
+              Send SOS
               <ArrowRightIcon
                 className="size-5"
                 strokeWidth={2.25}
@@ -236,7 +236,7 @@ function OfflineSheetContent({
             }
             className="mt-4 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-full bg-sos px-4 text-[15px] font-bold text-white focus-visible:ring-2 focus-visible:ring-sos focus-visible:ring-offset-2 focus-visible:outline-none"
           >
-            {sosActive ? "View ongoing emergency" : "Open Emergency SOS"}
+            Send SOS
             <ArrowRightIcon
               className="size-5"
               strokeWidth={2.25}

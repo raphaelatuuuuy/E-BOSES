@@ -1,12 +1,33 @@
 """Keep a critical concern and its emergency companion in one lifecycle."""
 
+from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 
 from apps.concerns.models import Concern
 
-from .models import EmergencyAlert
+from .models import Community, EmergencyAlert, MapGeometry
+
+
+@receiver(post_save, sender=MapGeometry)
+def bump_community_boundary_revision(sender, instance, **kwargs):
+    """Redraw the boundary and every cached map has to notice.
+
+    The static map payload and the public config are cached under
+    `...:{community.pk}:{boundary_revision}`, so an edit that does not bump the
+    revision keeps serving the old outline until the cache expires. Direct
+    model saves (admin, shell, tests) and the boundary API both land here.
+    """
+    if instance.kind != MapGeometry.Kind.BOUNDARY:
+        return
+    community = getattr(instance, "community", None)
+    if community is None:
+        return
+    Community.objects.filter(pk=community.pk).update(
+        boundary_revision=models.F("boundary_revision") + 1,
+        updated_at=timezone.now(),
+    )
 
 
 @receiver(post_save, sender=EmergencyAlert)

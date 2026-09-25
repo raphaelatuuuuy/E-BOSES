@@ -896,6 +896,20 @@ class ConcernClassificationConfiguration(models.Model):
         return obj
 
     @classmethod
+    def clear_cached(cls, community=None):
+        """Drop the cached singleton so the next read goes to the database.
+
+        `current()` caches per community, so deleting the bare
+        `CLASSIFICATION_CONFIG_CACHE_KEY` would miss the real key and let a
+        stale instance (for example one an official just edited) survive.
+        """
+        from django.core.cache import cache
+
+        resolved = cls._community(community)
+        cache.delete(f"{cls.CLASSIFICATION_CONFIG_CACHE_KEY}:{getattr(resolved, 'pk', 'none')}")
+        cache.delete(f"{cls.CLASSIFICATION_CONFIG_CACHE_KEY}:none")
+
+    @classmethod
     def current_fresh(cls, community=None):
         """Uncached twin of current() for read/modify/write flows.
 

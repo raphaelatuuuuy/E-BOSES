@@ -143,6 +143,17 @@ function activeResponderAssignment(alert: EmergencyAlert) {
   )
 }
 
+function responderContactAssignment(alert: EmergencyAlert) {
+  const active = activeResponderAssignment(alert)
+  if (active) return active
+  const historical = [
+    alert.current_assignment,
+    ...(alert.active_assignments ?? []),
+    ...(alert.assignments ?? []),
+  ].filter(Boolean)
+  return historical[historical.length - 1] ?? null
+}
+
 function responderStatusHeadline(alert: EmergencyAlert) {
   const assignment = activeResponderAssignment(alert)
   return assignment
@@ -601,7 +612,7 @@ function EmergencyTrackingMap({
           position.coords.latitude,
           position.coords.longitude,
         ]
-        let route: EmergencyRoute | null = null
+        let route: EmergencyRoute | null
         try {
           route =
             (await getEmergencyRoute(alert.id, {
@@ -1452,9 +1463,7 @@ export function EmergencyTrackingSheet({
   // changed would fight the update channel itself.
   const alertId = alert?.id
   const alertStatus = alert?.status
-  const responderAssignment = alert
-    ? activeResponderAssignment(alert)
-    : null
+  const responderAssignment = alert ? responderContactAssignment(alert) : null
   const responderAssignmentId = responderAssignment?.id ?? null
   const inlineResponderPhone =
     responderAssignment?.responder.phone_number?.trim() || ""
@@ -1571,13 +1580,7 @@ export function EmergencyTrackingSheet({
       alertId && responderAssignmentId
         ? `${alertId}:${responderAssignmentId}`
         : null
-    if (
-      !open ||
-      !alertId ||
-      !alertStatus ||
-      !isEmergencyActive(alertStatus) ||
-      !contactKey
-    ) return
+    if (!open || !alertId || !alertStatus || !contactKey) return
     if (responderContact?.key === contactKey) return
     if (responderContactKeyRef.current === contactKey) return
     responderContactKeyRef.current = contactKey
@@ -1707,7 +1710,7 @@ export function EmergencyTrackingSheet({
       theme="light"
       variant="modern"
       className="h-full"
-      smsTo={responderPhone}
+       callTo={responderPhone}
     />
   )
 
@@ -1722,6 +1725,7 @@ export function EmergencyTrackingSheet({
   return (
     <SheetDialog
       open={open}
+      onBack={chatView ? () => setChatView(false) : undefined}
       onClose={() => onOpenChange(false)}
       title={
         chatView
@@ -1744,21 +1748,23 @@ export function EmergencyTrackingSheet({
               : "Emergency alert"
       }
       titleClassName={
-        !chatView && !appealView && isLive && sheetHeadline
-          ? "text-center text-[18px] font-medium leading-snug"
-          : undefined
+        chatView
+          ? "text-center"
+          : !chatView && !appealView && isLive && sheetHeadline
+            ? "text-center text-[18px] font-medium leading-snug"
+            : undefined
       }
-      headerTop={
-        alert.address?.split(",")[0]?.trim() || alert.barangay ? (
-          <span className="inline-flex max-w-full items-center gap-1.5">
-            <MapPinIcon className="size-3.5 shrink-0" aria-hidden />
-            <span className="truncate">
-              {alert.address?.split(",")[0]?.trim() || alert.barangay}
+        headerTop={
+          alert.address?.split(",")[0]?.trim() || alert.barangay ? (
+            <span className="inline-flex max-w-full items-center gap-1.5">
+              <MapPinIcon className="size-3.5 shrink-0" aria-hidden />
+              <span className="truncate">
+                {alert.address?.split(",")[0]?.trim() || alert.barangay}
+              </span>
             </span>
-          </span>
-        ) : undefined
-      }
-      size="wide"
+          ) : undefined
+        }
+        size="wide"
       backdrop={
         <EmergencyTrackingMap
           alert={alert}
@@ -1786,14 +1792,7 @@ export function EmergencyTrackingSheet({
         chatView || appealView ? "flex-1 pb-5" : "flex-1 pb-0"
       )}
       actions={
-        chatView ? (
-          <SheetIconButton
-            label="Show emergency details"
-            onClick={() => setChatView(false)}
-          >
-            <InfoIcon className="size-[22px]" strokeWidth={2} />
-          </SheetIconButton>
-        ) : appealView ? (
+        appealView ? (
           <SheetIconButton
             label="Show emergency details"
             onClick={() => setAppealView(false)}
@@ -1810,7 +1809,7 @@ export function EmergencyTrackingSheet({
         ) : undefined
       }
       footer={
-        !chatView && !appealView && isLive ? (
+        !chatView && !appealView && (isLive || alert.status === "resolved") ? (
           <div className="space-y-3">
             {activeAssignments.length > 1 ? (
               <>
@@ -1894,16 +1893,18 @@ export function EmergencyTrackingSheet({
                     <PhoneIcon className="size-4 text-neutral-500" aria-hidden />
                     <span>Call</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setChatView(true)}
-                    aria-label="Chat"
-                    title="Chat"
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none"
-                  >
-                    <MessageCircleIcon className="size-4" aria-hidden />
-                    <span>Chat</span>
-                  </button>
+                  {chatAvailable ? (
+                    <button
+                      type="button"
+                      onClick={() => setChatView(true)}
+                      aria-label="Chat"
+                      title="Chat"
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none"
+                    >
+                      <MessageCircleIcon className="size-4" aria-hidden />
+                      <span>Chat</span>
+                    </button>
+                  ) : null}
                 </div>
                 <div className="flex items-center justify-between px-1">
                   <button
@@ -1986,20 +1987,24 @@ export function EmergencyTrackingSheet({
                   <PhoneIcon className="size-4 text-neutral-500" aria-hidden />
                   <span>Call</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setChatView(true)}
-                  aria-label="Chat"
-                  title="Chat"
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none"
-                >
-                  <MessageCircleIcon className="size-4" aria-hidden />
-                  <span>Chat</span>
-                </button>
+                {chatAvailable ? (
+                  <button
+                    type="button"
+                    onClick={() => setChatView(true)}
+                    aria-label="Chat"
+                    title="Chat"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none"
+                  >
+                    <MessageCircleIcon className="size-4" aria-hidden />
+                    <span>Chat</span>
+                  </button>
+                ) : null}
               </div>
             ) : null}
             <p className="text-center text-[11px] text-neutral-400">
-              {hasActiveResponder(alert)
+              {alert.status === "resolved"
+                ? "This alert is resolved. The responder contact remains available for follow-up."
+                : hasActiveResponder(alert)
                 ? "In case of changes or new details, contact the barangay in chat."
                 : hadResponderAssignment(alert)
                   ? "In case of changes, keep this page open while a new responder is assigned."

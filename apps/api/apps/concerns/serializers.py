@@ -936,16 +936,26 @@ class ConcernChatMessageSerializer(serializers.ModelSerializer):
     sender = PublicUserSerializer(read_only=True)
     is_mine = serializers.SerializerMethodField()
     attachment = serializers.SerializerMethodField()
+    delivery_state = serializers.SerializerMethodField()
 
     class Meta:
         model = ConcernChatMessage
-        fields = ("id", "concern", "sender", "body", "attachment", "created_at", "is_mine")
+        fields = ("id", "concern", "sender", "body", "attachment", "created_at", "is_mine", "delivery_state")
         read_only_fields = ("id", "concern", "sender", "created_at", "is_mine")
 
     def get_is_mine(self, obj):
         request = self.context.get("request")
         user = getattr(request, "user", None)
         return bool(user and user.is_authenticated and obj.sender_id == user.pk)
+
+    def get_delivery_state(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return None
+        if ChatMessageRead.objects.filter(message=obj).exclude(user=user).exists():
+            return "read"
+        return "sent"
 
     def get_attachment(self, obj):
         attachment = getattr(obj, "attachment", None)

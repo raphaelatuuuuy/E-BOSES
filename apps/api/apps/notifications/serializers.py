@@ -135,7 +135,7 @@ class NotificationSerializer(serializers.ModelSerializer):
     def get_safety_guidance(self, obj):
         if obj.type != Notification.Type.WITNESS_ALERT:
             return None
-        return "Stay clear of the area and do not intervene. Call emergency services if you can do so safely."
+        return "Stay clear of the area and keep safe. Wait for official instructions, call emergency services if you need to. Thank you."
 
     class Meta:
         model = Notification

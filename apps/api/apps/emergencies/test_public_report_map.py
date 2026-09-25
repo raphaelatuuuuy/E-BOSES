@@ -77,7 +77,10 @@ class PublicReportMapAndGuestConcernTests(APITestCase):
             response.data["concerns"][0]["description"],
             accepted.description,
         )
-        self.assertEqual(response.data["concerns"][0]["severity"], "critical")
+        # Current danger with an "ongoing" timing does not lift an ordinary
+        # high-severity report into the Critical band; only an explicit
+        # "critical" review does.
+        self.assertEqual(response.data["concerns"][0]["severity"], "high")
         self.assertTrue(response.data["concerns"][0]["severity_assessed"])
         self.assertNotIn("public-map-resident@example.com", response.content.decode())
         self.assertIn("Community resident", response.content.decode())

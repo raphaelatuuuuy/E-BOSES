@@ -25,7 +25,7 @@ python manage.py migrate
 python manage.py runserver
 
 # LAN access (phones / other devices on the same Wi‑Fi)
-python manage.py runserver 0.0.0.0:8000
+python manage.py runserver 0.0.0.0:8000 --timeout=120
 
 # In a production deployment, run a separate OCR worker and scheduler.
 python -m celery -A config worker -l INFO -Q eboses --pool=solo

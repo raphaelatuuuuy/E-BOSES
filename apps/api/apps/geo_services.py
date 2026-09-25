@@ -197,7 +197,6 @@ def active_communities_for_point(latitude, longitude):
     longitude = float(longitude)
     candidates = Community.objects.filter(
         status=Community.Status.ACTIVE,
-        code=PRIMARY_COMMUNITY_CODE,
         boundary__is_active=True,
         boundary__kind="boundary",
     ).select_related("boundary")

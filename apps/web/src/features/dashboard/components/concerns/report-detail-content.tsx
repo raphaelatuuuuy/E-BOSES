@@ -167,7 +167,7 @@ export function ReportDescriptionCard({
   function openSinglePreview() {
     if (!previewItems.length) return
     if (resolutionSrc) {
-      onMediaPreview?.(previewItems, media.length + resolutionImages.length)
+      onMediaPreview?.(previewItems, media.length)
       return
     }
     const index = firstReportImage ? media.indexOf(firstReportImage) : 0

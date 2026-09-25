@@ -6,6 +6,7 @@ from datetime import timedelta
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.accounts.models import AuditLog
 from apps.emergencies.models import EmergencyAlert, EmergencyCommunityComment
 
 from .models import (
@@ -269,6 +270,80 @@ class ContentFlagModerationTests(CommunityTestBase):
         self.assertEqual(flag.status, ContentFlag.Status.SUBMITTED)
         self.assertFalse(flag.auto_moderated)
         self.assertEqual(comment.status, ConcernComment.Status.VISIBLE)
+
+    def test_audit_log_is_written_for_auto_moderated_flag(self):
+        mock_analyze = patch(
+            "apps.concerns.ai.community_moderation_analyzer.analyze_flagged_content"
+        )
+        mock_analyze.return_value = {
+            "assessment": "clearly_violates",
+            "matched_reason": "abusive",
+            "recommended_disposition": "take_down",
+            "short_explanation": "Contains harassment toward another resident.",
+        }
+        mock_analyze.start()
+        try:
+            concern = self.make_concern()
+            comment = ConcernComment.objects.create(
+                concern=concern, author=self.neighbour, body="You are trash and everyone knows it"
+            )
+            flag = ContentFlag.objects.create(
+                concern=concern,
+                comment=comment,
+                reporter=self.resident,
+                reason=ContentFlag.Reason.ABUSIVE,
+            )
+            run_content_moderation_ai_task.run(flag.pk)
+        finally:
+            mock_analyze.stop()
+
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="content.flag_auto_reviewed",
+                target_user=concern.reporter,
+            ).exists(),
+            "Expected an AuditLog entry for the content flag auto-review.",
+        )
+        entry = AuditLog.objects.get(action="content.flag_auto_reviewed")
+        self.assertIsNone(entry.actor)
+        self.assertEqual(entry.metadata["content_type"], "concern_comment")
+        self.assertEqual(entry.metadata["action_taken"], "taken_down")
+
+    def test_audit_log_is_written_when_nothing_is_matched(self):
+        mock_analyze = patch(
+            "apps.concerns.ai.community_moderation_analyzer.analyze_flagged_content"
+        )
+        mock_analyze.return_value = {
+            "assessment": "likely_acceptable",
+            "matched_reason": "",
+            "recommended_disposition": "dismiss",
+            "short_explanation": "Looks like a normal comment.",
+        }
+        mock_analyze.start()
+        try:
+            concern = self.make_concern()
+            comment = ConcernComment.objects.create(
+                concern=concern, author=self.neighbour, body="Thanks for the update"
+            )
+            flag = ContentFlag.objects.create(
+                concern=concern,
+                comment=comment,
+                reporter=self.resident,
+                reason=ContentFlag.Reason.OTHER,
+            )
+            run_content_moderation_ai_task.run(flag.pk)
+        finally:
+            mock_analyze.stop()
+
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="content.flag_auto_reviewed",
+                target_user=concern.reporter,
+            ).exists(),
+            "Expected an audit log entry even when nothing is matched.",
+        )
+        entry = AuditLog.objects.get(action="content.flag_auto_reviewed")
+        self.assertEqual(entry.metadata["action_taken"], "dismissed")
 
 
 class BarangayEventCalendarTests(CommunityTestBase):

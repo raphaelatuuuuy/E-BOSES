@@ -1,6 +1,7 @@
 """Domain services for notification creation and delivery orchestration."""
 
 import json
+import logging
 import re
 import uuid
 from hmac import compare_digest
@@ -725,10 +726,11 @@ def _display_emergency_notification(notification) -> tuple[str, str]:
     cross_community = bool(response.get("is_cross_community"))
     note = _clean_text(notification.body)
     if type_value == "witness_alert":
-        return (
-            f"Nearby {emergency_type} emergency · {barangay}",
-            _truncate(note or f"A {emergency_type.lower()} emergency was reported near {barangay}. Stay clear of the area and wait for official instructions.", 190),
-        )
+        # The same sentence the inbox, the browser push, and the native push
+        # render. It lives in notification_copy so the paths cannot drift.
+        from .notification_copy import witness_alert_copy
+
+        return witness_alert_copy(notification)
 
     responder_role = getattr(notification.recipient.Role, "FIRST_RESPONDER", "first_responder")
     official_role = getattr(notification.recipient.Role, "BARANGAY_OFFICIAL", "barangay_official")
@@ -897,10 +899,12 @@ def browser_push_service_label(endpoint: str) -> str:
     return host or "unknown"
 
 
-def _broadcast(group_name: str, event_type: str, payload: dict) -> None:
+def _broadcast(group_name: str, event_type: str, payload: dict) -> str:
+    logger = logging.getLogger(__name__)
     channel_layer = get_channel_layer()
     if channel_layer is None:
-        return
+        logger.warning("_broadcast SKIP channel_layer is None for %s", group_name)
+        return "channel_layer_none"
     try:
         async_to_sync(channel_layer.group_send)(
             group_name,
@@ -911,18 +915,65 @@ def _broadcast(group_name: str, event_type: str, payload: dict) -> None:
                 "emitted_at": timezone.now().isoformat(),
             },
         )
-    except Exception:
-        # WebSocket delivery is a live enhancement; REST responses and polling fallback must keep working.
-        return
+        logger.warning("_broadcast SENT %s to %s", event_type, group_name)
+        return "sent"
+    except Exception as exc:
+        logger.warning("_broadcast FAILED %s to %s: %s", event_type, group_name, type(exc).__name__)
+        return "failed"
 
 
-def broadcast_notification(notification) -> None:
+def _merge_push_results(browser_result: dict, native_result: dict) -> dict:
+    """Report the best result across browser and Android push channels.
+
+    A native-only user must not be recorded as ``not_subscribed`` merely
+    because they have no browser subscription. The old code discarded the
+    Firebase result and made witness delivery look broken even when Android
+    push had succeeded.
+    """
+    browser_status = browser_result.get("status", "not_configured")
+    native_status = native_result.get("status", "not_configured")
+    statuses = {browser_status, native_status}
+    if "delivered" in statuses:
+        status = "partial" if "failed" in statuses else "delivered"
+    elif "failed" in statuses:
+        status = "failed"
+    elif "disabled" in statuses:
+        status = "disabled"
+    elif statuses == {"not_subscribed"}:
+        status = "not_subscribed"
+    else:
+        status = "not_configured"
+    attempted_at = browser_result.get("attempted_at") or native_result.get("attempted_at")
+    delivered_at = browser_result.get("delivered_at") or native_result.get("delivered_at")
+    return {
+        **browser_result,
+        "status": status,
+        "attempted_at": attempted_at,
+        "delivered_at": delivered_at,
+        "failure_count": int(browser_result.get("failure_count") or 0)
+        + int(native_result.get("failure_count") or 0),
+    }
+
+
+def broadcast_notification(notification) -> dict:
+    logger = logging.getLogger(__name__)
     from .serializers import NotificationSerializer
 
     payload = NotificationSerializer(notification).data
-    _broadcast(f"user_{notification.recipient_id}", "notification.created", payload)
-    push_result = send_browser_push(notification, payload)
-    send_native_push(notification, payload)
+    ws_sent = _broadcast(f"user_{notification.recipient_id}", "notification.created", payload)
+    browser_result = send_browser_push(notification, payload)
+    native_result = send_native_push(notification, payload)
+    push_result = _merge_push_results(browser_result, native_result)
+    logger.warning(
+        "Notification #%s to user #%s (%s): ws=%s browser=%s native=%s final=%s",
+        notification.pk,
+        notification.recipient_id,
+        notification.type,
+        ws_sent,
+        browser_result.get("status"),
+        native_result.get("status"),
+        push_result.get("status"),
+    )
     if notification.type == "witness_alert" and notification.emergency_id:
         from apps.emergencies.models import WitnessNotification
 
@@ -939,10 +990,23 @@ def broadcast_notification(notification) -> None:
     return push_result
 
 def send_native_push(notification, payload: dict) -> dict:
+    logger = logging.getLogger(__name__)
     devices = list(notification.recipient.native_push_devices.filter(is_active=True))
     credential_path = getattr(settings, "FIREBASE_CREDENTIALS_PATH", "")
+    logger.warning(
+        "send_native_push user=%s devices=%d credential_set=%s push_alerts=%s",
+        notification.recipient_id,
+        len(devices),
+        bool(credential_path),
+        _push_alerts_enabled(notification.recipient),
+    )
     if not devices or not credential_path or not _push_alerts_enabled(notification.recipient):
-        return {"status": "not_subscribed" if not devices else "not_configured"}
+        return {
+            "status": "not_subscribed" if not devices else "not_configured",
+            "attempted_at": None,
+            "delivered_at": None,
+            "failure_count": 0,
+        }
     try:
         import firebase_admin
         from firebase_admin import credentials, messaging
@@ -955,19 +1019,40 @@ def send_native_push(notification, payload: dict) -> dict:
             "action_url": str(payload.get("action_url") or notification_url(notification)),
             "type": str(notification.type),
         }
+        android_notification = None
+        if notification.type == "witness_alert":
+            android_notification = messaging.AndroidNotification(icon="asterisk", color="#dc2626")
+        elif notification.type in {"resolved", "emergency_resolved"}:
+            android_notification = messaging.AndroidNotification(icon="check", color="#22c55e")
+        elif notification.type.startswith("emergency"):
+            android_notification = messaging.AndroidNotification(icon="triangle_alert", color="#dc2626")
+        elif notification.type == "chat_message":
+            android_notification = messaging.AndroidNotification(icon="info")
+        android_config = messaging.AndroidConfig(priority="high", notification=android_notification)
         response = messaging.send_each_for_multicast(messaging.MulticastMessage(
             tokens=[device.token for device in devices],
             notification=messaging.Notification(title=display.get("title") or notification.title, body=display.get("body") or notification.body),
             data=data,
-            android=messaging.AndroidConfig(priority="high"),
+            android=android_config,
         ))
         for device, item in zip(devices, response.responses):
             if not item.success and "not found" in str(item.exception).lower():
                 device.is_active = False
                 device.save(update_fields=["is_active", "updated_at"])
-        return {"status": "delivered" if response.success_count else "failed"}
+        now = timezone.now()
+        return {
+            "status": "delivered" if response.success_count else "failed",
+            "attempted_at": now,
+            "delivered_at": now if response.success_count else None,
+            "failure_count": max(0, len(devices) - response.success_count),
+        }
     except Exception:
-        return {"status": "failed"}
+        return {
+            "status": "failed",
+            "attempted_at": timezone.now(),
+            "delivered_at": None,
+            "failure_count": len(devices),
+        }
 
 
 def broadcast_concern_chat(concern_id, payload: dict) -> None:
@@ -1225,6 +1310,27 @@ def broadcast_emergency_chat_message(message) -> None:
 
     payload = EmergencyChatMessageSerializer(message).data
     _broadcast(f"emergency_{message.alert_id}", "emergency.chat", payload)
+
+
+def broadcast_emergency_chat_receipt(alert, user, row) -> None:
+    """Tell the room how far one participant has read, so ticks fill in live.
+
+    Only the watermark travels: the receiver already has the messages and can
+    work out which of its own rows just turned "read".
+    """
+    _broadcast(
+        f"emergency_{alert.pk}",
+        "emergency.chat_receipt",
+        {
+            "type": "emergency.chat_receipt",
+            "payload": {
+                "alert": alert.pk,
+                "user": user.pk,
+                "delivered_through": row.delivered_through_id,
+                "read_through": row.read_through_id,
+            },
+        },
+    )
 
 
 @transaction.atomic

@@ -651,8 +651,36 @@ export interface EmergencyChatMessage {
   sender_online: boolean
   via_sms_gateway?: boolean
   sms_status?: string | null
+  via_sms?: boolean
   viaSms?: boolean
   sendFailed?: boolean
+  delivery_state?: "sent" | "delivered" | "read" | "failed"
+}
+
+export interface EmergencyChatReceiptRequest {
+  through: number
+  state: "delivered" | "read"
+}
+
+export interface EmergencyChatReceiptResponse {
+  alert: number
+  user: number
+  delivered_through: number
+  read_through: number
+}
+
+export function sendEmergencyChatReceipt(
+  alertId: number,
+  through: number,
+  state: "delivered" | "read" = "read",
+) {
+  return apiRequest<EmergencyChatReceiptResponse>(
+    `/emergencies/${alertId}/chat/receipt/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ through, state }),
+    },
+  )
 }
 
 export function listEmergencyChat(

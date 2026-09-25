@@ -237,15 +237,14 @@ class RoleBasedResponderRoutingTests(APITestCase):
         old_assignment.refresh_from_db()
 
         self.client.force_authenticate(self.official)
+        # The automatic timeout sweep was removed: an unacknowledged dispatch
+        # stays with its responder instead of being handed to someone else.
         escalated = self.client.post("/api/emergencies/escalate-overdue/", {"minutes": 5}, format="json")
         self.assertEqual(escalated.status_code, status.HTTP_200_OK)
-        # Timeout now replaces the silent responder: one live assignment for
-        # the replacement, and the original kept in history as escalated.
-        self.assertEqual(alert.assignments.filter(status=EmergencyResponderAssignment.Status.ASSIGNED).count(), 1)
+        self.assertEqual(escalated.data, [])
         old_assignment.refresh_from_db()
-        self.assertEqual(old_assignment.status, EmergencyResponderAssignment.Status.ESCALATED)
-        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="acknowledgment_timeout").exists())
-        self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, action="reassigned_after_timeout").exists())
+        self.assertEqual(old_assignment.status, EmergencyResponderAssignment.Status.ASSIGNED)
+        self.assertEqual(alert.assignments.filter(status=EmergencyResponderAssignment.Status.ASSIGNED).count(), 1)
 
         self.client.force_authenticate(self.bhw)
         declined = self.client.post(
@@ -257,7 +256,7 @@ class RoleBasedResponderRoutingTests(APITestCase):
         old_assignment.refresh_from_db()
         self.assertEqual(old_assignment.status, EmergencyResponderAssignment.Status.DECLINED)
         self.assertTrue(EmergencyAssignmentLog.objects.filter(alert=alert, assignment=old_assignment, action="status_changed", new_status="declined").exists())
-        self.assertTrue(alert.escalations.filter(previous_assignment=old_assignment).exists())
+        self.assertFalse(alert.escalations.filter(previous_assignment=old_assignment).exists())
 
     @override_settings(SMS_EMERGENCY_WEBHOOK_TOKEN="sms-secret")
     def test_sms_forwarder_webhook_creates_and_routes_alert(self):

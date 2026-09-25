@@ -50,7 +50,7 @@ class UnifiedEmergencyPipelineTests(APITestCase):
         with patch("apps.sms.gateway.HttpJsonSmsDriver.send", side_effect=AssertionError("Real gateway forbidden")):
             with self.captureOnCommitCallbacks(execute=True):
                 response = self.post(message, id="unified-intake")
-            self.assertEqual(response.status_code, 201, response.data)
+            self.assertEqual(response.status_code, 202, response.data)
             alert = EmergencyAlert.objects.get(reporter=self.resident)
             self.assertEqual(alert.triage, {"people_affected": "one", "detail": "spreading", "injuries": "yes"})
             self.assertIn("affecting one person, with reported injuries.", description_for_display(alert))

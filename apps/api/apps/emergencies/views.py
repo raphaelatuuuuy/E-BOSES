@@ -9,7 +9,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from django.http import FileResponse
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -37,6 +37,7 @@ from apps.notifications.services import (
     notify_emergency_status,
     replay_emergency_notifications,
 )
+from apps.notifications.models import Notification
 
 from apps.capabilities import (
     CONFIGURE_DISPATCH,
@@ -165,7 +166,6 @@ UNIT_BY_EMERGENCY_TYPE = {
 RESPONDER_LOCATION_FRESH_MINUTES = (
     24 * 60 if getattr(settings, "IS_LOCAL_DEVELOPMENT", False) else 30
 )
-WITNESS_LOCATION_FRESH_MINUTES = 15
 
 
 logger = logging.getLogger(__name__)
@@ -292,6 +292,25 @@ def can_track_alert(user, alert):
     from apps.community_access import OPERATIONAL, OWNER, SAME_PHONE, emergency_access_mode
 
     return emergency_access_mode(user, alert) in {OWNER, OPERATIONAL, SAME_PHONE}
+
+
+def participant_alert_or_404(user, pk, *, lock=False):
+    """Resolve an alert for the people actually working it, and nobody else.
+
+    `scoped_alert_or_404` answers a foreign community's read-only 403, which is
+    right for a public pin on the map. A private room - chat, its attachments,
+    the responder's live location - must not even confirm the incident exists,
+    so it answers the same 404 the detail endpoint does.
+    """
+    from apps.community_access import ForeignCommunityReadOnly
+
+    try:
+        alert = scoped_alert_or_404(user, pk, lock=lock)
+    except ForeignCommunityReadOnly:
+        raise Http404
+    if not can_track_alert(user, alert):
+        raise Http404
+    return alert
 
 
 def scoped_alert_or_404(user, pk, *, lock=False):
@@ -1014,53 +1033,42 @@ def retry_waiting_alerts():
     return routed
 
 def create_witness_notifications(alert):
-    # Warning neighbours is a proximity feature; with no pin there is no
-    # proximity to compute and nobody should be alerted at random.
-    if alert.latitude is None or alert.longitude is None:
-        return
-    reporter_profile = getattr(alert.reporter, "resident_profile", None)
-    if not reporter_profile or not reporter_profile.barangay:
-        return
+    # Witness alerts are an emergency-wide resident broadcast. Do not require
+    # a GPS fix, a recent location ping, a matching barangay, or a profile
+    # record: every active, verified resident must be warned.
+    barangay = (
+        getattr(alert, "barangay", "")
+        or getattr(getattr(alert, "community", None), "name", "")
+        or "the community"
+    ).strip()
     User = get_user_model()
-    fresh_after = timezone.now() - timedelta(minutes=WITNESS_LOCATION_FRESH_MINUTES)
-    try:
-        radius_meters = int(MapDispatchPolicy.current(alert.community).acceptance_radius_meters)
-    except Exception:
-        radius_meters = int(getattr(settings, "EMERGENCY_ACCEPTANCE_RADIUS_METERS", 800))
     witnesses = (
         User.objects
         .filter(
             status=User.Status.VERIFIED,
             role=User.Role.RESIDENT,
-            resident_profile__barangay=reporter_profile.barangay,
-            current_latitude__isnull=False,
-            current_longitude__isnull=False,
-            location_updated_at__gte=fresh_after,
+            is_active=True,
         )
         .exclude(pk=alert.reporter_id)
     )
     for witness in witnesses:
-        distance = distance_meters(
-            alert.latitude,
-            alert.longitude,
-            witness.current_latitude,
-            witness.current_longitude,
-        )
-        if distance > radius_meters:
-            continue
         delivery, created = WitnessNotification.objects.get_or_create(
             alert=alert,
             resident=witness,
-            defaults={"distance_meters": round(distance)},
+            defaults={"distance_meters": 0},
         )
         if not created and delivery.in_app_delivered_at is not None:
+            continue
+        event_key = f"emergency:{alert.pk}:witness:{witness.pk}"
+        if Notification.objects.filter(recipient=witness, event_key=event_key).exists():
             continue
         notification = create_emergency_notification(
             alert=alert,
             recipient=witness,
             type="witness_alert",
-            title="Emergency reported nearby",
-            body=f"An emergency was reported in {alert.barangay}. Stay alert and avoid the area if needed.",
+            title="Emergency reported",
+            body=f"An emergency was reported in {barangay}. Stay alert and avoid the area if needed.",
+            event_key=event_key,
         )
         if notification and delivery.in_app_delivered_at is None:
             delivery.in_app_delivered_at = notification.created_at or timezone.now()
@@ -1725,15 +1733,21 @@ class ActiveCommunityBoundariesView(APIView):
             kind=MapGeometry.Kind.BOUNDARY, is_active=True
         ).filter(models.Q(is_home=True) | models.Q(name__in=served))
 
+        ordered = list(rows.order_by("-is_home", "name", "pk")[:50])
+        # The PSGC import can hold a second boundary row for the home barangay
+        # with its locality spelled "City of Marikina" instead of "Marikina".
+        # Same place, different text, so it must not read as its own neighbour.
+        home_names = {row.name.strip().casefold() for row in ordered if row.is_home}
+
         seen = set()
         results = []
-        for boundary in rows.order_by("-is_home", "name", "pk")[:50]:
+        for boundary in ordered:
+            if not boundary.is_home and boundary.name.strip().casefold() in home_names:
+                continue
             community = Community.objects.filter(
                 boundary=boundary,
                 status=Community.Status.ACTIVE,
             ).first()
-            if not community:
-                continue
             key = (boundary.name.strip().lower(), normalize_locality(boundary.locality))
             if key in seen:
                 continue
@@ -1741,8 +1755,8 @@ class ActiveCommunityBoundariesView(APIView):
             results.append(
                 {
                     "id": boundary.pk,
-                    "community_id": str(community.public_id),
-                    "code": community.code,
+                    "community_id": str(community.public_id) if community else None,
+                    "code": community.code if community else boundary.name.strip().lower().replace(" ", "-"),
                     "name": boundary.name,
                     "locality": boundary.locality,
                     "is_home": boundary.is_home,
@@ -2573,7 +2587,13 @@ class EmergencyReporterContactView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        number = (alert.reporter_contact_number or "").strip() or getattr(alert.reporter, "phone_number", "")
+        from .contacts import resolve_reporter_number
+
+        # The live account number, not the snapshot taken when the alert was
+        # filed: a resident who changed handsets must be reachable at the new
+        # number, and an unusable value is reported as missing rather than
+        # returned as if it could be dialled.
+        number = resolve_reporter_number(alert)
         if not number:
             return Response({"detail": "No contact number is on file for this emergency."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -2764,12 +2784,7 @@ class EmergencyChatView(APIView):
 
     def get(self, request, pk):
         touch_last_seen(request.user)
-        alert = scoped_alert_or_404(request.user, pk)
-        if not can_view_alert(request.user, alert):
-            return Response(
-                {"detail": "You do not have permission to view this emergency chat."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        alert = participant_alert_or_404(request.user, pk)
         after_id = request.query_params.get("after")
         qs = (
             EmergencyChatMessage.objects.filter(alert=alert)
@@ -2777,24 +2792,34 @@ class EmergencyChatView(APIView):
             .prefetch_related(
                 "sender__designations__position",
                 "sender__designations__department",
+                # One query each, instead of two per message, for the SMS leg and
+                # the "received via SMS" flag the serializer reports.
+                "outbound_sms_messages",
+                "inbound_sms_messages",
             )
             .order_by("created_at", "id")
         )
         if after_id and str(after_id).isdigit():
             qs = qs.filter(pk__gt=int(after_id))
         messages = list(qs[:200])
+        from .chat_services import advance_chat_receipt, chat_message_context
+
+        if messages:
+            # The device holds these rows now. Recording it here keeps the polling
+            # path honest without a second round trip from the client; "read" is
+            # only ever claimed by the explicit receipt below.
+            advance_chat_receipt(
+                alert, request.user, through=messages[-1].pk, state="delivered"
+            )
         return Response(
-            EmergencyChatMessageSerializer(messages, many=True, context={"request": request}).data
+            EmergencyChatMessageSerializer(
+                messages, many=True, context=chat_message_context(request, alert)
+            ).data
         )
 
     def post(self, request, pk):
         touch_last_seen(request.user)
-        alert = scoped_alert_or_404(request.user, pk)
-        if not can_view_alert(request.user, alert):
-            return Response(
-                {"detail": "You do not have permission to chat on this emergency."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        alert = participant_alert_or_404(request.user, pk)
         if alert.status not in ACTIVE_STATUSES:
             return Response(
                 {"detail": "Chat is closed for resolved or cancelled alerts."},
@@ -2872,12 +2897,63 @@ class EmergencyChatView(APIView):
             )
             .get(pk=message.pk)
         )
-        from .chat_services import deliver_chat_message
+        from .chat_services import chat_message_context, deliver_chat_message
 
         if message_created:
             deliver_chat_message(message.pk)
-        payload = EmergencyChatMessageSerializer(message, context={"request": request}).data
+        payload = EmergencyChatMessageSerializer(
+            message, context=chat_message_context(request, alert)
+        ).data
         return Response(payload, status=status.HTTP_201_CREATED if message_created else status.HTTP_200_OK)
+
+
+class EmergencyChatReceiptView(APIView):
+    """Record how far the caller has got through one emergency's chat.
+
+    Sent by the client rather than inferred from presence: presence says "the app
+    is open", not "the human is looking at this message". `delivered` means the
+    device holds the message; `read` means the thread was on screen. Watermarks
+    only move forward, and a move is broadcast so the sender's ticks fill in
+    without waiting for the next poll.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        touch_last_seen(request.user)
+        alert = participant_alert_or_404(request.user, pk)
+        try:
+            through = int(request.data.get("through"))
+        except (TypeError, ValueError):
+            return Response(
+                {"through": ["A whole message id is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if through <= 0 or not alert.chat_messages.filter(pk=through).exists():
+            return Response(
+                {"through": ["That message is not part of this conversation."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        receipt_state = str(request.data.get("state", "delivered")).strip().lower()
+        if receipt_state not in {"delivered", "read"}:
+            return Response(
+                {"state": ["State must be 'delivered' or 'read'."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from .chat_services import advance_chat_receipt
+
+        row = advance_chat_receipt(
+            alert, request.user, through=through, state=receipt_state
+        )
+        return Response(
+            {
+                "alert": alert.pk,
+                "user": request.user.pk,
+                "delivered_through": row.delivered_through_id,
+                "read_through": row.read_through_id,
+            }
+        )
 
 
 class EmergencyCancelView(APIView):

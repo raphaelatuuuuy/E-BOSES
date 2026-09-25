@@ -225,7 +225,7 @@ export function DataTable<Row>({
             ) : visible.length === 0 ? (
               <tr>
                 <td colSpan={columns.length} className="px-6 py-16 text-center">
-                  <p className="text-row font-semibold text-brand-navy">{emptyTitle}</p>
+                  <p className="text-meta text-neutral-500">{emptyTitle}</p>
                   {emptyHint ? (
                     <p className="mt-2 text-read text-neutral-500">{emptyHint}</p>
                   ) : null}

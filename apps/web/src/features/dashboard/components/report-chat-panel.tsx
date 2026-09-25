@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   ArrowUpIcon,
+  CheckIcon,
+  CheckCheckIcon,
   ChevronUpIcon,
   Loader2Icon,
   MessageCircleIcon,
@@ -14,7 +16,7 @@ import {
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { initialsFor, roleLabel } from "@/features/dashboard/lib/people"
+import { initialsFor } from "@/features/dashboard/lib/people"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Marker, MarkerContent } from "@/components/ui/marker"
@@ -30,6 +32,7 @@ import {
   listConcernChat,
   reviewConcernAppeal,
   sendConcernChat,
+  sendConcernChatReceipt,
   type ConcernAppeal,
   type ConcernChatMessage,
 } from "@/features/dashboard/api"
@@ -154,6 +157,23 @@ export function ReportChatPanel({
     }
   }, [concernId, open, scrollToBottom, showHistory])
 
+  const sendReadReceipt = useCallback(
+    async (throughId: number) => {
+      try {
+        void sendConcernChatReceipt(concernId, throughId)
+      } catch {
+        /* receipt is best-effort */
+      }
+    },
+    [concernId],
+  )
+
+  useEffect(() => {
+    if (!open || !concernId || !messages.length) return
+    const latest = messages[messages.length - 1]
+    void sendReadReceipt(latest.id)
+  }, [open, concernId, messages, sendReadReceipt])
+
   const loadOlder = useCallback(async () => {
     if (!messages.length || loadingOlder) return
     setLoadingOlder(true)
@@ -221,11 +241,14 @@ export function ReportChatPanel({
           )
             return
 
-          setMessages((current) =>
-            current.some((item) => item.id === message.payload!.id)
-              ? current
-              : [...current, message.payload!]
-          )
+          setMessages((current) => {
+            const existing = current.find((item) => item.id === message.payload!.id)
+            if (existing && existing.delivery_state === message.payload!.delivery_state) return current
+            if (existing) {
+              return current.map((item) => (item.id === message.payload!.id ? message.payload! : item))
+            }
+            return [...current, message.payload!]
+          })
           void onMessageSent?.()
         } catch {
           void 0
@@ -257,17 +280,21 @@ export function ReportChatPanel({
       () => {
         void listConcernChat(concernId)
           .then((next) => {
-            const knownIds = new Set(messages.map((message) => message.id))
-            const newMessages = next.filter(
-              (message) => !knownIds.has(message.id)
-            )
-            if (!newMessages.length) return
-            setMessages((prev) => [
-              ...prev,
-              ...newMessages.filter(
-                (message) => !prev.some((item) => item.id === message.id)
-              ),
-            ])
+            setMessages((prev) => {
+              if (
+                next.length === prev.length &&
+                next.at(-1)?.id === prev.at(-1)?.id &&
+                next.every((m) => {
+                  const prevM = prev.find((p) => p.id === m.id)
+                  return prevM && prevM.delivery_state === m.delivery_state
+                })
+              )
+                return prev
+              const merged = new Map<number, ConcernChatMessage>()
+              for (const message of prev) merged.set(message.id, message)
+              for (const message of next) merged.set(message.id, message)
+              return [...merged.values()]
+            })
             void onMessageSent?.()
           })
           .catch(() => {})
@@ -733,8 +760,20 @@ export function ReportChatPanel({
             const msg = entry.message!
             const mine = isMine(msg)
             const name = msg.sender?.full_name || "User"
-            const role = roleLabel(msg.sender)
-            const footer = [formatChatTime(msg.created_at), name, role]
+            const deliveryEl = mine && msg.delivery_state
+              ? msg.delivery_state === "read"
+                ? (
+                  <span className="inline-flex items-center">
+                    <CheckCheckIcon className="size-3" strokeWidth={2.5} aria-hidden />
+                  </span>
+                )
+                : (
+                  <span className="inline-flex items-center">
+                    <CheckIcon className="size-3" strokeWidth={2.5} aria-hidden />
+                  </span>
+                )
+              : null
+            const footer = [formatChatTime(msg.created_at), name]
               .filter(Boolean)
               .join(" · ")
             const attachment = msg.attachment
@@ -828,8 +867,9 @@ export function ReportChatPanel({
                 </MessageAvatar>
                 <MessageContent className={mine ? "items-end" : "items-start"}>
                   {content}
-                  <MessageFooter className={mine ? "text-right" : "text-left"}>
+                  <MessageFooter className={cn(mine ? "text-right" : "text-left", "flex items-center gap-1")}>
                     {footer}
+                    {deliveryEl}
                   </MessageFooter>
                 </MessageContent>
               </Message>

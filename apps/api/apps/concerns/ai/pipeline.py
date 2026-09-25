@@ -686,9 +686,9 @@ def _record_decision_log(
             output_snapshot={
                 **output_snapshot,
                 "relevance": details.get("relevance"),
-        "primary_category": details.get("primary_category"),
-        "issue_count": details.get("issue_count"),
-        "notification_subject": details.get("notification_subject"),
+                "primary_category": details.get("primary_category"),
+                "issue_count": details.get("issue_count"),
+                "notification_subject": details.get("notification_subject"),
                 "severity": details.get("severity"),
                 "evidence_relationship": details.get("evidence_relationship"),
             },
@@ -699,6 +699,29 @@ def _record_decision_log(
         )
     except Exception:
         logger.warning("Could not write the LLM decision log for concern_id=%s", concern.pk, exc_info=True)
+    else:
+        try:
+            from apps.accounts.services import create_audit_log
+
+            create_audit_log(
+                "concern.ai_decided",
+                actor=None,
+                target_user=concern.reporter,
+                metadata={
+                    "concern_id": concern.pk,
+                    "concern_title": (concern.title or "")[:200],
+                    "concern_description": (concern.description or "")[:500],
+                    "decision": concern.validation_status or "",
+                    "reason": concern.validation_summary or "",
+                    "rejection_code": concern.rejection_code or "",
+                    "model_version": model_version or "",
+                    "recommended_action": details.get("recommended_action") or "",
+                    "backfilled": True,
+                },
+                request_meta={},
+            )
+        except Exception:
+            logger.debug("Concern AI audit log failed for concern_id=%s", concern.pk, exc_info=True)
 
 
 def _notify_validated_and_routed_concern(concern_id: int) -> None:

@@ -6,11 +6,13 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ActivityNotFoundException;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.telephony.SmsManager;
+import android.net.Uri;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -76,6 +78,34 @@ public class SmsInboxPlugin extends Plugin {
             return;
         }
         transmit(call);
+    }
+
+    @PluginMethod
+    public void openSms(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null || activity.isFinishing()) {
+            call.reject("The app is not ready to open SMS.");
+            return;
+        }
+        String to = call.getString("to", "");
+        String body = call.getString("body", "");
+        if (to == null || !to.matches("\\+?\\d{7,15}")) {
+            call.reject("Recipient number is invalid.");
+            return;
+        }
+        try {
+            Intent intent = new Intent(Intent.ACTION_SENDTO);
+            intent.setData(Uri.parse("smsto:" + to));
+            if (body != null && !body.isEmpty()) {
+                intent.putExtra("sms_body", body);
+            }
+            activity.startActivity(intent);
+            call.resolve();
+        } catch (ActivityNotFoundException e) {
+            call.reject("No SMS app is available on this device.");
+        } catch (Exception e) {
+            call.reject("Could not open the SMS app.");
+        }
     }
 
     @PermissionCallback

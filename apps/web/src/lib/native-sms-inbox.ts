@@ -6,6 +6,7 @@ interface SmsInboxPlugin {
     body: string
   } | null>
   sendSms(options: { to: string; body: string }): Promise<{ parts: number }>
+  openSms(options: { to: string; body?: string }): Promise<void>
 }
 
 const SmsInbox = registerPlugin<SmsInboxPlugin>("SmsInbox")
@@ -41,6 +42,15 @@ export async function sendSmsText(
   return { parts: Number(result?.parts ?? 1) || 1 }
 }
 
-export function openSmsApp(to: string, body: string) {
-  window.location.href = `sms:${to}?body=${encodeURIComponent(body)}`
+export async function openSmsApp(to: string, body?: string) {
+  if (canUseSmsInbox()) {
+    try {
+      await SmsInbox.openSms({ to, body })
+      return
+    } catch {
+      // Fall back to the platform URL if no SMS activity is available.
+    }
+  }
+  const query = body ? `?body=${encodeURIComponent(body)}` : ""
+  window.location.href = `sms:${to}${query}`
 }

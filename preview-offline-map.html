@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Offline Map Preview — Marikina Heights</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0c0c54;
+    color: #fff;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 16px 16px;
+  }
+  .back { font-size: 26px; line-height: 1; margin-bottom: 2px; cursor: pointer; }
+  .eyebrow { color: #ff5c00; font-size: 13px; font-weight: 800; letter-spacing: 1.5px; }
+  h1 { font-size: 30px; font-weight: 800; margin: 2px 0 14px; }
+  .progress { display: flex; gap: 8px; margin-bottom: 14px; }
+  .progress span { height: 6px; flex: 1; border-radius: 999px; background: #ff5c00; box-shadow: 0 0 8px rgba(255,92,0,.8); }
+  .progress span.dim { background: rgba(255,255,255,.18); box-shadow: none; }
+  #map {
+    position: relative;
+    height: 52vh;
+    min-height: 320px;
+    border-radius: 18px;
+    overflow: hidden;
+    background: #e8f5f0;
+  }
+  #map img.leaflet-tile { max-width: none !important; max-height: none !important; }
+  .ctrl {
+    position: absolute; top: 12px; right: 12px; z-index: 1000;
+    background: #fff; border-radius: 14px; overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  }
+  .ctrl button { border: 0; background: #fff; width: 44px; height: 44px; cursor: pointer; color: #111; }
+  .ctrl button + button { border-top: 1px solid #e5e5e5; }
+  .ctrl svg { width: 22px; height: 22px; }
+  .pin {
+    position: absolute; left: 50%; top: calc(50% - 64px); z-index: 1000;
+    width: 12px; height: 12px; margin: -6px 0 0 -6px;
+    border-radius: 999px; background: #111;
+    box-shadow: 0 1px 4px rgba(0,0,0,.35);
+  }
+  .pill {
+    position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 1000;
+    background: #fff; color: #111; border-radius: 999px;
+    padding: 14px 28px; text-align: center; white-space: nowrap;
+    box-shadow: 0 8px 24px rgba(0,0,0,.2);
+  }
+  .pill b { display: block; font-size: 16px; }
+  .pill small { color: #737373; font-size: 14px; font-weight: 500; }
+  .credit {
+    position: absolute; right: 8px; bottom: 4px; z-index: 1000;
+    background: rgba(255,255,255,.85); color: #737373;
+    font-size: 10px; font-weight: 500; border-radius: 999px; padding: 2px 8px;
+  }
+  .stat {
+    position: absolute; left: 8px; top: 8px; z-index: 1000;
+    background: rgba(12,12,84,.85); color: #fff;
+    font-size: 11px; font-weight: 600; border-radius: 999px; padding: 3px 10px;
+  }
+  .nav { display: flex; gap: 12px; margin-top: auto; padding-top: 20px; }
+  .nav button {
+    flex: 1; border-radius: 999px; padding: 18px; font-size: 17px; font-weight: 700;
+  }
+  .nav .back-btn { background: transparent; color: #fff; border: 1.5px solid rgba(255,255,255,.35); }
+  .nav .next-btn { background: rgba(255,255,255,.12); color: rgba(255,255,255,.4); border: 0; }
+</style>
+</head>
+<body>
+  <div class="back">←</div>
+  <div class="eyebrow">EMERGENCY SOS</div>
+  <h1>Confirm your location</h1>
+  <div class="progress"><span></span><span></span><span></span><span class="dim"></span></div>
+
+  <div id="map">
+    <div class="stat" id="stat">loading tiles…</div>
+    <div class="ctrl">
+      <button aria-label="Recenter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13v-9.5"/></svg></button>
+      <button aria-label="Locate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg></button>
+    </div>
+    <div class="pin"></div>
+    <div class="pill"><b>Use this location</b><small id="addr">Move the map to adjust</small></div>
+    <div class="credit">Offline map · © OpenStreetMap © CARTO</div>
+  </div>
+
+  <div class="nav">
+    <button class="back-btn">Back</button>
+    <button class="next-btn">Next</button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map("map", {
+      zoomControl: false,
+      attributionControl: false,
+      minZoom: 10,
+      maxZoom: 16,
+      maxBounds: [[14.5, 120.9], [14.8, 121.3]],
+      maxBoundsViscosity: 1,
+    });
+    let errors = 0;
+    const tiles = L.tileLayer("apps/web/public/tiles/{z}/{x}/{y}.png", {
+      minZoom: 10,
+      maxZoom: 16,
+      bounds: [[14.6321, 121.0984], [14.6719, 121.1425]],
+      tileSize: 256,
+    });
+    const stat = document.getElementById("stat");
+    const paint = () => { stat.textContent = "z" + map.getZoom() + (errors ? " · " + errors + " tile errors" : " · local tiles OK"); };
+    tiles.on("tileerror", () => { errors++; paint(); });
+    tiles.on("load", paint);
+    map.on("zoomend", paint);
+    tiles.addTo(map);
+    map.fitBounds([[14.6441, 121.1104], [14.6599, 121.1305]], { padding: [28, 28], animate: false });
+    map.setMaxZoom(16);
+    paint();
+  </script>
+</body>
+</html>

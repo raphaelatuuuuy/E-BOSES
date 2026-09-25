@@ -1,6 +1,20 @@
 from celery import shared_task
 
 
+@shared_task(time_limit=120, soft_time_limit=90)
+def handle_inbound_task(data: dict):
+    """Process an inbound SMS in the background.
+
+    Receives a flat dict of gateway data (serializable for Celery).
+    The HTTP view returns 202 immediately; this task does the work.
+    """
+    from .payload import inbound_payload_from_dict
+    from .router import handle_inbound
+
+    payload = inbound_payload_from_dict(data)
+    return handle_inbound(payload)
+
+
 @shared_task(
     bind=True,
     max_retries=3,

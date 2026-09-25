@@ -177,7 +177,7 @@ export default function OfficialConfigurationHubPage({
         {page.length === 0 ? (
           <div className="mt-8 py-16 text-center">
             <FolderOpenIcon className="mx-auto size-7 text-neutral-300" aria-hidden />
-            <h2 className="mt-4 text-row font-semibold text-brand-navy">{query ? "No sections match this view" : "No configuration sections"}</h2>
+            <h2 className="mt-4 text-meta text-neutral-500">{query ? "No sections match this view" : "No configuration sections"}</h2>
             <p className="mt-2 text-read text-neutral-500">{query ? "Try a different search." : "You do not have access to any configuration section. Ask the Barangay Captain to assign you a position."}</p>
           </div>
         ) : (

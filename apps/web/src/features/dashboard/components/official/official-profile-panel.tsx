@@ -50,7 +50,7 @@ export function OfficialProfilePanel() {
   return (
     <div className="flex min-w-0 flex-col">
       <section className="flex items-center gap-4">
-        <UserAvatar user={user} online={Boolean(user)} size="lg" className="!size-16 text-[22px]" />
+        <UserAvatar user={user} online={Boolean(user)} showStatus={false} size="lg" className="!size-16 text-[22px]" />
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[20px] font-bold leading-tight tracking-tight text-neutral-900">
             {fullName}

@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   ArrowUpIcon,
+  CheckIcon,
+  CheckCheckIcon,
   ChevronUpIcon,
   Loader2Icon,
   MessageCircleIcon,
+  MessageSquareIcon,
   MicIcon,
   PaperclipIcon,
+  PhoneIcon,
   PlayIcon,
   SendIcon,
   SquareIcon,
@@ -14,7 +18,7 @@ import {
 import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { initialsFor, roleLabel } from "@/features/dashboard/lib/people"
+import { initialsFor } from "@/features/dashboard/lib/people"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import {
@@ -47,9 +51,11 @@ import {
   formatVoiceTime,
 } from "@/features/dashboard/lib/use-voice-recorder"
 import { LocalAttachmentPreview } from "@/features/dashboard/components/comments"
+import { SOS_SMS_NUMBER } from "@/features/dashboard/components/sos/offline-sos-config"
 import {
   listEmergencyChat,
   sendEmergencyChat,
+  sendEmergencyChatReceipt,
   type EmergencyChatMessage,
 } from "@/features/dashboard/emergency-api"
 
@@ -73,7 +79,7 @@ export function EmergencyChatPanel({
   bare = false,
   variant = "classic",
   className,
-  smsTo,
+  callTo,
 }: {
   alertId: number
   open: boolean
@@ -92,8 +98,8 @@ export function EmergencyChatPanel({
   /** modern = report-details styling: pill input, thumb preview, waveform pill. */
   variant?: "classic" | "modern"
   className?: string
-  /** Direct number for offline SMS fallback. Absent = no offline sending. */
-  smsTo?: string | null
+  /** Authorized direct-call number. SMS always uses the E-Boses gateway. */
+  callTo?: string | null
 }) {
   const modern = variant === "modern"
   const { user } = useAuthSession()
@@ -135,6 +141,62 @@ export function EmergencyChatPanel({
       return Boolean(msg.is_mine)
     },
     [userId]
+  )
+
+  const [offlineHintKey, setOfflineHintKey] = useState<string | null>(null)
+  const latestMessage = messages.at(-1) ?? null
+  let latestOutgoingMessage: EmergencyChatMessage | null = null
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isMine(messages[index])) {
+      latestOutgoingMessage = messages[index]
+      break
+    }
+  }
+  const latestOutgoingId = latestOutgoingMessage?.id ?? null
+  const latestOutgoingState = latestOutgoingMessage?.delivery_state ?? null
+  const latestOutgoingFailed = Boolean(latestOutgoingMessage?.sendFailed)
+  const latestMessageIsOutgoing = latestMessage?.id === latestOutgoingId
+
+  const hintKey = [
+    open ? "open" : "closed",
+    disabled ? "disabled" : "enabled",
+    latestOutgoingId ?? "none",
+    latestMessageIsOutgoing ? "latest" : "not-latest",
+    latestOutgoingState ?? "none",
+    latestOutgoingFailed ? "failed" : "ok",
+  ].join(":")
+
+  useEffect(() => {
+    if (
+      !open ||
+      disabled ||
+      latestOutgoingId == null ||
+      !latestMessageIsOutgoing ||
+      latestOutgoingState !== "sent" ||
+      latestOutgoingFailed
+    )
+      return
+    const timer = window.setTimeout(() => setOfflineHintKey(hintKey), 10_000)
+    return () => window.clearTimeout(timer)
+  }, [
+    disabled,
+    hintKey,
+    latestMessageIsOutgoing,
+    latestOutgoingFailed,
+    latestOutgoingId,
+    latestOutgoingState,
+    open,
+  ])
+
+  const sendReadReceipt = useCallback(
+    async (throughId: number) => {
+      try {
+        void sendEmergencyChatReceipt(alertId, throughId, "read")
+      } catch {
+        /* receipt is best-effort */
+      }
+    },
+    [alertId],
   )
 
   const scrollToBottom = useCallback(() => {
@@ -191,6 +253,12 @@ export function EmergencyChatPanel({
   }, [load])
 
   useEffect(() => {
+    if (!open || !alertId || !messages.length || smsOffline) return
+    const latest = messages[messages.length - 1]
+    void sendReadReceipt(latest.id)
+  }, [open, alertId, messages, smsOffline, sendReadReceipt])
+
+  useEffect(() => {
     if (!open || !alertId || !realtime) return
     let socket: WebSocket | null = null
     let reconnectTimer: number | undefined
@@ -230,11 +298,25 @@ export function EmergencyChatPanel({
             message.payload.alert !== alertId
           )
             return
-          setMessages((current) =>
-            current.some((item) => item.id === message.payload!.id)
-              ? current
-              : [...current, message.payload!]
-          )
+          setMessages((current) => {
+            const isSmsInbound = Boolean(
+              message.payload!.via_sms || message.payload!.viaSms
+            )
+            const localEcho = isSmsInbound
+              ? current.find(
+                  (item) => item.id < 0 && item.body === message.payload!.body
+                )
+              : null
+            const existing = current.find((item) => item.id === message.payload!.id)
+            if (existing && existing.delivery_state === message.payload!.delivery_state) return current
+            if (existing) {
+              return current.map((item) => (item.id === message.payload!.id ? message.payload! : item))
+            }
+            return [
+              ...current.filter((item) => item.id !== localEcho?.id),
+              message.payload!,
+            ]
+          })
         } catch {
           // The REST poll remains the fallback for malformed frames.
         }
@@ -268,21 +350,32 @@ export function EmergencyChatPanel({
             setMessages((prev) => {
               if (
                 next.length === prev.length &&
-                next.at(-1)?.id === prev.at(-1)?.id
+                next.at(-1)?.id === prev.at(-1)?.id &&
+                next.every((m) => {
+                  const prevM = prev.find((p) => p.id === m.id)
+                  return prevM && prevM.delivery_state === m.delivery_state
+                })
               )
                 return prev
-              const knownIds = new Set(prev.map((message) => message.id))
-              return [
-                ...prev,
-                ...next.filter((message) => !knownIds.has(message.id)),
-              ]
+              const merged = new Map<number, EmergencyChatMessage>()
+              const inboundSmsBodies = new Set(
+                next
+                  .filter((message) => message.via_sms || message.viaSms)
+                  .map((message) => message.body)
+              )
+              for (const message of prev) {
+                if (message.id < 0 && inboundSmsBodies.has(message.body)) continue
+                merged.set(message.id, message)
+              }
+              for (const message of next) merged.set(message.id, message)
+              return [...merged.values()]
             })
           })
           .catch(() => {
             /* ignore poll errors */
           })
       },
-      realtime ? (socketLive ? 30000 : 8000) : 30000
+      realtime ? (socketLive ? 30_000 : 8_000) : 30_000
     )
     return () => window.clearInterval(id)
   }, [open, alertId, socketLive, realtime])
@@ -292,7 +385,13 @@ export function EmergencyChatPanel({
     const timer = window.setTimeout(() => {
       setMessages((prev) => {
         if (prev.some((m) => m.id === incomingMessage.id)) return prev
-        return [...prev, { ...incomingMessage }]
+        const isSmsInbound = Boolean(incomingMessage.via_sms || incomingMessage.viaSms)
+        return [
+          ...prev.filter(
+            (m) => !(isSmsInbound && m.id < 0 && m.body === incomingMessage.body)
+          ),
+          { ...incomingMessage },
+        ]
       })
       scrollToBottom()
     }, 0)
@@ -378,28 +477,30 @@ export function EmergencyChatPanel({
       return false
     }
     if (!bodyText.trim()) return false
-    const to = normalizeSmsRecipient(smsTo ?? "")
+    const to = normalizeSmsRecipient(SOS_SMS_NUMBER)
     if (!to) {
-      setSendFeedback("Recipient number unavailable while offline.")
-      toast.error("Recipient number unavailable while offline.")
+      setSendFeedback("E-Boses SMS number is unavailable.")
+      toast.error("E-Boses SMS number is unavailable.")
       return false
     }
-    if (smsBodyTooLong(bodyText)) {
-      toast.error("Message too long for SMS.")
+    const text = bodyText.trim()
+    const gatewayText = `E-BOSES CHAT E-${alertId}: ${text}`
+    if (smsBodyTooLong(gatewayText)) {
+      toast.error("Message too long for gateway SMS.")
       return false
     }
     setSending(true)
     setSendFeedback(null)
-    const text = bodyText.trim()
     try {
       if (canSendSms()) {
-        await sendSmsText(to, text)
+        await sendSmsText(to, gatewayText)
       } else {
-        openSmsApp(to, text)
+        openSmsApp(to, gatewayText)
       }
       setDraft("")
       setLoadError("")
-      setMessages((prev) => [...prev, smsEcho(text, false)])
+      const sentMsg = smsEcho(text, false)
+      setMessages((prev) => [...prev, sentMsg])
       scrollToBottom()
       return true
     } catch (error) {
@@ -419,14 +520,14 @@ export function EmergencyChatPanel({
   async function retrySms(id: number) {
     const target = messages.find((item) => item.id === id)
     if (!target || !target.sendFailed || sending) return
-    const to = normalizeSmsRecipient(smsTo ?? "")
+    const to = normalizeSmsRecipient(SOS_SMS_NUMBER)
     if (!to || !canSendSms()) {
       toast.error("Reconnect or open the SMS app to retry.")
       return
     }
     setSending(true)
     try {
-      await sendSmsText(to, target.body)
+      await sendSmsText(to, `E-BOSES CHAT E-${alertId}: ${target.body.trim()}`)
       setMessages((prev) =>
         prev.map((item) =>
           item.id === id ? { ...item, sendFailed: false } : item
@@ -500,6 +601,47 @@ export function EmergencyChatPanel({
       setCheckingAttachment(false)
     }
   }
+
+  const showOfflineHint =
+    offlineHintKey === hintKey &&
+    !disabled &&
+    latestOutgoingId != null &&
+    latestMessageIsOutgoing &&
+    latestOutgoingState === "sent" &&
+    !latestOutgoingFailed
+  const callNumber = normalizeSmsRecipient(callTo ?? "")
+  const gatewaySmsNumber = normalizeSmsRecipient(SOS_SMS_NUMBER)
+  const unreachableHint = showOfflineHint ? (
+    <div className="flex flex-col items-center gap-2 px-3 py-3 text-center">
+      <p
+        role="status"
+        className={cn(
+          "max-w-xs text-[12px] leading-5",
+          isDark ? "text-white/60" : "text-neutral-500"
+        )}
+      >
+        User is currently unreachable, you can contact through
+      </p>
+      <div className="flex gap-2">
+        {callNumber ? (
+          <a
+            href={`tel:${callNumber}`}
+            className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-50 dark:border-white/15 dark:text-white/80 dark:hover:bg-white/5"
+          >
+            <PhoneIcon className="size-3.5" strokeWidth={2} aria-hidden />
+            Call
+          </a>
+        ) : null}
+        <a
+          href={`sms:${gatewaySmsNumber}`}
+          className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-50 dark:border-white/15 dark:text-white/80 dark:hover:bg-white/5"
+        >
+          <MessageSquareIcon className="size-3.5" strokeWidth={2} aria-hidden />
+          SMS
+        </a>
+      </div>
+    </div>
+  ) : null
 
   return (
     <div
@@ -593,14 +735,24 @@ export function EmergencyChatPanel({
         {messages.map((msg) => {
           const mine = isMine(msg)
           const name = msg.sender?.full_name || "User"
-          const role = roleLabel(msg.sender)
-          const footer = [
+          const footerItems = [
             mine ? "You" : name,
-            !mine && role ? role : "",
             formatChatTime(msg.created_at),
           ]
-            .filter(Boolean)
-            .join(" · ")
+          const footer = footerItems.filter(Boolean).join(" · ")
+          const deliveryEl = mine && msg.delivery_state
+            ? msg.delivery_state === "read"
+              ? (
+                <span className="inline-flex items-center">
+                  <CheckCheckIcon className="size-3" strokeWidth={2.5} aria-hidden />
+                </span>
+              )
+              : (
+                <span className="inline-flex items-center">
+                  <CheckIcon className="size-3" strokeWidth={2.5} aria-hidden />
+                </span>
+              )
+            : null
           const attachment = msg.attachment
           // Pending authenticity analysis must not make a successfully sent
           // image disappear. The protected preview endpoint remains the source
@@ -707,12 +859,15 @@ export function EmergencyChatPanel({
                 <MessageFooter
                   className={cn(
                     mine ? "text-right" : "text-left",
-                    "font-normal",
+                    "font-normal flex items-center gap-1",
                     isDark && "text-white/40"
                   )}
                 >
                   {footer}
-                  {msg.viaSms ? " · Sent via SMS" : ""}
+                  {deliveryEl}
+                  {msg.viaSms || msg.via_sms
+                    ? ` · ${mine ? "Sent" : "Received"} via SMS`
+                    : ""}
                 </MessageFooter>
                 {msg.sendFailed && mine ? (
                   <button
@@ -740,6 +895,7 @@ export function EmergencyChatPanel({
         />
       ) : null}
 
+      {unreachableHint}
       {!disabled ? (
         modern ? (
           <div className="px-1 pt-1 pb-1">

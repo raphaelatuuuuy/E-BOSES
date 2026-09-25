@@ -74,15 +74,30 @@ def deliver_notification_task(notification_id):
     dozens of residents, so this runs in a worker instead of inside the request
     that created the notification.
     """
+    import logging
     from .models import Notification
     from .services import broadcast_notification
 
+    logger = logging.getLogger(__name__)
+    logger.warning("deliver_notification_task START notification_id=%s", notification_id)
     notification = Notification.objects.select_related("recipient", "emergency", "concern").filter(
         pk=notification_id
     ).first()
     if not notification:
+        logger.warning("deliver_notification_task SKIP notification_id=%s not_found", notification_id)
         return {"notification_id": notification_id, "skipped": True, "skip_reason": "not_found"}
+    logger.warning(
+        "deliver_notification_task recipient=%s type=%s emergency=%s",
+        notification.recipient_id,
+        notification.type,
+        notification.emergency_id,
+    )
     push_result = broadcast_notification(notification)
+    logger.warning(
+        "deliver_notification_task DONE notification_id=%s push_status=%s",
+        notification_id,
+        (push_result or {}).get("status"),
+    )
     return {
         "notification_id": notification_id,
         "push_status": (push_result or {}).get("status"),

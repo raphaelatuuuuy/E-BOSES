@@ -3,6 +3,25 @@ from django.core.exceptions import ValidationError
 
 PRIMARY_COMMUNITY_CODE = "marikina-heights"
 
+# Mirrors apps.emergencies.views.ACTIVE_STATUSES as raw strings so scoping does
+# not have to import the views module (which imports this one).
+ACTIVE_EMERGENCY_STATUSES = {
+    "submitted",
+    "routing",
+    "routed",
+    "awaiting_acknowledgment",
+    "acknowledged",
+    "en_route",
+    "nearby",
+    "arrived",
+    "resident_safe",
+    "backup_requested",
+    "backup_assigned",
+    "in_progress",
+    "transfer_required",
+    "escalation_required",
+}
+
 
 def community_ids_for_user(user):
     if not user or not user.is_authenticated:
@@ -58,6 +77,8 @@ def scope_emergency_queryset(queryset, user):
         ).distinct()
 
     if getattr(user, "role", None) == "first_responder":
+        from apps.emergencies.models import EmergencyTypeRoleMap
+
         departments = department_ids_for_user(user)
         unit_assignment = Q(
             assignments__status__in=[
@@ -81,8 +102,23 @@ def scope_emergency_queryset(queryset, user):
             assignments__responder__designations__is_active=True,
             assignments__responder__designations__department_id__in=departments,
         )
+        # An incident still waiting for somebody to take it has no assignment
+        # rows at all, so the two assignment filters above cannot see it. The
+        # unit's own queue and the claim list are empty by construction unless
+        # the responder is also allowed to look at the unassigned incidents
+        # their unit is being matched for.
+        unit_waiting = Q(
+            community_id__in=communities,
+            type__in=set(
+                EmergencyTypeRoleMap.objects.filter(
+                    department_id__in=departments, is_active=True
+                ).values_list("emergency_type", flat=True)
+            ),
+            status__in=ACTIVE_EMERGENCY_STATUSES,
+            assignments__isnull=True,
+        )
         return queryset.filter(
-            Q(assignments__responder=user) | unit_assignment
+            Q(assignments__responder=user) | unit_assignment | unit_waiting
         ).distinct()
 
     departments = department_ids_for_user(user)

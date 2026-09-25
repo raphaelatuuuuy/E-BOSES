@@ -13,6 +13,7 @@ going" for one and "what am I assigned to" for the other).
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 
 from django.conf import settings
@@ -38,6 +39,10 @@ PENDING_RECOVERY_LOCK_SECONDS = 120
 # Commands a resident may use. Anything else from a resident number is answered
 # with the guide rather than executed.
 RESIDENT_COMMANDS = {"HELP", "STATUS", "SAFE", "CANCEL", "GUIDE"}
+CHAT_ENVELOPE_PATTERN = re.compile(
+    r"^\s*E-BOSES\s+CHAT\s+E-\s*(\d+)\s*:\s*(.*?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class Reply:
@@ -50,6 +55,19 @@ class Reply:
         self.purpose = purpose
         self.alert = alert
         self.recipient = recipient
+
+
+def parse_chat_envelope(body: str | None) -> tuple[int, str] | None:
+    """Extract a gateway-only chat message and its emergency reference.
+
+    A phone that has no data cannot create the database chat row itself. It
+    sends this small envelope to the shared gateway number; the webhook then
+    authenticates the sender against the referenced alert before appending it.
+    """
+    match = CHAT_ENVELOPE_PATTERN.match(body or "")
+    if not match:
+        return None
+    return int(match.group(1)), match.group(2).strip()
 
 
 def resolve_role(user) -> str:
@@ -155,6 +173,7 @@ def handle_inbound(payload) -> InboundSmsMessage:
             "outcome",
             "command_keyword",
             "alert",
+            "chat_message",
             "detail",
         ]
     )
@@ -210,6 +229,21 @@ def recover_stuck_inbound_messages(*, limit: int = 100) -> dict[str, int]:
 
 
 def _dispatch(inbound, payload, match: SenderMatch, role: str) -> Reply | None:
+    chat = parse_chat_envelope(payload.body)
+    if chat is not None:
+        reference, body = chat
+        alert = _chat_alert_for_sender(reference, inbound.sender_number, match, role)
+        if not body:
+            inbound.outcome = InboundSmsMessage.Outcome.REJECTED
+            inbound.detail = "Gateway chat message was empty."
+            return Reply(None)
+        if not alert or not _append_to_active_chat(
+            inbound, match, body, alert=alert, role=role
+        ):
+            inbound.outcome = InboundSmsMessage.Outcome.REJECTED
+            inbound.detail = "Gateway chat reference is not assigned to this sender."
+        return Reply(None)
+
     command = parse_command(payload.body)
     inbound.command_keyword = command.keyword
 
@@ -236,6 +270,23 @@ def _dispatch(inbound, payload, match: SenderMatch, role: str) -> Reply | None:
     if parsed.is_emergency and not command.recognised:
         return _create_emergency(inbound, parsed, payload, match)
 
+    if role == ROLE_RESPONDER and not command.recognised:
+        assignment = _single_active_assignment_for_responder(match.user)
+        if assignment:
+            if _append_to_active_chat(
+                inbound,
+                match,
+                payload.body,
+                alert=assignment.alert,
+                role=ROLE_RESPONDER,
+            ):
+                return Reply(None)
+        inbound.outcome = InboundSmsMessage.Outcome.REJECTED
+        inbound.detail = (
+            "Responder SMS could not be linked; use the emergency chat or include its reference."
+        )
+        return Reply(None)
+
     if role in {ROLE_RESIDENT, ROLE_UNKNOWN} and not command.recognised:
         if _append_to_active_chat(inbound, match, payload.body):
             return Reply(None)
@@ -243,6 +294,53 @@ def _dispatch(inbound, payload, match: SenderMatch, role: str) -> Reply | None:
     inbound.outcome = InboundSmsMessage.Outcome.UNRECOGNISED
     inbound.detail = "No emergency signal recognised; SMS commands are managed in the app."
     return Reply(None)
+
+
+def _chat_alert_for_sender(reference: int, sender_number: str, match: SenderMatch, role: str):
+    """Return the referenced active alert only when the sender belongs to it."""
+    from apps.emergencies.models import EmergencyAlert
+    from apps.emergencies.responder_actions import open_assignment_for
+    from apps.emergencies.sms_intake import is_anonymous_intake
+    from apps.emergencies.views import ACTIVE_STATUSES
+
+    alert = EmergencyAlert.objects.filter(pk=reference, status__in=ACTIVE_STATUSES).first()
+    if not alert:
+        return None
+
+    if role == ROLE_RESPONDER:
+        return alert if match.user and open_assignment_for(alert, match.user) else None
+    if role == ROLE_RESIDENT:
+        return alert if match.user and alert.reporter_id == match.user.pk else None
+
+    # Unknown senders can only continue the anonymous alert that belongs to
+    # their own phone; an alert from another number must not be writable by
+    # guessing its numeric reference.
+    if is_anonymous_intake(alert.reporter):
+        from .normalize import normalize_ph_mobile
+
+        if normalize_ph_mobile(alert.reporter_contact_number) == normalize_ph_mobile(sender_number):
+            return alert
+    return None
+
+
+def _single_active_assignment_for_responder(responder):
+    """Return the only active assignment, or none when a reference is needed."""
+    if not responder:
+        return None
+    from apps.emergencies.models import EmergencyResponderAssignment
+    from apps.emergencies.responder_actions import OPEN_ASSIGNMENT_STATUSES
+    from apps.emergencies.views import ACTIVE_STATUSES
+
+    assignments = list(
+        EmergencyResponderAssignment.objects.filter(
+            responder=responder,
+            status__in=OPEN_ASSIGNMENT_STATUSES,
+            alert__status__in=ACTIVE_STATUSES,
+        )
+        .select_related("alert")
+        .order_by("-assigned_at", "-id")[:2]
+    )
+    return assignments[0] if len(assignments) == 1 else None
 
 
 def _handle_help(inbound, payload, match: SenderMatch, command: ParsedCommand) -> Reply:
@@ -318,18 +416,34 @@ def _create_emergency(inbound, parsed, payload, match: SenderMatch) -> Reply:
     return Reply(None)
 
 
-def _append_to_active_chat(inbound, match: SenderMatch, body: str, *, alert=None) -> bool:
+def _append_to_active_chat(
+    inbound,
+    match: SenderMatch,
+    body: str,
+    *,
+    alert=None,
+    role: str = ROLE_RESIDENT,
+) -> bool:
     from apps.emergencies.sms_intake import active_alert_for, find_intake_reporter
 
     reporter = find_intake_reporter(inbound.sender_number, match)
     active = alert or active_alert_for(reporter, inbound.sender_number)
     if not active:
         return False
-    sender = match.user if match.user and resolve_role(match.user) == ROLE_RESIDENT else reporter
+    if role == ROLE_RESPONDER and match.user:
+        sender = match.user
+        detail = "Responder SMS appended to the active emergency chat."
+    else:
+        sender = match.user if match.user and resolve_role(match.user) == ROLE_RESIDENT else reporter
+        detail = "Resident SMS appended to the active emergency chat."
     message = active.chat_messages.create(sender=sender, body=(body or "").strip()[:2000])
     inbound.alert = active
+    # Provenance: this inbound IS this chat line. The responder's thread can then
+    # say "received via SMS", and an answer can default to SMS because the
+    # resident is demonstrably texting rather than using the app.
+    inbound.chat_message = message
     inbound.outcome = InboundSmsMessage.Outcome.CHAT_APPENDED
-    inbound.detail = "Resident SMS appended to the active emergency chat."
+    inbound.detail = detail
     from apps.emergencies.chat_services import schedule_chat_message_delivery
 
     schedule_chat_message_delivery(message)

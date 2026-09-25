@@ -164,6 +164,11 @@ else:
     if ENABLE_GIS:
         DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
+# Daphne ASGI server connection timeout (seconds). Daphne kills
+# connections that exceed this; raising it prevents inbound SMS and
+# other long-running requests from being terminated prematurely.
+RUNSERVER_SERVER_TIMEOUT = env.int("RUNSERVER_SERVER_TIMEOUT", default=120)
+
 # Channel layers (Redis)
 REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")
 CHANNEL_LAYERS = {
@@ -803,7 +808,11 @@ OUTBOUND_SMS_SECRET = env("OUTBOUND_SMS_SECRET", default="")
 OUTBOUND_SMS_SIGN_KEY = env("OUTBOUND_SMS_SIGN_KEY", default="")
 OUTBOUND_SMS_EXTRA_HEADERS = env("OUTBOUND_SMS_EXTRA_HEADERS", default="")
 OUTBOUND_SMS_PAYLOAD_TEMPLATE = env("OUTBOUND_SMS_PAYLOAD_TEMPLATE", default="")
-OUTBOUND_SMS_SIM_SLOT = 1
+# Which SIM the handset sends from. SMS_GATE_SIM_NUMBER (the value an operator
+# copies out of the app) wins; this older name stays env-driven so a dual-SIM
+# handset whose barangay number lives in slot 2 is never silently asked to send
+# from slot 1. Before this, the literal `1` here won over .env.
+OUTBOUND_SMS_SIM_SLOT = env.int("OUTBOUND_SMS_SIM_SLOT", default=1)
 SMS_PIPELINE_ONLY = env.bool("SMS_PIPELINE_ONLY", default=IS_LOCAL_DEVELOPMENT and not IS_TEST_RUN)
 OUTBOUND_SMS_TIMEOUT_SECONDS = env.float(
     "OUTBOUND_SMS_TIMEOUT_SECONDS", default=SMS_GATE_TIMEOUT_SECONDS
@@ -811,6 +820,32 @@ OUTBOUND_SMS_TIMEOUT_SECONDS = env.float(
 # OTP texts get a tighter deadline than broadcasts: a stalled gateway must
 # not hang the registration request for the full 30 seconds.
 SMS_OTP_TIMEOUT_SECONDS = env.float("SMS_OTP_TIMEOUT_SECONDS", default=10.0)
+
+# ---------------------------------------------------------------------------
+# Emergency chat <-> SMS policy
+# ---------------------------------------------------------------------------
+# When a responder answers in the app, does the resident also get a text?
+#   gateway_only       - send through the gateway to every participant whose app
+#                        is not connected; the gateway number is the only SMS
+#                        number users are asked to text
+#   offline_only       - only when the resident's app is not connected (old behaviour)
+#   resident_used_sms  - also whenever the resident's last message on that alert
+#                        arrived by SMS, so a resident who replies to the text is
+#                        answered by the same channel instead of being told to
+#                        open an app they are not using
+#   always             - mirror every responder message to SMS
+SMS_CHAT_MIRROR_MODE = env("SMS_CHAT_MIRROR_MODE", default="gateway_only").strip().lower()
+if SMS_CHAT_MIRROR_MODE not in {"gateway_only", "offline_only", "resident_used_sms", "always"}:
+    raise ImproperlyConfigured(
+        "SMS_CHAT_MIRROR_MODE must be one of: gateway_only, offline_only, resident_used_sms, always."
+    )
+# The tracking id ("SOS-2026-000482") helps a resident juggling two alerts and is
+# noise in a one-alert conversation. Off by default: the chat SMS is a
+# conversation, not a form. Turn on when several alerts may run at once.
+SMS_CHAT_INCLUDE_REFERENCE = env.bool("SMS_CHAT_INCLUDE_REFERENCE", default=False)
+# One line on the first chat SMS of an alert so the resident discovers that
+# replying to the number reaches the responders.
+SMS_CHAT_REPLY_HINT = env.bool("SMS_CHAT_REPLY_HINT", default=True)
 # Falls back to the legacy emergency token so an already-configured handset
 # keeps working through the rename.
 _derived_sms_webhook_token = hmac.new(

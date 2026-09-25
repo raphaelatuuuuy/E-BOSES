@@ -79,7 +79,7 @@ const EMERGENCY_PIN = 28
 /** Ongoing SOS — the same circle-and-glyph an official and a responder see. */
 function emergencyPinHtml(selected: boolean, resolved: boolean) {
   return glyphPinHtml({
-    paths: GLYPHS.emergency,
+    paths: resolved ? GLYPHS.resolved : GLYPHS.emergency,
     color: resolved ? MAP_COLORS.resolved : MAP_COLORS.emergency,
     size: EMERGENCY_PIN,
     selected,

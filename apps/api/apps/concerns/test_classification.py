@@ -1385,8 +1385,19 @@ class GemmaParserTests(TestCase):
         self.assertEqual(result.details["detected_objects"], [])
 
     def test_an_urgent_report_is_never_recommended_for_plain_acceptance(self):
-        content = self.VALID_JSON.replace('"urgent_attention":false', '"urgent_attention":true').replace(
-            '"recommended_action":"accept_with_privacy_review"', '"recommended_action":"accept"'
+        # `urgent_attention` was replaced by the emergency type plus its
+        # concrete evidence. A current emergency must still come back as an
+        # escalation, never as a plain acceptance.
+        from apps.emergencies.models import EmergencyCategory
+
+        EmergencyCategory.objects.get_or_create(
+            community=None,
+            code="fire",
+            defaults={"label": "Fire", "is_active": True},
+        )
+        content = self.VALID_JSON.replace(
+            '"recommended_action":"accept_with_privacy_review"',
+            '"recommended_action":"accept","incident_timing":"ongoing","matched_emergency_type":"fire"',
         )
 
         result = parse_gemma_result(
@@ -1395,6 +1406,7 @@ class GemmaParserTests(TestCase):
             selected_category="vehicle",
             image_attached=True,
             image_review_succeeded=True,
+            report_text="A fire is burning and smoke is coming out of the house.",
         )
 
         self.assertEqual(result.details["recommended_action"], "escalate_as_emergency")

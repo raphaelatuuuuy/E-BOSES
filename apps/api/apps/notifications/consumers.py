@@ -105,6 +105,9 @@ class EmergencyTrackingConsumer(AuthenticatedJsonConsumer):
     async def emergency_chat(self, event):
         await self.send_json({"type": "emergency.chat", "payload": event["payload"]})
 
+    async def emergency_chat_receipt(self, event):
+        await self.send_json(event["payload"])
+
 
 class ConcernTrackingConsumer(AuthenticatedJsonConsumer):
     async def connect(self):

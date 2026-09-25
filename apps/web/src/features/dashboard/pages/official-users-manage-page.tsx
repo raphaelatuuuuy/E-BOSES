@@ -289,7 +289,7 @@ export default function OfficialUsersManagePage({ embedded = false }: { embedded
             <td className="min-w-0 max-w-0 px-4 py-4 align-middle sm:px-6 sm:py-5">
             <div className="flex min-w-0 items-start gap-2">
               <UserAvatar
-                user={{ full_name: user.full_name || user.email }}
+                user={{ id: user.id, full_name: user.full_name || user.email }}
                 size="sm"
                 className="!size-9 text-[14px]"
               />
@@ -460,6 +460,7 @@ function CreateUserDialog({
           <UserAvatar
             user={{ full_name: `${firstName} ${lastName}`.trim() || "New account" }}
             size="lg"
+            showStatus={false}
             className="!size-14 rounded-2xl text-xl"
           />
           <div className="min-w-0">
@@ -818,6 +819,7 @@ function UserManageDialog({
           <UserAvatar
             user={{ id: user.id, full_name: user.full_name || user.email }}
             size="lg"
+            showStatus={false}
             className="!size-14 rounded-2xl text-xl"
           />
           <div className="min-w-0">

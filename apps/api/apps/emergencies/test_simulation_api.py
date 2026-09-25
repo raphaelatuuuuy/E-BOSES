@@ -82,7 +82,7 @@ class EmergencySimulationViewTests(TestCase):
     def test_question_step_reports_whether_confirmation_is_required(self, classify):
         classify.return_value = simulation_payload(
             matched_emergency_type="medical",
-            urgent_attention=True,
+            current_danger=True,
             emergency_routing_reason="Someone collapsed and needs medical help.",
         )
 
@@ -101,7 +101,7 @@ class EmergencySimulationViewTests(TestCase):
             "Someone collapsed and needs medical help.",
         )
         self.assertIn("review", response.data)
-        self.assertIn("urgent_attention", response.data["review"])
+        self.assertIn("current_danger", response.data["review"])
         self.assertEqual(LlmDecisionLog.objects.count(), 1)
         log = LlmDecisionLog.objects.get()
         self.assertEqual(log.run_kind, LlmDecisionLog.RunKind.SIMULATION)
@@ -136,7 +136,6 @@ class EmergencySimulationViewTests(TestCase):
             incident_timing="ended",
             incident_timing_reason="The report says the fire ended.",
             current_danger=False,
-            urgent_attention=False,
             matched_emergency_type="",
         )
 
@@ -156,7 +155,6 @@ class EmergencySimulationViewTests(TestCase):
     def test_clearly_ongoing_incident_routes_without_an_extra_question(self, classify):
         classify.return_value = simulation_payload(
             matched_emergency_type="medical",
-            urgent_attention=True,
             recommended_action="escalate_as_emergency",
             incident_timing="ongoing",
             current_danger=True,
@@ -179,7 +177,7 @@ class EmergencySimulationViewTests(TestCase):
     def test_confirmed_ongoing_true_routes_to_an_on_duty_responder(self, classify):
         classify.return_value = simulation_payload(
             matched_emergency_type="medical",
-            urgent_attention=True,
+            current_danger=True,
         )
         responder = self._make_bhw_responder(on_duty=True)
 
@@ -215,7 +213,7 @@ class EmergencySimulationViewTests(TestCase):
     def test_confirmed_ongoing_true_with_no_one_on_duty(self, classify):
         classify.return_value = simulation_payload(
             matched_emergency_type="medical",
-            urgent_attention=True,
+            current_danger=True,
         )
         self._make_bhw_responder(on_duty=False)
 
@@ -238,7 +236,7 @@ class EmergencySimulationViewTests(TestCase):
     def test_simulation_and_real_web_creation_choose_the_same_route(self, classify):
         classify.return_value = simulation_payload(
             matched_emergency_type="medical",
-            urgent_attention=True,
+            current_danger=True,
         )
         responder = self._make_bhw_responder(on_duty=True)
         simulated = self._post({

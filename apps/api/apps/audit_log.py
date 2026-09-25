@@ -41,6 +41,7 @@ ACTION_LABELS = {
     "account.data_export_downloaded": "Downloaded a resident's data export",
     "concern.media_redacted": "Blurred a photo on a report",
     "concern.media_redaction_removed": "Removed the blur from a photo",
+    "concern.ai_decided": "System decided on a report",
     "auth.login_success": "Signed in",
     "auth.login_ip_blocked": "Sign-in blocked from an unusual place",
     "auth.registered": "Created an account",

@@ -1,10 +1,9 @@
 import { useState, type ReactNode } from "react"
 import {
   CircleCheck,
-  InfoIcon,
   ClockIcon,
   MapPinIcon,
-  MessageSquareIcon,
+  MessageCircleIcon,
   PhoneIcon,
   PlayIcon,
   TriangleAlertIcon,
@@ -209,6 +208,7 @@ export function MobileReportDetailPage({
 
       <SheetDialog
         open
+        onBack={visibleTab === "chat" ? () => setTab("info") : undefined}
         onClose={onBack}
         showClose={false}
         size="wide"
@@ -234,25 +234,11 @@ export function MobileReportDetailPage({
           />
         }
         /* Custom header: title + description + actions slot */
-        title="Report details"
+        title={visibleTab === "chat" ? "Chat" : "Report details"}
+        titleClassName={visibleTab === "chat" ? "text-center" : undefined}
         actions={
           <div className="flex items-center gap-1">
             {headerAction}
-            {/* Info icon — switches to info tab */}
-            <button
-              type="button"
-              onClick={() => setTab("info")}
-              className={cn(
-                "flex size-10 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:outline-none",
-                visibleTab === "info"
-                  ? "text-neutral-900"
-                  : "text-neutral-500 hover:text-neutral-800"
-              )}
-              aria-label="View report info"
-            >
-              <InfoIcon className="size-5" aria-hidden="true" />
-            </button>
-
             {/* Pill toggle: Chat / Updates */}
             <div className="flex items-center gap-0.5 rounded-full bg-neutral-100 p-0.5">
               {tabOptions.map((opt) => (
@@ -532,11 +518,11 @@ export function MobileEmergencyReportDetailPage({
         title={tab === "chat" ? "Chat" : sheetTitle}
         titleClassName={
           tab === "chat"
-            ? undefined
+            ? "text-center"
             : "text-center text-[18px] font-medium leading-snug"
         }
         headerTop={
-          tab === "chat" ? undefined : location || alert.barangay ? (
+          location || alert.barangay ? (
             <span className="inline-flex max-w-full items-center gap-1.5">
               <MapPinIcon className="size-3.5 shrink-0" aria-hidden />
               <span className="truncate">
@@ -576,11 +562,9 @@ export function MobileEmergencyReportDetailPage({
                     {reporterName}
                   </p>
                   <p className="mt-0.5 truncate text-[12px] text-neutral-600">
-                    {resolved
-                      ? "Phone unavailable"
-                      : reporterContactPhone ||
-                        alert.reporter_phone?.trim() ||
-                        "Phone unavailable"}
+                    {reporterContactPhone ||
+                      alert.reporter_phone?.trim() ||
+                      "Phone unavailable"}
                   </p>
                 </div>
                 {!resolved ? (
@@ -603,7 +587,7 @@ export function MobileEmergencyReportDetailPage({
                   title="Chat with resident"
                   className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none"
                 >
-                  <MessageSquareIcon className="size-4" aria-hidden="true" />
+                  <MessageCircleIcon className="size-4" aria-hidden="true" />
                   <span>Chat</span>
                 </button>
               </div>
@@ -842,7 +826,7 @@ export function MobileEmergencyReportDetailPage({
                 bare
                 disabled={terminal}
                 className="h-full min-h-0 flex-1"
-                smsTo={resolved ? null : reporterContactPhone}
+                callTo={resolved ? null : reporterContactPhone}
               />
             </div>
           ) : (

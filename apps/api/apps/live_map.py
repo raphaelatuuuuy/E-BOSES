@@ -33,6 +33,11 @@ MAP_CONCERN_LIMIT = 300
 GPS_FIX_MAX_AGE_MS = 60_000
 GPS_CLOCK_SKEW_MS = 5_000
 
+
+def isoformat_or_none(value):
+    """Return a JSON-safe ISO-8601 timestamp for map payloads."""
+    return value.isoformat() if value is not None else None
+
 CONCERN_ACTIVE = {
     Concern.Status.SUBMITTED,
     Concern.Status.UNDER_REVIEW,
@@ -846,7 +851,7 @@ def route_for_responder_assignment(alert, assignment, *, refresh=False, include_
             "responder_id": assignment.responder_id,
             "assignment_status": assignment.status,
             "route_revision": stored.route_revision,
-            "updated_at": stored.updated_at,
+            "updated_at": isoformat_or_none(stored.updated_at),
         }
     # Only fresh, reasonably accurate GPS can drive a new live route. A stored
     # route remains usable for map display while the responder sends a fresh
@@ -878,7 +883,7 @@ def route_for_responder_assignment(alert, assignment, *, refresh=False, include_
                 "responder_id": assignment.responder_id,
                 "assignment_status": assignment.status,
                 "route_revision": stored.route_revision,
-                "updated_at": stored.updated_at,
+                "updated_at": isoformat_or_none(stored.updated_at),
             }
         return None
     profile = assignment.travel_profile or "car"
@@ -943,7 +948,7 @@ def route_for_responder_assignment(alert, assignment, *, refresh=False, include_
         "responder_id": assignment.responder_id,
         "assignment_status": assignment.status,
         "route_revision": stored.route_revision,
-        "updated_at": stored.updated_at,
+        "updated_at": isoformat_or_none(stored.updated_at),
     }
     if not include_steps:
         payload["steps"] = []

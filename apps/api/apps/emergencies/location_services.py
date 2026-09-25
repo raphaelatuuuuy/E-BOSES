@@ -9,6 +9,7 @@ and an emergency must never wait on the network for a street name.
 from __future__ import annotations
 
 import logging
+import re
 
 from django.db import transaction
 
@@ -93,6 +94,73 @@ def display_location(alert) -> str:
         if (candidate or "").strip() and "pinned" not in candidate.lower():
             return candidate.strip()
     return "Pinned location · Address unavailable" if alert.latitude is not None and alert.longitude is not None else "Location needs confirmation"
+
+
+# Values the SOS picker, the geocoder, and older records store when no street
+# was ever resolved. Read back to a resident they look like an address, so they
+# count as "no street yet".
+_UNKNOWN_STREET_MARKERS = (
+    "pinned location",
+    "pinned coordinates",
+    "sms fallback coordinates",
+    "needs confirmation",
+    "pending confirmation",
+    "location pending",
+    "location unavailable",
+    "address unavailable",
+    "selected location",
+    "move the map",
+    "unknown",
+)
+_COORDINATES_ONLY_RE = re.compile(r"^-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}$")
+# "99 Champaca Street" -> "Champaca Street". The public wording names the street
+# a neighbour has to avoid, never the house that reported the emergency.
+_HOUSE_NUMBER_PREFIX_RE = re.compile(r"^\d+[A-Za-z]?(?:\s*[-/]\s*[\dA-Za-z]+)?\s+")
+# "malapit sa Champaca Street" and "near Champaca Street" both already mean
+# "near", which the sentence around the phrase says out loud.
+_LEADING_NEAR_PHRASE_RE = re.compile(r"^(?:near|beside|malapit(?:\s+sa)?|sa)\s+", re.IGNORECASE)
+# Nominatim, the offline street index, and the resident all mix the barangay and
+# the city into the same string. Those segments name the area, not the street.
+_AREA_ONLY_SEGMENTS = ("marikina heights", "marikina", "marikina city", "metro manila")
+
+
+def _street_segment(value: str) -> str:
+    """The street part of a stored location string, or "" when it is only an area."""
+    text = str(value or "").strip()
+    if not text or _COORDINATES_ONLY_RE.match(text):
+        return ""
+    lowered = text.casefold()
+    if any(marker in lowered for marker in _UNKNOWN_STREET_MARKERS):
+        return ""
+    for part in text.split(","):
+        segment = part.strip().strip(",").strip()
+        if not segment or segment.casefold() in _AREA_ONLY_SEGMENTS:
+            continue
+        segment = _LEADING_NEAR_PHRASE_RE.sub("", segment)
+        return _HOUSE_NUMBER_PREFIX_RE.sub("", segment).strip(" ,.")
+    return ""
+
+
+def alert_street_address(alert) -> str:
+    """The street a community alert should name, or "" when none is known yet.
+
+    A resident deciding whether to stay or leave needs a street; "near the
+    area" only tells them what they already know. The candidates are ordered
+    like ``display_location``: a geocoded street beats what the resident typed,
+    and what the resident typed beats the pin the SOS picker stored. The
+    barangay is deliberately not appended - neighbours reading the alert
+    already know which barangay they are in, so the street is the whole answer.
+    """
+    for candidate in (
+        getattr(alert, "canonical_street", ""),
+        getattr(alert, "resolved_location", ""),
+        getattr(alert, "reported_area", ""),
+        getattr(alert, "address", ""),
+    ):
+        street = _street_segment(candidate)
+        if street:
+            return street
+    return ""
 
 
 def resolve_alert_location(alert_id: int) -> dict:

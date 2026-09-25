@@ -38,6 +38,7 @@ from apps.concerns.models import (
     LlmDecisionLog,
 )
 from apps.capabilities import CONFIGURE_CLASSIFICATION, MANAGE_USERS, HasCapability, capabilities_for
+from apps.community_scope import community_ids_for_user
 from apps.geo_services import validate_report_location
 from apps.media_urls import concern_media_preview_url
 
@@ -1725,11 +1726,9 @@ class LlmDecisionLogListView(APIView):
         granted = capabilities_for(request.user)
         if CONFIGURE_CLASSIFICATION not in granted and MANAGE_USERS not in granted:
             return Response({"detail": "You do not have permission to read automated decisions."}, status=status.HTTP_403_FORBIDDEN)
-        from apps.community_scope import selected_community
-
-        community = selected_community(request.user, request.query_params.get("community_id"))
-        if not community:
-            return Response({"detail": "Choose an active community."}, status=status.HTTP_403_FORBIDDEN)
+        community_ids = community_ids_for_user(request.user)
+        if not community_ids:
+            return Response({"detail": "You do not have permission to read automated decisions."}, status=status.HTTP_403_FORBIDDEN)
         qs = LlmDecisionLog.objects.select_related(
             "assigned_department",
             "concern",
@@ -1743,8 +1742,8 @@ class LlmDecisionLogListView(APIView):
             "concern__escalated_emergencies",
         )
         qs = qs.filter(
-            Q(concern__community=community)
-            | Q(concern__isnull=True, assigned_department__community=community)
+            Q(concern__community_id__in=community_ids)
+            | Q(concern__isnull=True, assigned_department__community_id__in=community_ids)
         )
 
         domain = request.query_params.get("domain", "")

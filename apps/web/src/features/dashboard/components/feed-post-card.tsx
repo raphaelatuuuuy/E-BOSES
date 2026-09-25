@@ -592,7 +592,7 @@ export function FeedPostCard({
         }
       >
         <div className="flex items-center gap-2.5 p-3.5 pb-0">
-          <UserAvatar user={post.reporter} size="lg" />
+          <UserAvatar user={post.reporter} showStatus={false} size="lg" />
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">

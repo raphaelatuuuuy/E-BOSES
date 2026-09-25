@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react"
 import { toast } from "sonner"
-import { ArrowLeftIcon, PhoneIcon } from "lucide-react"
+import { ArrowLeftIcon } from "lucide-react"
 import { ApiError } from "@/lib/api"
 import { SosTakeover } from "@/features/dashboard/components/sos/sos-takeover"
 import { canSendSms, openSmsApp, sendSmsText } from "@/lib/native-sms-inbox"
@@ -295,6 +295,7 @@ export function SosWizard({
   const [statusAnnouncement, setStatusAnnouncement] = useState("")
   const [smsSending, setSmsSending] = useState(false)
   const clientRequestIdRef = useRef(crypto.randomUUID())
+  const wasOpenRef = useRef(open)
   const submitAbortRef = useRef<AbortController | null>(null)
   const cancelRequestedRef = useRef(false)
 
@@ -492,6 +493,16 @@ export function SosWizard({
     setSmsSending(false)
   }
 
+  useEffect(() => {
+    // The parent can close the shell after a native SMS handoff without
+    // unmounting this component. Reset on the closed transition as a final
+    // guard so the next SOS always starts blank.
+    if (wasOpenRef.current && !open) resetWizard()
+    wasOpenRef.current = open
+    // resetWizard intentionally contains the complete draft reset list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   function closeShell() {
     if (step === "countdown") {
       if (submitting) {
@@ -567,11 +578,6 @@ export function SosWizard({
       return
     }
     if (step === "review") {
-      if (!isOnline) {
-        setSubmitError(OFFLINE_SUBMIT_ERROR)
-        setStatusAnnouncement(OFFLINE_SUBMIT_ERROR)
-        return
-      }
       setSubmitError("")
       setDispatchCountdown(5)
       setStep("countdown")
@@ -599,6 +605,7 @@ export function SosWizard({
   async function submitEmergency() {
     if (!location || !emergency || submitting) return
     if (!isOnline) {
+      // eslint-disable-next-line
       await sendSmsAlert()
       return
     }
@@ -781,7 +788,7 @@ export function SosWizard({
       await enqueueCurrentEmergency().catch(() => undefined)
       resetWizard()
       onClose()
-      openSmsApp(SOS_SMS_NUMBER, smsBody)
+      openSmsApp(SOS_SMS_NUMBER)
     } finally {
       setSmsSending(false)
     }
@@ -795,6 +802,7 @@ export function SosWizard({
       return
     }
     setSmsSending(true)
+    openSmsApp(to)
     try {
       const nativeSmsAvailable = canSendSms()
       if (nativeSmsAvailable) {
@@ -808,26 +816,22 @@ export function SosWizard({
         }
       } else {
         setStatusAnnouncement(
-          "Opening your SMS app with a draft. Review the message and activate Send."
+          "Opening your SMS app. Please type your message and send it."
         )
       }
-      await enqueueCurrentEmergency().catch(() => undefined)
-      resetWizard()
-      onClose()
-      if (!nativeSmsAvailable) openSmsApp(to, smsBody)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Could not send SMS."
       setStatusAnnouncement(`Alert was not sent. ${message}`)
       toast.error(message)
     } finally {
+      resetWizard()
+      onClose()
       setSmsSending(false)
     }
   }
 
   const locationLabel = location?.addressPrimary || location?.address
-  const useSmsDelivery = !isOnline
-  const nativeSmsDelivery = useSmsDelivery && canSendSms()
   const locationCanContinue = Boolean(
     location &&
     isSosLocationReady(location) &&
@@ -845,48 +849,25 @@ export function SosWizard({
           >
             Back
           </button>
-          {step === "review" && useSmsDelivery ? (
-            nativeSmsDelivery ? (
-              <button
-                type="button"
-                onClick={() => void sendSmsAlert()}
-                disabled={smsSending}
-                className="flex h-[60px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[17px] font-semibold text-white transition-colors hover:bg-brand-orange-strong disabled:opacity-60"
-              >
-                <PhoneIcon className="size-4" aria-hidden="true" />
-                {smsSending ? "Sending…" : "Send Alert"}
-              </button>
-            ) : emergencySmsHref ? (
-              <a
-                href={emergencySmsHref}
-                onClick={handleSmsFallbackClick}
-                className="flex h-[60px] flex-[1.4] items-center justify-center gap-2 rounded-full bg-brand-orange px-4 text-[17px] font-semibold text-white transition-colors hover:bg-brand-orange-strong"
-              >
-                <PhoneIcon className="size-4" aria-hidden="true" />
-                Send Alert
-              </a>
-            ) : null
-          ) : (
-            <button
-              type="button"
-              onClick={goNext}
-              disabled={
-                (step === "category" && !emergency) ||
-                (step === "triage" &&
-                  hasUnansweredQuestions(triage, activeQuestions)) ||
-                (step === "location" && !locationCanContinue)
-              }
-              className={cn(
-                "h-[60px] flex-[1.4] rounded-full text-[17px] font-semibold text-white transition-all active:scale-[0.99]",
-                step === "review"
-                  ? "bg-sos hover:opacity-90"
-                  : "bg-brand-orange hover:bg-brand-orange-strong",
-                "disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40 disabled:active:scale-100"
-              )}
-            >
-              {step === "review" ? "Send SOS" : "Next"}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={goNext}
+            disabled={
+              (step === "category" && !emergency) ||
+              (step === "triage" &&
+                hasUnansweredQuestions(triage, activeQuestions)) ||
+              (step === "location" && !locationCanContinue)
+            }
+            className={cn(
+              "h-[60px] flex-[1.4] rounded-full text-[17px] font-semibold text-white transition-all active:scale-[0.99]",
+              step === "review"
+                ? "bg-sos hover:opacity-90"
+                : "bg-brand-orange hover:bg-brand-orange-strong",
+              "disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40 disabled:active:scale-100"
+            )}
+          >
+            {step === "review" ? "Send SOS" : "Next"}
+          </button>
         </div>
         {step === "category" ? (
           <p className="mt-3 text-center text-[13px] text-white/50">
@@ -1047,7 +1028,7 @@ export function SosWizard({
           <SosConfirmStep
             mode={step}
             submitError={submitError}
-            emergencySmsHref={useSmsDelivery ? emergencySmsHref : ""}
+            emergencySmsHref={!isOnline ? emergencySmsHref : ""}
             onSmsFallbackClick={handleSmsFallbackClick}
             typeLabel={typeMeta?.label}
             locationLabel={locationLabel}
@@ -1056,7 +1037,6 @@ export function SosWizard({
             submitting={submitting}
             dispatchCountdown={dispatchCountdown}
             onEditStep={(next) => setStep(next)}
-            isOnline={isOnline}
           />
         ) : null}
 

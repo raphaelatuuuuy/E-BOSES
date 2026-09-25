@@ -19,6 +19,7 @@ from .views import (
     EmergencyCategoryListCreateView,
     EmergencyBackupView,
     EmergencyChatAttachmentView,
+    EmergencyChatReceiptView,
     EmergencyChatView,
     EmergencyClaimView,
     EmergencyCreateView,
@@ -105,6 +106,11 @@ urlpatterns = [
         name="emergency-community-comment-flag-create",
     ),
     path("<int:pk>/chat/", EmergencyChatView.as_view(), name="emergency-chat"),
+    path(
+        "<int:pk>/chat/receipt/",
+        EmergencyChatReceiptView.as_view(),
+        name="emergency-chat-receipt",
+    ),
     path("<int:pk>/assign/", EmergencyAssignView.as_view(), name="emergency-assign"),
     path(
         "<int:pk>/assignments/<int:assignment_id>/remove/",

@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMS Fallback Offline — Real UI Flow</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #111; color: #eee; padding: 20px; }
+h1 { color: #ff6a1a; font-size: 24px; margin-bottom: 4px; }
+h2 { color: #ff6a1a; font-size: 18px; margin: 32px 0 12px; border-bottom: 1px solid #333; padding-bottom: 6px; }
+h3 { color: #ccc; font-size: 14px; margin: 16px 0 8px; }
+.meta { color: #666; font-size: 12px; margin-bottom: 20px; font-family: monospace; }
+.file { color: #4fc3f7; font-family: monospace; font-size: 12px; }
+.section { background: #1a1a1a; border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.step { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; }
+.step.done { color: #4caf50; }
+.step.now { color: #ff6a1a; font-weight: bold; }
+.step.todo { color: #555; }
+.phone { max-width: 360px; margin: 0 auto; border: 10px solid #222; border-radius: 28px; overflow: hidden; background: #fff; }
+.phone-bar { background: #0b1020; color: #fff; padding: 8px 12px; font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.phone-body { padding: 12px; min-height: 250px; font-size: 13px; color: #333; }
+.btn { display: inline-block; padding: 8px 16px; border-radius: 20px; font-size: 12px; font-weight: 600; border: none; cursor: pointer; }
+.btn-sos { background: #d9480f; color: #fff; }
+.btn-grey { background: #e8e8e8; color: #555; }
+.msg { padding: 8px 12px; border-radius: 12px; margin-bottom: 6px; font-size: 12px; max-width: 75%; }
+.msg.out { background: #d9480f; color: #fff; margin-left: auto; border-radius: 12px 4px 12px 12px; }
+.msg.in { background: #f0f0f0; color: #333; margin-right: auto; border-radius: 4px 12px 12px 12px; }
+.msg .time { font-size: 9px; opacity: 0.6; margin-top: 2px; text-align: right; }
+.code { background: #0d1117; color: #c9d1d9; padding: 12px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.6; overflow-x: auto; white-space: pre; }
+.kw { color: #ff7b72; }
+.fn { color: #d2a8ff; }
+.str { color: #7ee787; }
+.cmt { color: #8b949e; }
+.tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+.tag-orange { background: #fff3e6; color: #d9480f; }
+.tag-green { background: #e6f4ea; color: #1e7e34; }
+.tag-grey { background: #f0f0f0; color: #555; }
+.feedback-screen { background: #fff !important; color: #333 !important; border-radius: 28px; overflow: hidden; max-width: 360px; margin: 0 auto; border: 10px solid #ddd; }
+.feedback-screen .phone-bar { background: #f8f8f8; color: #333; border-bottom: 1px solid #e0e0e0; }
+.feedback-screen .phone-body { background: #fff; }
+.check-circle { width: 72px; height: 72px; border-radius: 50%; background: #10b981; display: flex; align-items: center; justify-content: center; margin: 20px auto; font-size: 32px; color: #fff; }
+.signin-screen { background: #fff !important; color: #333 !important; border-radius: 0; overflow: hidden; max-width: none; border: none; }
+.signin-screen .phone-bar { background: #1a1a1a; color: #fff; }
+.signin-screen .phone-body { background: #fff; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.flow { text-align: center; color: #ff6a1a; font-size: 14px; font-weight: bold; margin: 12px 0; }
+.real { border: 2px solid #4caf50; }
+.review { background: #fff8f0; }
+.map-bg { background: #e8f5f0; height: 140px; display: flex; align-items: center; justify-content: center; margin: 8px 0; border-radius: 8px; position: relative; }
+.info-box { background: #fff3e6; border-left: 3px solid #d9480f; padding: 10px 12px; border-radius: 0 6px 6px 0; font-size: 12px; margin: 8px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+th { background: #222; color: #ccc; padding: 6px 8px; text-align: left; border-bottom: 1px solid #444; }
+td { padding: 6px 8px; border-bottom: 1px solid #2a2a2a; color: #aaa; }
+hr { border: none; border-top: 1px solid #333; margin: 12px 0; }
+</style>
+</head>
+<body>
+
+<h1>SMS Fallback Offline — Real UI Flow</h1>
+<p class="meta">All strings taken directly from source code. No invented content.</p>
+
+<!-- ========== STEP 1: OFFLINE DETECTION ========== -->
+<h2>1. User goes offline — Global SOS Coordinator</h2>
+<p class="file">global-sos-coordinator.tsx → OfflineSheetContent / OfflineColdStartPage</p>
+
+<h3>Resident sees (full page overlay):</h3>
+<div class="section real">
+<div style="text-align:center; padding: 24px 16px;">
+<div style="font-size:40px; margin-bottom:8px;">&#9938;</div>
+<p style="font-size:24px; font-weight:bold; margin:8px 0;">You&rsquo;re Offline</p>
+<p style="font-size:14px; color:#666; margin-bottom:16px;">No internet connection. You can still get help — Emergency SOS works offline via SMS.</p>
+<div class="btn btn-sos" style="width:100%; padding:12px; font-size:15px;">Open SOS &#8594;</div>
+<p style="font-size:12px; color:#888; margin-top:10px;">Use your phone&rsquo;s SMS app to get help.</p>
+</div>
+</div>
+
+<h3>Official/Responder sees:</h3>
+<div class="section">
+<p style="font-size:13px; color:#aaa;">&ldquo;No internet connection. Connect to continue.&rdquo;</p>
+</div>
+
+<div class="flow">&#9660; User taps &ldquo;Open SOS&rdquo;</div>
+
+<!-- ========== STEP 2: SOS WIZARD ========== -->
+<h2>2. SOS Wizard opens — Step by step</h2>
+<p class="file">sos-wizard.tsx</p>
+<div class="section">
+<div class="step done"><span>&#10003;</span> Step 1: Category — &ldquo;What&rsquo;s the emergency?&rdquo;</div>
+<div class="step done"><span>&#10003;</span> Step 2: Triage — &ldquo;Quick questions&rdquo;</div>
+<div class="step done"><span>&#10003;</span> Step 3: Location — &ldquo;Confirm your location&rdquo;</div>
+<div class="step now"><span>4</span> Step 4: Review — &ldquo;Review &amp; send&rdquo;</div>
+<div class="step todo"><span>5</span> Step 5: Status — &ldquo;Emergency Status&rdquo;</div>
+</div>
+
+<h3>Step 4 Review — Online mode (normal):</h3>
+<div class="section">
+<div class="btn btn-sos" style="font-size:17px; padding:14px 40px;">Send SOS</div>
+</div>
+
+<h3>Step 4 Review — Offline mode (SMS ACTIVATED):</h3>
+<div class="section review real">
+<div class="file" style="margin-bottom:8px;">// useSmsDelivery = !isOnline → true</div>
+<div class="file" style="margin-bottom:8px;">// nativeSmsDelivery = useSmsDelivery && canSendSms()</div>
+<div class="btn btn-sos" style="font-size:17px; padding:14px 40px;">&#128222; Send Alert</div>
+<div class="info-box">
+<strong>Only shown when:</strong> <code>step === "review"</code> AND <code>useSmsDelivery</code> (offline) AND <code>nativeSmsDelivery</code> (Android) OR <code>emergencySmsHref</code> exists (any device)
+</div>
+</div>
+
+<div class="flow">&#9660; User taps &ldquo;&#128222; Send Alert&rdquo;</div>
+
+<!-- ========== STEP 3: WHAT HAPPENS AFTER SEND ========== -->
+<h2>3. After Send Alert — what happens in code</h2>
+<p class="file">sos-wizard.tsx → sendSmsAlert() (line 781)</p>
+<div class="section">
+<div class="code"><span class="kw">async function</span> <span class="fn">sendSmsAlert</span>() {
+  <span class="kw">const</span> to = <span class="fn">normalizeSmsRecipient</span>(SOS_SMS_NUMBER)  <span class="cmt">// "09640746068"</span>
+  <span class="kw">if</span> (!to || <span class="fn">smsBodyTooLong</span>(smsBody)) {
+    <span class="fn">toast.error</span>(<span class="str">"This alert is too long to send by SMS."</span>)
+    <span class="kw">return</span>
+  }
+  <span class="fn">setSmsSending</span>(<span class="kw">true</span>)
+  <span class="kw">try</span> {
+    <span class="kw">await</span> <span class="fn">sendSmsText</span>(to, smsBody)  <span class="cmt">// native Android SMS</span>
+    <span class="fn">setStatusAnnouncement</span>(<span class="str">"Alert sent by SMS. Keep safe and wait for responders."</span>)
+    <span class="fn">toast.success</span>(<span class="str">"Alert sent by SMS"</span>)
+    <span class="kw">if</span> (mediaFiles.length > 0) {
+      <span class="fn">toast.info</span>(<span class="str">"Photos need connection and were not included."</span>)
+    }
+    <span class="kw">await</span> <span class="fn">enqueueCurrentEmergency</span>()  <span class="cmt">// save to IndexedDB for retry</span>
+  } <span class="kw">catch</span> {
+    <span class="fn">setStatusAnnouncement</span>(<span class="str">`Alert was not sent. ${error}`</span>)
+    <span class="fn">toast.error</span>(<span class="str">"Could not send SMS."</span>)
+  }
+}</div>
+</div>
+
+<h3>If native SMS NOT available (non-Android):</h3>
+<div class="section">
+<div class="code"><span class="kw">if</span> (!<span class="fn">canSendSms</span>()) {
+  <span class="fn">announceSmsFallback</span>()
+  <span class="cmt">// Opens SMS app with draft message</span>
+  window.location.href = emergencySmsHref  <span class="cmt">// sms:09640746068?body=...</span>
+}</div>
+<div class="info-box">
+<strong>Announcement:</strong> <code>&ldquo;Opening your SMS app with a draft. E-Boses cannot confirm delivery; review the message and activate Send.&rdquo;</code>
+</div>
+</div>
+
+<!-- ========== STEP 3b: SMS MESSAGE BODY ========== -->
+<h2>4. The SMS message that gets sent</h2>
+<p class="file">sos-fallback.ts → buildEmergencySmsMessage() (line 162)</p>
+
+<div class="section">
+<div class="code"><span class="kw">function</span> <span class="fn">buildEmergencySmsMessage</span>({ emergencyType, readableArea, latitude, longitude, triage, questions, note }) {
+  <span class="cmt">// Deliberately NO E-BOSES prefix, no user id, no db id, no timestamp</span>
+  <span class="cmt">// Only the LOC: footer stays for backend map pin placement</span>
+
+  <span class="kw">const</span> category = categoryNoun(emergencyType)  <span class="cmt">// "Medical Emergency"</span>
+  <span class="kw">const</span> opening = <span class="str">`I need immediate help. This is ${article(category)} ${category} emergency near ${area}.`</span>
+  <span class="kw">const</span> clauses = [triage clauses, question answers]
+  <span class="kw">const</span> locFooter = <span class="str">`LOC:${latitude.toFixed(6)},${longitude.toFixed(6)}`</span>
+
+  <span class="kw">return</span> lines.join(<span class="str">"\n"</span>)
+}</div>
+</div>
+
+<h3>Real SMS message example:</h3>
+<div class="section review">
+<p style="font-size:13px; line-height:1.8; color:#333;">
+I need immediate help. This is a Medical Emergency near Champaca Street. 2-5 people affected, someone is injured. Please send assistance.<br><br>
+I'm trapped under debris and can't move.<br><br>
+LOC:14.650700,121.113300
+</p>
+</div>
+<div class="info-box">
+<strong>Why LOC: footer:</strong> The backend SMS parser reads this to place a map pin. Everything else is plain English readable by the barangay desk person picking up the phone.
+</div>
+
+<div class="flow">&#9660; SMS sent → Status screen shown</div>
+
+<!-- ========== STEP 5: SIMPLE SMS FEEDBACK FLOW ========== -->
+<h2>5. SMS Feedback Flow — Send → SMS → Gateway → Display</h2>
+<p class="file">sos-wizard.tsx → sendSmsAlert() + gateway receive → display UI</p>
+
+<h3>Step 5a: Sending SMS (auto — no user action needed)</h3>
+<div class="section">
+<div class="phone">
+<div class="phone-bar">&#9233; Sending&hellip;</div>
+<div class="phone-body" style="text-align:center; padding:32px 16px;">
+<div style="width:48px; height:48px; border-radius:50%; border:4px solid #e0e0e0; border-top-color:#ff6a1a; animation:spin 1s linear infinite; margin:0 auto 16px;"></div>
+<p style="font-size:14px; font-weight:600;">Sending SMS&hellip;</p>
+<p style="font-size:12px; color:#888; margin-top:4px;">To: 09640746068</p>
+</div>
+</div>
+</div>
+<div class="code" style="font-size:11px; margin-top:8px;"><span class="cmt">// sendSmsAlert() fires automatically — no second confirmation</span>
+<span class="kw">await</span> <span class="fn">sendSmsText</span>(<span class="str">"09640746068"</span>, smsBody)</div>
+
+<div class="flow">&#9660; SMS sent automatically → Gateway receives message</div>
+
+<h3>Step 5b: Gateway received — Display Feedback UI</h3>
+<div class="section">
+<div class="feedback-screen">
+<div class="phone-bar">Emergency Alert</div>
+<div class="phone-body" style="text-align:center;">
+<div class="check-circle">&#10003;</div>
+<p style="font-size:20px; font-weight:700; margin:4px 0 8px;">Barangay has been notified</p>
+<p style="font-size:14px; color:#555; margin-bottom:6px;">Your alert was sent successfully by SMS.</p>
+<p style="font-size:12px; color:#888; margin-bottom:20px;">Reference: SMS-1465071211300</p>
+<hr style="border:none; border-top:1px solid #e0e0e0; margin:8px 0;">
+<p style="font-size:13px; font-weight:600; color:#333; margin-bottom:8px;">Keep Safe</p>
+<p style="font-size:12px; color:#666; margin-bottom:4px;">Wait for responders to arrive.</p>
+<p style="font-size:12px; color:#666; margin-bottom:4px;">Stay calm and stay where you are.</p>
+<p style="font-size:12px; color:#aaa; margin-top:12px;">Your reference number is for tracking purposes.</p>
+<hr style="border:none; border-top:1px solid #e0e0e0; margin:12px 0;">
+<div style="display:flex; gap:8px;">
+<div class="btn btn-sos" style="flex:1;">Done</div>
+<div class="btn btn-grey" style="flex:1;">View Status</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="flow">&#9660; User taps Done → Tracking Sheet opens</div>
+
+<!-- ========== STEP 5: TRACKING SHEET ========== -->
+<h2>6. Tracking Sheet — Resident view</h2>
+<p class="file">emergency-tracking-sheet.tsx</p>
+
+<h3>Tracking Sheet header shows:</h3>
+<div class="section">
+<div class="phone" style="margin-bottom:8px;">
+<div class="phone-bar">
+<span>Help is on the way</span>
+<span style="font-size:11px; opacity:0.8;">ETA 8 min</span>
+</div>
+<div class="phone-body" style="padding:8px;">
+<strong>1.2 km</strong> &nbsp; <strong>8 min</strong>
+</div>
+</div>
+</div>
+<p class="file">headerEta computation (line 1715):</p>
+<div class="section">
+<div class="code"><span class="kw">const</span> headerEta = route?.geometry && isLive
+  ? <span class="str">`${route.distance_meters} m · ETA ${Math.round(route.eta_seconds / 60)} min`</span>
+  : null</div>
+</div>
+
+<!-- Map area -->
+<h3>Map area (bg-ink dark background):</h3>
+<div class="section">
+<div class="map-bg" style="background:#0b1020; color:#fff;">
+<span style="font-size:36px;">&#128205;</span>
+<div style="position:absolute; bottom:8px; right:8px; font-size:10px; color:#aaa;">Offline map · Street view</div>
+</div>
+</div>
+
+<!-- ========== STEP 6: CHAT PANEL ========== -->
+<h2>7. Chat Panel — SMS Mode</h2>
+<p class="file">emergency-chat-panel.tsx</p>
+
+<h3>7a. When offline, these UI changes happen:</h3>
+<div class="section">
+<table>
+<tr><th>Element</th><th>Online text</th><th>Offline text (REAL)</th></tr>
+<tr><td>Input placeholder (modern)</td><td>"Message your responder…"</td><td><strong>"Send message"</strong></td></tr>
+<tr><td>Empty state message</td><td>"Chat with your responder…"</td><td><strong>"You are currently offline. Start a conversation — messages send via SMS."</strong></td></tr>
+<tr><td>Send button</td><td>Normal send</td><td>Routes to <code>sendSmsFallback()</code></td></tr>
+<tr><td>Message footer</td><td>No tag</td><td><strong>" · Sent via SMS"</strong> appended</td></tr>
+<tr><td>Attachments</td><td>Allowed</td><td>Blocked: <strong>"Attachments need a connection."</strong></td></tr>
+</table>
+</div>
+
+<h3>7b. Chat messages — real UI</h3>
+<div class="section">
+<div class="phone">
+<div class="phone-bar">Chat &nbsp; <span class="tag tag-orange">SMS Mode</span></div>
+<div class="phone-body" style="padding:8px;">
+<div class="msg in">Help is on the way. Stay safe.</div>
+<div class="msg in">Responder en route</div>
+<div class="msg in">ETA: 8 minutes.</div>
+<div class="msg in"><span style="font-size:10px; color:#888;">Responder · 2m ago · Sent via SMS</span></div>
+<hr>
+<div class="msg out">I'm at the entrance now.</div>
+<div class="msg out"><span class="time">You · 1m ago · Sent via SMS</span></div>
+<hr>
+<div class="msg out" style="border:1px solid #ff6666;">Photos need connection.</div>
+<div class="msg out" style="background:#ffe0e0;"><span class="time"><button style="color:#d9480f; text-decoration:underline; cursor:pointer;">Unsuccessful sent. Retry.</button></span></div>
+</div>
+</div>
+</div>
+
+<h3>7c. Failed SMS — Retry button</h3>
+<div class="section">
+<p style="font-size:13px;">When <code>sendFailed: true</code> and <code>viaSms: true</code>, a button appears:</p>
+<div class="code" style="font-size:12px;">{msg.sendFailed && mine ? (
+  &lt;button onClick={() =&gt; retrySms(msg.id)}&gt;
+    Unsuccessful sent. Retry.
+  &lt;/button&gt;
+) : null}</div>
+<p style="font-size:12px; margin-top:6px;"><strong>retrySms requirements:</strong> Must be online (<code>!smsOffline</code>) AND native SMS available (<code>canSendSms()</code>). Otherwise toast: <code>"Reconnect or open the SMS app to retry."</code></p>
+</div>
+
+<!-- ========== STEP 7: SEND UPDATE / BROADCAST ========== -->
+<h2>8. Send Update to Resident & Units</h2>
+<p class="file">emergency-chat-panel.tsx → sendMessage() → sendSmsFallback() (line 317)</p>
+
+<h3>8a. When resident sends a chat message while offline:</h3>
+<div class="section">
+<div class="code"><span class="kw">async function</span> <span class="fn">sendMessage</span>(bodyText, file) {
+  <span class="kw">if</span> (smsOffline) <span class="kw">return</span> <span class="fn">sendSmsFallback</span>(bodyText, file)
+  <span class="cmt">// ...online path...</span>
+}</div>
+</div>
+
+<h3>8b. sendSmsFallback — real code:</h3>
+<div class="section">
+<div class="code"><span class="kw">async function</span> <span class="fn">sendSmsFallback</span>(bodyText, file) {
+  <span class="kw">if</span> (file) {
+    <span class="fn">toast.error</span>(<span class="str">"Attachments need a connection."</span>)
+    <span class="kw">return false</span>
+  }
+  <span class="kw">const</span> to = <span class="fn">normalizeSmsRecipient</span>(smsTo ?? <span class="str">""</span>)
+  <span class="kw">if</span> (!to) { error(<span class="str">"Recipient number unavailable while offline."</span>) }
+  <span class="kw">if</span> (<span class="fn">smsBodyTooLong</span>(bodyText)) { error(<span class="str">"Message too long for SMS."</span>) }
+
+  <span class="kw">if</span> (<span class="fn">canSendSms</span>()) {
+    <span class="kw">await</span> <span class="fn">sendSmsText</span>(to, text)  <span class="cmt">// Native Android SMS</span>
+  } <span class="kw">else</span> {
+    <span class="fn">openSmsApp</span>(to, text)  <span class="cmt">// Open SMS app with draft</span>
+  }
+
+  <span class="cmt">// Message appears in chat:</span>
+  messages.push({
+    id: -Date.now(),
+    alert: alertId,
+    body: text,
+    sender: { id: userId, full_name: "You", role: "resident" },
+    is_mine: <span class="kw">true</span>,
+    <span class="kw">viaSms</span>: <span class="kw">true</span>,   <span class="cmt">// ← Shows " · Sent via SMS"</span>
+    sendFailed: <span class="kw">false</span>,
+  })
+}</div>
+</div>
+
+<h3>8c. Who receives the SMS?</h3>
+<div class="section">
+<table>
+<tr><th>Recipient</th><th>Phone Number</th><th>How</th><th>Source</th></tr>
+<tr><td>Assigned responder</td><td><code>smsTo</code> prop</td><td>Direct SMS via <code>sendSmsText()</code> or <code>openSmsApp()</code></td><td><span class="tag tag-orange">Frontend</span></td></tr>
+<tr><td>All assigned units</td><td>Backend distributes</td><td>Backend sends SMS to each unit's phone number</td><td><span class="tag tag-green">Backend</span></td></tr>
+<tr><td>Original alert creator (resident)</td><td>From alert record</td><td>Updates appear in chat thread tagged "via SMS"</td><td><span class="tag tag-orange">Frontend</span></td></tr>
+</table>
+</div>
+
+<div class="info-box">
+<strong>How it works:</strong> The resident sends one SMS to the responder's number (<code>smsTo</code>). The backend receives this and broadcasts the update to all other assigned unit phone numbers. The frontend only handles the direct SMS to <code>smsTo</code>. All other unit SMS is handled server-side.
+</div>
+
+<!-- ========== STEP 9: RECONNECT ========== -->
+<h2>9. What happens when connection returns</h2>
+<p class="file">global-sos-coordinator.tsx + sos-wizard.tsx</p>
+
+<h3>9a. "You're back online" sheet:</h3>
+<div class="section">
+<div class="phone">
+<div class="phone-bar" style="background:#10b981;">Connection Restored</div>
+<div class="phone-body" style="text-align:center; padding:24px 16px;">
+<div style="width:40px; height:40px; border-radius:50%; background:#ecfdf5; display:flex; align-items:center; justify-content:center; margin:0 auto 10px; font-size:20px; color:#10b981;">&#10003;</div>
+<p style="font-size:16px; font-weight:bold;">You&rsquo;re back online</p>
+<p style="font-size:13px; color:#666;">Connection restored. You can continue online.</p>
+</div>
+</div>
+</div>
+
+<h3>9b. Queued emergencies retry (sos-wizard.tsx:406):</h3>
+<div class="section">
+<div class="code"><span class="kw">async function</span> <span class="fn">retryQueuedEmergencies</span>() {
+  <span class="kw">const</span> [queued, active] = <span class="kw">await</span> <span class="fn">Promise.all</span>([
+    <span class="fn">listQueuedSosEmergencies</span>(),
+    <span class="fn">getActiveEmergency</span>(),
+  ])
+  <span class="kw">if</span> (active && <span class="fn">isActiveAlert</span>(active)) {
+    <span class="cmt">// Active alert exists, clear queue</span>
+    <span class="kw">for</span> (item <span class="kw">of</span> queued) <span class="fn">deleteQueuedSosEmergency</span>(item.id)
+  } <span class="kw">else</span> {
+    <span class="cmt">// Send each queued emergency via API</span>
+    <span class="kw">for</span> (item <span class="kw">of</span> queued) {
+      <span class="kw">const</span> alert = <span class="kw">await</span> <span class="fn">createEmergency</span>(buildFormData(item))
+      <span class="kw">await</span> <span class="fn">deleteQueuedSosEmergency</span>(item.id)
+    }
+  }
+}</div>
+</div>
+
+<!-- ========== STEP 9c: WHITE SCREEN AUTO SIGN-IN ========== -->
+<h2>9c. Back online → White screen → Auto sign-in</h2>
+<p class="file">global-sos-coordinator.tsx → OfflineSheetContent (reconnected)</p>
+
+<h3>White screen after reconnect:</h3>
+<div class="section">
+<div class="signin-screen phone">
+<div class="phone-bar">E-Boses</div>
+<div class="phone-body" style="text-align:center; padding:32px 16px;">
+<div style="width:60px; height:60px; border-radius:50%; background:#ecfdf5; display:flex; align-items:center; justify-content:center; margin:0 auto 16px; font-size:28px; color:#10b981; border:3px solid #10b981;">&#10003;</div>
+<p style="font-size:18px; font-weight:700; margin-bottom:6px;">You&rsquo;re back online</p>
+<p style="font-size:13px; color:#666; margin-bottom:20px;">Connection restored.<br>Signing you in&hellip;</p>
+<div style="display:inline-block; padding:6px 16px; border-radius:20px; background:#f0f0f0; font-size:12px; color:#888; margin-bottom:16px;">Auto-signing in&hellip;</div>
+<hr style="border:none; border-top:1px solid #e0e0e0; margin:16px 0;">
+<p style="font-size:12px; color:#aaa;">Redirecting to home&hellip;</p>
+</div>
+</div>
+</div>
+
+<h3>What happens in code:</h3>
+<div class="section">
+<div class="code"><span class="cmt">// global-sos-coordinator.tsx — when online returns:</span>
+<span class="kw">if</span> (online && !wasEverOnline) {
+  <span class="fn">setWasEverOnline</span>(<span class="kw">true</span>)
+  <span class="fn">refreshOfflineSosConfig</span>()
+  <span class="fn">refreshUser</span>()   <span class="cmt">// ← auto refresh sign-in</span>
+  <span class="fn">setShowReconnected</span>(<span class="kw">true</span>)
+  <span class="fn">setWasReconnected</span>(<span class="kw">true</span>)
+  <span class="cmt">// Sheet shows "You're back online"</span>
+  <span class="cmt">// After 2.8s → auto-hides sheet</span>
+  <span class="fn">reconnectTimerRef.current</span> = <span class="fn">setTimeout</span>(
+    () => <span class="fn">setShowReconnected</span>(<span class="kw">false</span>),
+    <span class="str">2800</span>
+  )
+}</div>
+</div>
+
+<div class="info-box">
+<strong>Auto sign-in:</strong> <code>refreshUser()</code> is called when connection returns. This re-fetches the user session from the backend, effectively signing the user back in automatically. The user does not need to enter credentials again.
+</div>
+
+<div class="flow">&#9660; User is signed in → Normal online flow</div>
+
+<!-- ========== STEP 11: FULL MESSAGE FLOW SUMMARY ========== -->
+<h2>10. Complete SMS Message Flow Summary</h2>
+<div class="section">
+<table>
+<tr><th>#</th><th>Action</th><th>What user sees</th><th>What code runs</th></tr>
+<tr><td>1</td><td>User goes offline</td><td>"You're Offline" sheet → "Open SOS" button</td><td>useApiReachability() detects no API</td></tr>
+<tr><td>2</td><td>Open SOS wizard</td><td>Category → Triage → Location → Review</td><td>SosWizard component</td></tr>
+<tr><td>3</td><td>Review step (offline)</td><td>"&#128226; Send Alert" button (orange, phone icon)</td><td>useSmsDelivery = !isOnline → true</td></tr>
+<tr><td>4</td><td>Tap Send Alert</td><td>SMS composed to 09640746068</td><td>buildEmergencySmsMessage() + buildEmergencySmsHref()</td></tr>
+<tr><td>5</td><td>SMS sending</td><td>Phone screen with spinner "Sending SMS…" To: 09640746068</td><td>sendSmsText() automatically (no user confirm)</td></tr>
+<tr><td>6</td><td>Gateway received</td><td>White screen: "Barangay has been notified", "Keep Safe" reminders, Reference number</td><td>sendSmsAlert() on success → display UI</td></tr>
+<tr><td>7</td><td>Emergency queued</td><td>Saved to IndexedDB "queued-emergencies" store</td><td>enqueueCurrentEmergency() → enqueueSosEmergency()</td></tr>
+<tr><td>8</td><td>Tracking Sheet opens</td><td>Map + route + chat panel in SMS mode</td><td>EmergencyTrackingSheet component</td></tr>
+<tr><td>9</td><td>Send message in chat</td><td>Message with " · Sent via SMS" tag</td><td>sendSmsFallback() → sendSmsText() or openSmsApp()</td></tr>
+<tr><td>10</td><td>Connection restored</td><td>White screen → auto sign-in via refreshUser() → "You're back online"</td><td>useApiReachability() + refreshUser()</td></tr>
+<tr><td>11</td><td>Retry queued</td><td>Toast: "Queued emergency sent"</td><td>retryQueuedEmergencies() → createEmergency()</td></tr>
+</table>
+</div>
+
+<!-- ========== FINAL: COMPLETE SCREEN FLOW ========== -->
+<h2>12. Complete Screen Flow (ALL Screens)</h2>
+<div class="section">
+<table>
+<tr><th>#</th><th>Screen</th><th>File</th><th>Key Content</th></tr>
+<tr><td>1</td><td>Offline Page</td><td>global-sos-coordinator.tsx</td><td>"You're Offline" + "Open SOS" / "No internet connection. Connect to continue."</td></tr>
+<tr><td>2</td><td>Offline Sheet (bottom)</td><td>global-sos-coordinator.tsx</td><td>"You're offline" + "Open Emergency SOS" / "You're back online"</td></tr>
+<tr><td>3</td><td>SOS Wizard - Category</td><td>sos-wizard.tsx</td><td>"What's the emergency?" + emergency type list</td></tr>
+<tr><td>4</td><td>SOS Wizard - Triage</td><td>sos-wizard.tsx</td><td>"Quick questions" + triage answers</td></tr>
+<tr><td>5</td><td>SOS Wizard - Location</td><td>sos-wizard.tsx</td><td>Offline map + pin location + "Use this location"</td></tr>
+<tr><td>6</td><td>SOS Wizard - Review (online)</td><td>sos-wizard.tsx</td><td>Summary + "Send SOS" button</td></tr>
+<tr><td>7</td><td>SOS Wizard - Review (offline/SMS)</td><td>sos-wizard.tsx</td><td>Summary + "&#128222; Send Alert" button (orange)</td></tr>
+<tr><td>8</td><td>SMS Sending</td><td>Phone spinner "Sending SMS…" To: 09640746068</td><td>Auto sendSmsText() — no user confirm</td></tr>
+<tr><td>9</td><td>Gateway Feedback</td><td>"Barangay has been notified", "Keep Safe", Reference SMS-1465071211300</td><td>sendSmsAlert() on success → display UI</td></tr>
+<tr><td>10</td><td>Tracking Sheet - Map</td><td>emergency-tracking-sheet.tsx</td><td>Dark map + route + ETA + status headline</td></tr>
+<tr><td>11</td><td>Tracking Sheet - Chat (SMS)</td><td>emergency-chat-panel.tsx</td><td>"Send message" + messages + "Sent via SMS" tags + Retry</td></tr>
+<tr><td>12</td><td>White Screen Auto Sign-in</td><td>global-sos-coordinator.tsx</td><td>White background, checkmark, "Signing you in…", auto-sign-in via refreshUser()</td></tr>
+<tr><td>13</td><td>Reconnect Sheet</td><td>global-sos-coordinator.tsx</td><td>"You're back online" + "Connection restored" (auto-hides after 2.8s)</td></tr>
+</table>
+</div>
+
+<hr>
+<p class="meta">Last updated based on actual source files in: <code>apps/web/src/features/dashboard/</code></p>
+
+</body>
+</html>

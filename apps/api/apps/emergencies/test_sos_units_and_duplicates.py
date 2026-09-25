@@ -175,8 +175,27 @@ class ResidentSmsDuplicateTests(TestCase):
         self.assertEqual(follow_up.outcome, InboundSmsMessage.Outcome.CHAT_APPENDED)
         messages = EmergencyChatMessage.objects.filter(alert=alert)
         self.assertEqual(messages.count(), 1)
-        self.assertEqual(messages.get().body, "We are on the second floor.")
         self.assertEqual(EmergencyAlert.objects.filter(reporter=self.resident).count(), 1)
+
+    def test_follow_up_links_the_inbound_row_to_its_chat_line(self):
+        with sms_harness():
+            handle_inbound(self.sos("fw-1"))
+            alert = EmergencyAlert.objects.get(reporter=self.resident)
+            follow_up = handle_inbound(
+                inbound_payload(
+                    "Thank you. The obstruction is still present.",
+                    self.sender,
+                    "fw-link",
+                )
+            )
+
+        self.assertEqual(follow_up.outcome, InboundSmsMessage.Outcome.CHAT_APPENDED)
+        linked = follow_up.chat_message
+        self.assertIsNotNone(linked)
+        self.assertEqual(linked.alert_id, alert.pk)
+        self.assertEqual(linked.sender_id, self.resident.pk)
+        self.assertEqual(linked.body, "Thank you. The obstruction is still present.")
+        self.assertTrue(linked.inbound_sms_messages.filter(pk=follow_up.pk).exists())
 
 
 class LiveMapUnitScopeTests(TestCase):

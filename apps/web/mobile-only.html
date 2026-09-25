@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E-Boses</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #07145f;
+    color: #fff;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  .app-preview {
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    opacity: 1;
+    filter: blur(0px);
+    transition: all 0.4s ease;
+  }
+
+  .app-preview .icon {
+    width: 120px; height: 120px;
+    border-radius: 28px;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 48px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  }
+
+  .app-preview .label {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+
+  .overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(7, 20, 95, 0.75);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 24px;
+    animation: fadeIn 0.5s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .overlay .icon-circle {
+    width: 96px; height: 96px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    border: 2px solid rgba(255,255,255,0.15);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 40px;
+  }
+
+  .overlay .title {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+
+  .overlay .subtitle {
+    font-size: 16px;
+    color: rgba(255,255,255,0.6);
+    font-weight: 400;
+  }
+
+  .overlay .resize-hint {
+    margin-top: 8px;
+    font-size: 13px;
+    color: rgba(255,255,255,0.35);
+  }
+
+  @media (min-width: 769px) {
+    .app-preview { opacity: 0.15; filter: blur(3px); }
+    .overlay { display: flex; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app-preview">
+  <div class="icon">📱</div>
+  <div class="label">E-Boses</div>
+</div>
+
+<div class="overlay">
+  <div class="icon-circle">📱</div>
+  <div class="title">E-Boses</div>
+  <div class="subtitle">Use mobile view for better experience</div>
+  <div class="resize-hint">Resize your browser to below 768px wide</div>
+</div>
+
+<script>
+  const overlay = document.querySelector('.overlay');
+  const preview = document.querySelector('.app-preview');
+
+  function check() {
+    if (window.innerWidth > 768) {
+      overlay.style.display = 'flex';
+      preview.style.opacity = '0.15';
+      preview.style.filter = 'blur(3px)';
+    } else {
+      overlay.style.display = 'none';
+      preview.style.opacity = '1';
+      preview.style.filter = 'blur(0px)';
+    }
+  }
+
+  window.addEventListener('resize', check);
+  check();
+</script>
+
+</body>
+</html>

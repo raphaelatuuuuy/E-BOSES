@@ -65,7 +65,7 @@ def _geometry_points(geometry):
 
 def _street_communities(street):
     communities = list(
-        Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE, boundary__is_active=True)
+        Community.objects.filter(status=Community.Status.ACTIVE, boundary__is_active=True)
         .select_related("boundary")
         .order_by("name")
     )
@@ -89,7 +89,7 @@ def _named_communities(text):
         return []
     return [
         community
-        for community in Community.objects.filter(status=Community.Status.ACTIVE, code=PRIMARY_COMMUNITY_CODE)
+        for community in Community.objects.filter(status=Community.Status.ACTIVE)
         .select_related("boundary")
         .order_by("name")
         if _key(community.name) in key or _key(community.code) in key
@@ -109,7 +109,7 @@ def _landmark_communities(text):
     if not key:
         return []
     communities = []
-    for poi in MapServicePoi.objects.filter(is_active=True, community__status=Community.Status.ACTIVE, community__code=PRIMARY_COMMUNITY_CODE).select_related("community"):
+    for poi in MapServicePoi.objects.filter(is_active=True, community__status=Community.Status.ACTIVE).select_related("community"):
         if len(_key(poi.name)) >= 3 and _key(poi.name) in key and poi.community not in communities:
             communities.append(poi.community)
     return communities

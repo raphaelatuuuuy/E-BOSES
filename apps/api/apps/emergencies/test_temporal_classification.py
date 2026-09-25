@@ -26,7 +26,6 @@ class TemporalClassificationTests(TestCase):
         payload = {
             "relevance": "VALID",
             "primary_category": "public_safety",
-            "urgent_attention": True,
             "severity": "high",
             "recommended_action": "escalate_as_emergency",
             "matched_emergency_type": "fire",
@@ -72,7 +71,7 @@ class TemporalClassificationTests(TestCase):
         result = self._result("Fire drill bukas. This is only a test message.")
 
         self.assertIn(result.details["incident_timing"], {"planned", "hypothetical"})
-        self.assertFalse(result.details["urgent_attention"])
+        self.assertFalse(result.details["current_danger"])
         self.assertEqual(result.details["matched_emergency_type"], "")
 
     def test_civic_hazard_does_not_become_generic_disaster(self):
@@ -84,7 +83,7 @@ class TemporalClassificationTests(TestCase):
         )
 
         self.assertEqual(result.details["matched_emergency_type"], "")
-        self.assertFalse(result.details["urgent_attention"])
+        self.assertFalse(result.details["current_danger"])
         self.assertEqual(result.details["recommended_action"], "accept")
 
     def test_filipino_current_and_ended_phrases(self):

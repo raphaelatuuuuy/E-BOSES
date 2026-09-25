@@ -929,11 +929,13 @@ def parse_gemma_result(
         matched_emergency_type = ""
 
     emergency_routing_reason = _clean_text(data.get("emergency_routing_reason"))
+    emergency_type_rejected = False
     if matched_emergency_type and not has_concrete_emergency_evidence(matched_emergency_type, report_text):
         # Do not let a model infer an emergency type from severity alone. This
         # is the final guard before the precheck can authorize auto-escalation.
         matched_emergency_type = ""
         emergency_routing_reason = ""
+        emergency_type_rejected = True
         if action == "escalate_as_emergency":
             action = "accept"
     inferred_timing, inferred_reason = infer_incident_timing(report_text)
@@ -947,6 +949,11 @@ def parse_gemma_result(
     current_danger = incident_timing == "ongoing" or (
         incident_timing == "unclear" and bool(data.get("current_danger"))
     )
+    if emergency_type_rejected:
+        # The report describes a civic hazard (a dangling wire, a leaning tree)
+        # rather than a configured emergency. Dispatch gates on current_danger,
+        # so the rejected emergency claim must not keep it switched on.
+        current_danger = False
 
     report_text_lower = report_text.lower()
     maintenance_report = any(term in report_text_lower for term in _MAINTENANCE_REPORT_TERMS)

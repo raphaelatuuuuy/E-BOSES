@@ -1030,7 +1030,7 @@ function AlertsLeafletMapInner({
           box,
           html: () =>
             glyphPinHtml({
-              paths: GLYPHS.emergency,
+              paths: emergencySettled ? GLYPHS.resolved : GLYPHS.emergency,
               color,
               size: 28,
               selected: focused,

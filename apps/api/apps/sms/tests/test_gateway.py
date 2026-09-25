@@ -4,6 +4,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 
 from apps.sms import templates
 from apps.sms.gateway import (
+    AndroidSmsGatewayDriver,
     IDEMPOTENCY_KEY_MAX_LENGTH,
     HttpJsonSmsDriver,
     SmsForwarderDriver,
@@ -11,6 +12,7 @@ from apps.sms.gateway import (
     is_gsm7,
     non_gsm7_characters,
     queue_sms,
+    resolve_sim_slot,
 )
 from apps.sms.models import OutboundSmsMessage, SmsPurpose
 from apps.sms.management.commands.preview_sms import alert_templates, sample_alert
@@ -71,6 +73,7 @@ class TemplateSafetyTests(SimpleTestCase):
     OUTBOUND_SMS_URL="http://127.0.0.1:9/send",
     OUTBOUND_SMS_SIM_SLOT=2,
     OUTBOUND_SMS_PAYLOAD_TEMPLATE="",
+    SMS_GATE_SIM_NUMBER="",
 )
 class PayloadShapingTests(SimpleTestCase):
     def test_default_generic_payload(self):
@@ -81,15 +84,34 @@ class PayloadShapingTests(SimpleTestCase):
         payload = SmsForwarderDriver().build_payload("+639171234821", "hello")
         self.assertEqual(payload["data"]["phone_numbers"], "+639171234821")
         self.assertEqual(payload["data"]["msg_content"], "hello")
-        self.assertEqual(payload["data"]["sim_slot"], 1)
+        self.assertEqual(payload["data"]["sim_slot"], 2)
 
     @override_settings(OUTBOUND_SMS_PAYLOAD_TEMPLATE='{"dest": "{to}", "txt": "{body}"}')
     def test_field_names_are_correctable_from_settings(self):
         payload = HttpJsonSmsDriver().build_payload("+639171234821", "hello")
         self.assertEqual(payload, {"dest": "+639171234821", "txt": "hello"})
 
+    @override_settings(SMS_GATE_SIM_NUMBER="3")
+    def test_gate_app_number_wins_over_the_legacy_sim_slot(self):
+        self.assertEqual(resolve_sim_slot(), 3)
+        payload = AndroidSmsGatewayDriver().build_payload("+639171234821", "hello")
+        self.assertEqual(payload["simNumber"], 3)
+
+    @override_settings(SMS_GATE_SIM_NUMBER="", OUTBOUND_SMS_SIM_SLOT=2)
+    def test_legacy_sim_slot_is_used_when_the_app_number_is_empty(self):
+        self.assertEqual(resolve_sim_slot(), 2)
+
+    @override_settings(SMS_GATE_SIM_NUMBER="slot-x", OUTBOUND_SMS_SIM_SLOT=2)
+    def test_unusable_app_number_falls_back_to_the_legacy_slot(self):
+        self.assertEqual(resolve_sim_slot(), 2)
+
+    @override_settings(SMS_GATE_SIM_NUMBER="", OUTBOUND_SMS_SIM_SLOT="")
+    def test_no_slot_anywhere_defaults_to_slot_one(self):
+        self.assertEqual(resolve_sim_slot(), 1)
+
     @override_settings(
-        OUTBOUND_SMS_PAYLOAD_TEMPLATE='{"phoneNumbers":["{to}"],"textMessage":{"text":"{body}"},"simNumber":1}'
+        OUTBOUND_SMS_PAYLOAD_TEMPLATE='{"phoneNumbers":["{to}"],"textMessage":{"text":"{body}"},"simNumber":1}',
+        SMS_GATE_SIM_NUMBER="",
     )
     def test_smsgate_cloud_payload_shape(self):
         payload = HttpJsonSmsDriver().build_payload("+639171234821", "hello")

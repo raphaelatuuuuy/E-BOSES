@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Offline SOS — E-Boses</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f172a; color: #fff;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 20px; gap: 60px;
+  }
+  .screen-label {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 2px; color: #f97316;
+    align-self: flex-start; margin-bottom: 8px; padding-left: 4px;
+  }
+  .phone-frame {
+    width: 390px; background: #0c1222; border-radius: 32px;
+    overflow: hidden; border: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5); margin-bottom: 20px;
+  }
+  .phone-header { padding: 16px 20px 12px; display: flex; align-items: center; gap: 8px; }
+  .phone-header .back-btn {
+    width: 36px; height: 36px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.15);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: rgba(255,255,255,0.7); flex-shrink: 0;
+  }
+  .phone-header .title-area { flex: 1; min-width: 0; }
+  .phone-header .label {
+    font-size: 10px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; color: #f97316;
+  }
+  .phone-header .title {
+    font-size: 20px; font-weight: 800; letter-spacing: -0.5px;
+    margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .phone-body { padding: 0 20px 24px; min-height: 400px; }
+  .phone-footer { padding: 12px 20px 20px; border-top: 1px solid rgba(255,255,255,0.06); background: #0c1222; }
+
+  /* Category */
+  .cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .cat-card {
+    background: rgba(255,255,255,0.04); border: 1.5px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 16px 12px; text-align: center; cursor: pointer; transition: all 0.2s;
+  }
+  .cat-card.selected {
+    background: linear-gradient(160deg, rgba(255,138,61,0.15), rgba(242,84,27,0.1));
+    border-color: rgba(255,138,61,0.4); box-shadow: 0 0 20px rgba(255,106,26,0.15);
+  }
+  .cat-icon { font-size: 28px; margin-bottom: 8px; }
+  .cat-label { font-size: 11px; font-weight: 600; line-height: 1.3; color: rgba(255,255,255,0.85); }
+  .cat-card.selected .cat-label { color: #ffb48a; }
+
+  /* Triage */
+  .triage-q {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px; padding: 16px; margin-top: 12px;
+  }
+  .triage-q .q-text { font-size: 14px; font-weight: 600; margin-bottom: 12px; line-height: 1.4; }
+  .triage-options { display: flex; flex-wrap: wrap; gap: 8px; }
+  .triage-opt {
+    padding: 8px 16px; border-radius: 10px;
+    border: 1.5px solid rgba(255,255,255,0.12);
+    background: transparent; color: rgba(255,255,255,0.8);
+    font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .triage-opt.selected {
+    background: rgba(255,138,61,0.15); border-color: rgba(255,138,61,0.5); color: #ffb48a;
+  }
+  .note-area {
+    margin-top: 16px; background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; padding: 16px;
+  }
+  .note-area .note-label {
+    font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.5);
+    margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;
+  }
+  .note-area textarea {
+    width: 100%; background: transparent; border: none;
+    color: rgba(255,255,255,0.85); font-size: 14px; font-family: inherit;
+    resize: none; outline: none; min-height: 60px; line-height: 1.5;
+  }
+  .note-area textarea::placeholder { color: rgba(255,255,255,0.25); }
+  .note-area .note-hint { font-size: 11px; color: rgba(255,255,255,0.2); margin-top: 4px; text-align: right; }
+
+  /* Timeline */
+  .timeline { padding: 8px 0; }
+  .tl-item { display: flex; gap: 12px; padding-bottom: 20px; position: relative; }
+  .tl-item:last-child { padding-bottom: 0; }
+  .tl-icon {
+    width: 40px; height: 40px; border-radius: 14px;
+    background: linear-gradient(160deg, #ff8a3d, #f2541b 60%, #d9480f);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0; box-shadow: 0 4px 12px rgba(242,84,27,0.3); z-index: 1;
+  }
+  .tl-content { flex: 1; min-width: 0; padding-top: 2px; }
+  .tl-label { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #ff8a5c; }
+  .tl-value { font-size: 15px; font-weight: 700; margin-top: 2px; word-break: break-word; }
+  .tl-message { font-size: 13px; line-height: 1.5; color: rgba(255,255,255,0.7); margin-top: 6px; }
+  .tl-time { font-size: 10px; color: rgba(255,255,255,0.25); margin-top: 4px; }
+  .tl-change {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 6px 12px; border-radius: 10px; font-size: 11px; font-weight: 700;
+    color: rgba(255,255,255,0.9); border: 1px solid rgba(255,255,255,0.1);
+    cursor: pointer; margin-top: 4px; transition: all 0.15s;
+  }
+  .tl-change:hover { background: rgba(255,255,255,0.08); }
+  .tl-line {
+    position: absolute; left: 19px; top: 42px; bottom: 0; width: 2px;
+    background: linear-gradient(rgba(255,106,26,0.6), rgba(255,106,26,0.08));
+  }
+  .tl-item:last-child .tl-line { display: none; }
+
+  .add-notes {
+    border-radius: 14px; border-left: 3px solid #f97316;
+    background: rgba(255,255,255,0.03); padding: 14px 16px; margin-top: 4px;
+  }
+  .add-notes .an-label { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #ff8a5c; }
+  .add-notes .an-value { font-size: 13.5px; font-style: italic; color: rgba(255,255,255,0.8); margin-top: 4px; line-height: 1.5; }
+  .warning { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; }
+  .warning-icon { flex-shrink: 0; color: rgba(252,165,165,0.9); font-size: 16px; margin-top: 1px; }
+  .warning-text { font-size: 12px; line-height: 1.5; color: rgba(252,165,165,0.9); }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 14px 20px; border-radius: 999px; font-size: 16px; font-weight: 700;
+    cursor: pointer; border: none; font-family: inherit; transition: all 0.15s; flex: 1;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-back { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.12); }
+  .btn-primary { background: #ea580c; color: #fff; }
+  .btn-primary:hover { background: #c2410c; }
+  .btn-sms { background: #ea580c; color: #fff; font-size: 17px; flex: 1.4; }
+  .btn-row { display: flex; gap: 10px; }
+
+  /* Error banner */
+  .error-banner {
+    background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 18px; padding: 16px; margin-bottom: 16px;
+  }
+  .error-banner .eb-title { font-size: 14px; font-weight: 700; color: #fca5a5; }
+  .error-banner .eb-body { font-size: 13px; line-height: 1.5; color: rgba(252,165,165,0.8); margin-top: 4px; }
+  .error-banner .eb-hint { font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 8px; }
+
+  /* Progress dots */
+  .progress { display: flex; gap: 6px; margin-bottom: 20px; }
+  .progress .dot { flex: 1; height: 5px; border-radius: 999px; background: rgba(255,255,255,0.12); }
+  .progress .dot.active { background: #ea580c; box-shadow: 0 0 8px rgba(255,106,26,0.6); }
+
+  /* Countdown */
+  .countdown-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 0; min-height: 350px; }
+  .countdown-ring { width: 224px; height: 224px; position: relative; }
+  .countdown-ring svg { transform: rotate(-90deg); width: 100%; height: 100%; }
+  .countdown-ring .ring-bg { fill: none; stroke: rgba(255,255,255,0.08); stroke-width: 12; }
+  .countdown-ring .ring-fg { fill: none; stroke: url(#ring-grad); stroke-width: 12; stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+  .countdown-num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 84px; font-weight: 800; color: #fca5a5; font-variant-numeric: tabular-nums; }
+  .countdown-label { font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.45); margin-top: 20px; }
+  .countdown-sub { font-size: 16px; font-weight: 500; color: #fff; margin-top: 8px; }
+
+  /* Map */
+  .map-area {
+    height: 400px; background: rgba(255,255,255,0.02); border-radius: 20px;
+    border: 1px solid rgba(255,255,255,0.06); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; position: relative; overflow: hidden;
+  }
+  .map-pin {
+    width: 40px; height: 40px; border-radius: 50% 50% 50% 0; background: #ea580c;
+    transform: rotate(-45deg); display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 16px rgba(234,88,12,0.4); z-index: 1;
+  }
+  .map-pin span { transform: rotate(45deg); font-size: 16px; }
+  .map-bar { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; align-items: center; }
+  .map-use-btn { padding: 12px 28px; border-radius: 999px; background: #ea580c; color: #fff; font-size: 14px; font-weight: 700; border: none; cursor: pointer; }
+  .loc-pill { margin-top: 12px; padding: 12px 16px; border-radius: 14px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; gap: 8px; }
+  .loc-pill .pin-icon { font-size: 16px; }
+  .loc-pill .loc-text { font-size: 14px; font-weight: 600; }
+
+  /* Responder bar */
+  .responder-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 0; border-top: 1px solid rgba(255,255,255,0.06); margin-top: 16px;
+  }
+  .responder-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, #0ea5e9, #2563eb);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; color: #fff; flex-shrink: 0;
+  }
+  .responder-info { flex: 1; min-width: 0; }
+  .responder-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .responder-phone { font-size: 12px; color: rgba(255,255,255,0.4); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .resp-btn {
+    padding: 8px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.15);
+    background: transparent; color: rgba(255,255,255,0.7); font-size: 12px; font-weight: 600;
+    cursor: pointer; flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .resp-btn.primary { background: rgba(255,138,61,0.12); border-color: rgba(255,138,61,0.3); color: #ffb48a; }
+
+  .hotline { margin-top: 16px; text-align: center; font-size: 13px; color: rgba(255,255,255,0.35); }
+  .hotline a { color: #f97316; font-weight: 700; text-decoration: none; }
+  .section-gap { margin-top: 16px; }
+  .divider { height: 1px; background: rgba(255,255,255,0.06); margin: 16px 0; }
+  .map-streets-svg { position: absolute; inset: 0; opacity: 0.3; }
+  .hr-gap { height: 80px; }
+</style>
+</head>
+<body>
+
+<!-- ========================================== -->
+<!-- SCREEN 1: CATEGORY SELECTION               -->
+<!-- ========================================== -->
+<div class="screen-label">Review &amp; Send — Offline</div>
+<div class="phone-frame">
+  <div class="phone-header">
+    <div class="back-btn">&#8249;</div>
+    <div class="title-area">
+      <div class="label">Emergency SOS</div>
+      <div class="title">What's the emergency?</div>
+    </div>
+  </div>
+  <div class="phone-body">
+    <p style="font-size:14px;color:rgba(255,255,255,0.5);line-height:1.5;">Pick the closest match. Barangay responders will verify before dispatch.</p>
+    <div class="cat-grid">
+      <div class="cat-card selected"><div class="cat-icon">&#128293;</div><div class="cat-label">Fire</div></div>
+      <div class="cat-card"><div class="cat-icon">&#9888;&#65039;</div><div class="cat-label">Medical</div></div>
+      <div class="cat-card"><div class="cat-icon">&#128737;</div><div class="cat-label">Crime</div></div>
+      <div class="cat-card"><div class="cat-icon">&#127754;</div><div class="cat-label">Disaster</div></div>
+      <div class="cat-card"><div class="cat-icon">&#128737;</div><div class="cat-label">Child Protection</div></div>
+      <div class="cat-card"><div class="cat-icon">&#128737;</div><div class="cat-label">Domestic Violence</div></div>
+    </div>
+  </div>
+  <div class="phone-footer">
+    <div class="btn-row">
+      <button class="btn btn-back" disabled>Back</button>
+      <button class="btn btn-primary">Next</button>
+    </div>
+    <p class="hotline">Prefer to talk? <a href="tel:+63285551234">Call the barangay hotline directly.</a></p>
+  </div>
+</div>
+
+<div class="hr-gap"></div>
+
+<!-- ========================================== -->
+<!-- SCREEN 2: TRIAGE + DETAILS                 -->
+<!-- ========================================== -->
+<div class="screen-label">Quick Questions — Offline</div>
+<div class="phone-frame">
+  <div class="phone-header">
+    <div class="back-btn">&#8249;</div>
+    <div class="title-area">
+      <div class="label">Emergency SOS</div>
+      <div class="title">Quick questions</div>
+    </div>
+  </div>
+  <div class="phone-body">
+    <p style="font-size:14px;color:rgba(255,255,255,0.5);line-height:1.5;">Answer each so responders bring the right help. All questions are required.</p>
+    <div class="triage-q">
+      <div class="q-text">How many people are affected?</div>
+      <div class="triage-options">
+        <span class="triage-opt">Just 1</span>
+        <span class="triage-opt selected">2-5</span>
+        <span class="triage-opt">6 or more</span>
+        <span class="triage-opt">Not sure</span>
+      </div>
+    </div>
+    <div class="triage-q">
+      <div class="q-text">Is anyone injured or trapped?</div>
+      <div class="triage-options">
+        <span class="triage-opt">Yes</span>
+        <span class="triage-opt selected">No</span>
+        <span class="triage-opt">Not sure</span>
+      </div>
+    </div>
+    <div class="triage-q">
+      <div class="q-text">Is the fire still spreading?</div>
+      <div class="triage-options">
+        <span class="triage-opt selected">Yes, spreading</span>
+        <span class="triage-opt">No, contained</span>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="note-area">
+      <div class="note-label">Details</div>
+      <textarea placeholder="Optional note, e.g. second floor, blue gate" maxlength="300">Second floor, blue gate</textarea>
+      <div class="note-hint">15 / 300</div>
+    </div>
+  </div>
+  <div class="phone-footer">
+    <div class="btn-row">
+      <button class="btn btn-back">Back</button>
+      <button class="btn btn-primary">Next</button>
+    </div>
+  </div>
+</div>
+
+<div class="hr-gap"></div>
+
+<!-- ========================================== -->
+<!-- SCREEN 3: LOCATION (Offline Map)         -->
+<!-- ========================================== -->
+<div class="screen-label">Confirm Your Location — Offline</div>
+<div class="phone-frame">
+  <div class="phone-body" style="padding-top:8px; padding-bottom:16px;">
+    <div class="map-area">
+      <svg class="map-streets-svg" viewBox="0 0 350 380" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="60,80 280,60 300,200 180,320 40,250" fill="rgba(34,197,94,0.08)" stroke="rgba(34,197,94,0.2)" stroke-width="1" stroke-dasharray="4,4"/>
+        <line x1="40" y1="100" x2="300" y2="90" stroke="rgba(255,255,255,0.15)" stroke-width="3"/>
+        <line x1="60" y1="80" x2="70" y2="300" stroke="rgba(255,255,255,0.1)" stroke-width="2"/>
+        <line x1="200" y1="60" x2="210" y2="320" stroke="rgba(255,255,255,0.1)" stroke-width="2"/>
+        <line x1="100" y1="150" x2="300" y2="160" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
+        <line x1="40" y1="250" x2="280" y2="230" stroke="rgba(255,255,255,0.1)" stroke-width="2"/>
+        <text x="160" y="100" fill="rgba(255,255,255,0.2)" font-size="7">Champaca Street</text>
+        <text x="70" y="200" fill="rgba(255,255,255,0.2)" font-size="7">Bayan-Bayanan Ave</text>
+        <text x="220" y="180" fill="rgba(255,255,255,0.2)" font-size="7">West Drive</text>
+      </svg>
+      <div class="map-pin"><span>&#128205;</span></div>
+      <div class="map-bar">
+        <button class="resp-btn" style="border-radius:50%;width:44px;height:44px;padding:0;display:flex;align-items:center;justify-content:center;font-size:16px;">&#8249;</button>
+        <button class="map-use-btn">Use this location</button>
+        <button class="resp-btn" style="border-radius:50%;width:44px;height:44px;padding:0;display:flex;align-items:center;justify-content:center;font-size:14px;">&#128269;</button>
+      </div>
+    </div>
+    <div class="loc-pill">
+      <span class="pin-icon">&#128205;</span>
+      <span class="loc-text">Nearby Champaca Street</span>
+    </div>
+  </div>
+</div>
+
+<div class="hr-gap"></div>
+
+<!-- ========================================== -->
+<!-- SCREEN 4: REVIEW & SEND (ONLINE) -->
+<!-- ========================================== -->
+<div class="screen-label">Review &amp; Send — Online</div>
+<div class="phone-frame">
+  <div class="phone-header">
+    <div class="back-btn">&#8249;</div>
+    <div class="title-area">
+      <div class="label">Emergency SOS</div>
+      <div class="title">Review &amp; send</div>
+    </div>
+  </div>
+  <div class="phone-body">
+    <div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:18px;padding:14px 16px;display:flex;align-items:center;gap:10px;">
+      <span style="width:8px;height:8px;border-radius:50%;background:#10b981;box-shadow:0 0 8px rgba(16,185,129,0.6);flex-shrink:0;"></span>
+      <div>
+        <div style="font-size:14px;font-weight:700;color:#6ee7b7;">Connection restored</div>
+        <div style="font-size:12px;line-height:1.5;color:rgba(255,255,255,0.6);margin-top:2px;">Your alert will be sent online. Details are still here.</div>
+      </div>
+    </div>
+    <div class="progress">
+      <div class="dot active"></div><div class="dot active"></div><div class="dot active"></div><div class="dot active"></div>
+    </div>
+    <div class="timeline">
+      <div class="tl-item">
+        <div class="tl-line"></div>
+        <div class="tl-icon">&#128293;</div>
+        <div class="tl-content">
+          <div class="tl-label">Type</div>
+          <div class="tl-value">Fire</div>
+          <div class="tl-change" style="margin-top:6px;">Change</div>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-line"></div>
+        <div class="tl-icon">&#128205;</div>
+        <div class="tl-content">
+          <div class="tl-label">Location</div>
+          <div class="tl-value">Nearby Champaca Street</div>
+          <div class="tl-change" style="margin-top:6px;">Change</div>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-content">
+          <div class="tl-label">Situation</div>
+          <ul style="list-style:none;margin-top:4px;display:flex;flex-direction:column;gap:4px;">
+            <li style="display:flex;align-items:flex-start;gap:8px;font-size:14px;color:rgba(255,255,255,0.9);">
+              <span style="margin-top:8px;min-width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.6);flex-shrink:0;"></span>
+              <span style="line-height:1.4;">2-5 people affected</span>
+            </li>
+            <li style="display:flex;align-items:flex-start;gap:8px;font-size:14px;color:rgba(255,255,255,0.9);">
+              <span style="margin-top:8px;min-width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.6);flex-shrink:0;"></span>
+              <span style="line-height:1.4;">No one injured</span>
+            </li>
+            <li style="display:flex;align-items:flex-start;gap:8px;font-size:14px;color:rgba(255,255,255,0.9);">
+              <span style="margin-top:8px;min-width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.6);flex-shrink:0;"></span>
+              <span style="line-height:1.4;">Fire still spreading</span>
+            </li>
+          </ul>
+          <div class="tl-change" style="margin-top:6px;">Change</div>
+        </div>
+      </div>
+    </div>
+    <div class="section-gap"></div>
+    <div class="add-notes">
+      <div class="an-label">Additional notes</div>
+      <div class="an-value">Second floor, blue gate</div>
+    </div>
+    <div class="warning">
+      <span class="warning-icon">&#9888;&#65039;</span>
+      <span class="warning-text">False or misleading alerts are logged and repeated abuse can suspend your account.</span>
+    </div>
+  </div>
+  <div class="phone-footer">
+    <div class="btn-row">
+      <button class="btn btn-back">Back</button>
+      <button class="btn btn-primary">Send SOS</button>
+    </div>
+  </div>
+</div>
+
+<div class="hr-gap"></div>
+
+<!-- ========================================== -->
+<!-- SCREEN 5: COUNTDOWN / ONGOING            -->
+<!-- ========================================== -->
+<div class="screen-label">Ongoing — Offline</div>
+<div class="phone-frame">
+  <div class="phone-header" style="justify-content:center; padding-bottom:8px;">
+    <div class="title-area" style="text-align:center;">
+      <div class="label">Emergency SOS</div>
+      <div class="title" style="text-align:center;">Ongoing</div>
+      <p style="font-size:13px;color:rgba(255,255,255,0.4);text-align:center;margin-top:2px;">Tap cancel if this was accidental</p>
+    </div>
+  </div>
+  <div class="phone-body">
+    <div class="countdown-wrap">
+      <div class="countdown-ring">
+        <svg viewBox="0 0 224 224">
+          <defs>
+            <linearGradient id="ring-grad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#ff625a"/>
+              <stop offset="1" stop-color="#f23b35"/>
+            </linearGradient>
+          </defs>
+          <circle class="ring-bg" cx="112" cy="112" r="100"/>
+          <circle class="ring-fg" cx="112" cy="112" r="100" stroke-dasharray="628.3" stroke-dashoffset="20"/>
+        </svg>
+        <div class="countdown-num">3</div>
+      </div>
+      <div class="countdown-label">Broadcasting in</div>
+      <div class="countdown-sub">Tap cancel if you sent this by accident.</div>
+    </div>
+  </div>
+  <div class="phone-footer">
+    <div class="btn-row">
+      <button class="btn btn-back">Cancel</button>
+      <button class="btn btn-primary">Send Immediately</button>
+    </div>
+  </div>
+</div>
+
+<div class="hr-gap"></div>
+
+<!-- ========================================== -->
+<!-- EMERGENCY STATUS — OFFLINE              -->
+<!-- ========================================== -->
+<div class="screen-label">Emergency Status</div>
+<div class="phone-frame">
+  <div class="phone-header">
+    <div class="back-btn">&#8249;</div>
+    <div class="title-area">
+      <div class="label">Emergency SOS</div>
+      <div class="title">Emergency status</div>
+    </div>
+  </div>
+  <div class="phone-body">
+    <section>
+      <div class="mb-2 flex items-baseline justify-between gap-2">
+        <div style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:#fff;">Status</div>
+        <div style="font-size:12px;font-weight:400;color:rgba(255,255,255,0.5);">Track the process</div>
+      </div>
+      <div style="border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:8px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:3px;margin-bottom:2px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:#ea580c;flex-shrink:0;"></span>
+          <span style="font-size:13px;font-weight:600;color:#fff;">Received</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.4);margin-left:4px;">via SMS</span>
+        </div>
+        <p style="font-size:12px;color:rgba(255,255,255,0.5);margin-top:2px;">Responders have been notified</p>
+      </div>
+      <div style="border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:8px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:3px;margin-bottom:2px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:#d1d5db;flex-shrink:0;"></span>
+          <span style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.4);">Responder en route</span>
+        </div>
+      </div>
+      <div style="border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:8px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:3px;margin-bottom:2px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:#d1d5db;flex-shrink:0;"></span>
+          <span style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.4);">Responder nearby</span>
+        </div>
+      </div>
+      <div style="border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:8px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:3px;margin-bottom:2px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:#d1d5db;flex-shrink:0;"></span>
+          <span style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.4);">Responder arrived</span>
+        </div>
+      </div>
+      <div style="padding-bottom:4px;">
+        <div style="display:flex;align-items:center;gap:3px;margin-bottom:2px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:#d1d5db;flex-shrink:0;"></span>
+          <span style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.4);">Resolved</span>
+        </div>
+      </div>
+      <button type="button" disabled style="margin-top:12px;width:100%;padding:10px 16px;border-radius:12px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);font-size:11.5px;font-weight:600;color:rgba(255,255,255,0.5);cursor:not-allowed;">Check Messages for updates</button>
+    </section>
+  </div>
+  <div class="phone-footer">
+  </div>
+</div>
+</body>
+</html>

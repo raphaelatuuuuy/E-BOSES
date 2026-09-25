@@ -643,7 +643,9 @@ class EmergencyAlertSerializer(serializers.ModelSerializer):
     def get_reporter_phone(self, obj):
         from apps.sms.normalize import mask_ph_mobile
 
-        number = (obj.reporter_contact_number or "").strip() or getattr(obj.reporter, "phone_number", "")
+        from .contacts import resolve_reporter_number
+
+        number = resolve_reporter_number(obj)
         return mask_ph_mobile(number) if number else ""
 
     def get_tracking_id(self, obj):
@@ -1101,8 +1103,12 @@ class EmergencyChatMessageSerializer(serializers.ModelSerializer):
     sender = PublicUserSerializer(read_only=True)
     is_mine = serializers.SerializerMethodField()
     sender_online = serializers.SerializerMethodField()
+    via_sms = serializers.SerializerMethodField()
     via_sms_gateway = serializers.SerializerMethodField()
     sms_status = serializers.SerializerMethodField()
+    delivery_state = serializers.SerializerMethodField()
+    read_count = serializers.SerializerMethodField()
+    recipient_count = serializers.SerializerMethodField()
     attachment = EmergencyChatAttachmentSerializer(read_only=True)
 
     class Meta:
@@ -1116,8 +1122,12 @@ class EmergencyChatMessageSerializer(serializers.ModelSerializer):
             "created_at",
             "is_mine",
             "sender_online",
+            "via_sms",
             "via_sms_gateway",
             "sms_status",
+            "delivery_state",
+            "read_count",
+            "recipient_count",
         )
         read_only_fields = (
             "id",
@@ -1126,8 +1136,12 @@ class EmergencyChatMessageSerializer(serializers.ModelSerializer):
             "created_at",
             "is_mine",
             "sender_online",
+            "via_sms",
             "via_sms_gateway",
             "sms_status",
+            "delivery_state",
+            "read_count",
+            "recipient_count",
         )
 
     def get_is_mine(self, obj):
@@ -1140,12 +1154,56 @@ class EmergencyChatMessageSerializer(serializers.ModelSerializer):
 
         return is_user_online(obj.sender_id)
 
+    def _chat_sms_rows(self, obj):
+        """This message's chat-SMS rows, resolved once per instance.
+
+        The list view prefetches `outbound_sms_messages`, so a page of 30 messages
+        answers the SMS questions from one query instead of two per message.
+        """
+        rows = getattr(obj, "_chat_sms_rows_cache", None)
+        if rows is None:
+            rows = [
+                row for row in obj.outbound_sms_messages.all() if row.purpose == "chat_update"
+            ]
+            obj._chat_sms_rows_cache = rows
+        return rows
+
+    def get_via_sms(self, obj):
+        """True when this line was texted in rather than typed in the app."""
+        return bool(obj.inbound_sms_messages.all())
+
     def get_via_sms_gateway(self, obj):
-        return obj.outbound_sms_messages.filter(purpose="chat_update").exists()
+        return bool(self._chat_sms_rows(obj))
 
     def get_sms_status(self, obj):
-        message = obj.outbound_sms_messages.filter(purpose="chat_update").order_by("-id").first()
-        return message.status if message else None
+        rows = self._chat_sms_rows(obj)
+        # Meta.ordering is newest-first, so the head is the current attempt.
+        return rows[0].status if rows else None
+
+    def get_delivery_state(self, obj):
+        from .chat_services import delivery_state_for
+
+        return delivery_state_for(
+            obj,
+            participant_ids=self.context.get("chat_participant_ids") or set(),
+            read_states=self.context.get("chat_read_states") or {},
+            sms_failed=any(row.status == "failed" for row in self._chat_sms_rows(obj)),
+        )
+
+    def _receipt_counts(self, obj) -> tuple[int, int]:
+        from .chat_services import delivery_counts_for
+
+        return delivery_counts_for(
+            obj,
+            participant_ids=self.context.get("chat_participant_ids") or set(),
+            read_states=self.context.get("chat_read_states") or {},
+        )
+
+    def get_read_count(self, obj):
+        return self._receipt_counts(obj)[0]
+
+    def get_recipient_count(self, obj):
+        return self._receipt_counts(obj)[1]
 
 
 class EmergencyChatCreateSerializer(serializers.Serializer):

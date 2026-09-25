@@ -1077,6 +1077,7 @@ export interface ConcernChatMessage {
   attachment: ConcernChatAttachment | null
   created_at: string
   is_mine: boolean
+  delivery_state?: "sent" | "delivered" | "read" | "failed"
 }
 
 export function listConcernChat(
@@ -1109,6 +1110,27 @@ export function sendConcernChat(
     method: "POST",
     body: JSON.stringify({ body }),
   })
+}
+
+export interface ConcernChatReadRequest {
+  last_read_message_id: number
+}
+
+export interface ConcernChatReadResponse {
+  read_count: number
+}
+
+export function sendConcernChatReceipt(
+  concernId: number,
+  lastReadMessageId: number,
+) {
+  return apiRequest<ConcernChatReadResponse>(
+    `/concerns/${concernId}/chat/read/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ last_read_message_id: lastReadMessageId }),
+    },
+  )
 }
 
 export function flagConcern(

@@ -4,8 +4,8 @@ SMS Forwarder on the barangay handset calls this whenever the gateway number
 receives a text. Its URL screen offers GET or POST and a free-form URL template,
 so both verbs are accepted here — see `apps.sms.payload` for the field aliases.
 
-The view is deliberately thin and fast: authenticate, hand off, return 200.
-A gateway that does not get a prompt 200 retries, and a retry storm on an
+The view is deliberately thin and fast: authenticate, hand off, return 202.
+A gateway that does not get a prompt 202 retries, and a retry storm on an
 emergency number is the last thing anybody needs.
 """
 
@@ -24,9 +24,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import InboundSmsMessage
-from .payload import extract_inbound
-from .router import handle_inbound
+from .payload import extract_inbound, _merge_sources
+from .tasks import handle_inbound_task
 
 logger = logging.getLogger(__name__)
 
@@ -213,17 +212,9 @@ class SmsInboundView(APIView):
         if not payload.sender.strip():
             return Response({"detail": "No sender number found."}, status=status.HTTP_400_BAD_REQUEST)
 
-        inbound = handle_inbound(payload)
+        handle_inbound_task.delay(_merge_sources(request))
 
-        redelivered = getattr(inbound, "was_redelivered", False)
-        body = {
-            "id": inbound.pk,
-            "outcome": inbound.outcome,
-            "duplicate": redelivered or inbound.outcome == InboundSmsMessage.Outcome.DUPLICATE,
-        }
-        if inbound.alert_id:
-            body["emergency_id"] = inbound.alert_id
-        # 201 only when this call is what created the emergency. A retry of the
-        # same message reports 200 so the gateway can tell the two apart.
-        created = inbound.outcome == InboundSmsMessage.Outcome.EMERGENCY_CREATED and not redelivered
-        return Response(body, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        return Response(
+            {"detail": "Accepted for processing."},
+            status=status.HTTP_202_ACCEPTED,
+        )

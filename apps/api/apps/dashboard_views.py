@@ -724,6 +724,7 @@ def official_report_payload(concern):
 def official_emergency_payload(alert):
     """Expose an SOS in the same compact shape as an overview report row."""
     from apps.emergencies.description import title_for_display
+    from apps.emergencies.location_services import display_location
     from apps.emergencies.views import preferred_departments_for
 
     departments = preferred_departments_for(alert.type, alert.community)
@@ -747,7 +748,7 @@ def official_emergency_payload(alert):
             else Concern.Status.IN_PROGRESS
         ),
         "severity": "critical",
-        "address": alert.address or location,
+        "address": display_location(alert),
         "barangay": alert.barangay,
         "assigned_department": official_unit_payload(unit),
         "created_at": alert.created_at.isoformat(),

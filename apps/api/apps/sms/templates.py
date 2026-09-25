@@ -72,3 +72,28 @@ def responder_dispatch(alert, *, recipient_name="", unit_name="", reporter_name=
 def otp_message(code, recipient_name=""):
     greeting = f"Good day, {recipient_name.strip()}! " if recipient_name and recipient_name.strip() else "Good day! "
     return f"{greeting}E-Boses registration code: {code}. This code expires in 5 minutes. Do not share it with anyone."
+
+
+CHAT_REPLY_HINT = "Reply to this number to answer."
+
+
+def chat_update(alert, body, *, reply_hint=False, include_reference=False):
+    """The text a resident gets when a responder answers in the app.
+
+    Plain sentences by default. A resident reading "E-BOSES SOS-2026-000482:"
+    before every line of a conversation they are already having is being handed a
+    form, not an answer. `include_reference` restores the tracking id for the one
+    case where it earns its length - several alerts running at once - and
+    `reply_hint` adds the line that tells the resident the thread is two-way.
+
+    Everything here stays ASCII: the bullet character and the en dash are not in
+    the GSM-7 alphabet and would flip a short reply into a UCS-2 message billed
+    at 67 characters per segment instead of 153.
+    """
+    text = (body or "").strip() or "New emergency chat attachment"
+    if include_reference:
+        label = getattr(alert, "tracking_id", "") or reference(alert)
+        text = f"E-BOSES {label}: {text}"
+    if reply_hint:
+        text = f"{text}\n{CHAT_REPLY_HINT}"
+    return text

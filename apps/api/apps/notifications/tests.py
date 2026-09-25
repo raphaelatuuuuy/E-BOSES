@@ -867,7 +867,91 @@ class NotificationPreferenceAPITests(APITestCase):
         self.assertIsNone(payload["emergency_status"])
         self.assertIsNone(payload["image_url"])
         self.assertEqual(payload["images"], [])
-        self.assertIn("do not intervene", payload["safety_guidance"])
+        self.assertIn("Thank you", payload["safety_guidance"])
+        # A neighbouring resident needs the place to avoid, so the alert names
+        # the barangay instead of falling back to a vague "the area".
+        self.assertIn("Fire emergency near Marikina Heights", payload["display_body"])
+        self.assertNotIn("the area", payload["display_body"])
+
+    def create_witness_notification(self, suffix, *, first_name="Andres", **emergency_fields):
+        user = self.create_verified_user(suffix)
+        user.first_name = first_name
+        user.save(update_fields=["first_name"])
+        emergency = EmergencyAlert.objects.create(
+            reporter=self.create_verified_user(f"{suffix}-reporter"),
+            type=EmergencyAlert.Type.FIRE,
+            latitude="14.6515000",
+            longitude="121.1207000",
+            barangay="Marikina Heights",
+            **emergency_fields,
+        )
+        return Notification.objects.create(
+            recipient=user,
+            emergency=emergency,
+            type=Notification.Type.WITNESS_ALERT,
+            title="Emergency reported",
+            body="Stay alert.",
+        )
+
+    def test_witness_alert_names_the_street_without_the_barangay_suffix(self):
+        notification = self.create_witness_notification(
+            "witness-street",
+            address="99 Champaca Street, Marikina Heights",
+            resolved_location="Champaca Street, Marikina Heights",
+        )
+
+        payload = notification_display_payload(notification)
+
+        self.assertEqual(payload["title"], "Community Alert")
+        self.assertIn(
+            "Good day, Andres. Fire emergency near Champaca Street, stay clear and keep safe.",
+            payload["body"],
+        )
+        # Street only: the neighbours reading the alert already know which
+        # barangay they are in, and the house number is not theirs to know.
+        self.assertNotIn("Marikina Heights", payload["body"])
+        self.assertNotIn("99 ", payload["body"])
+
+    def test_witness_alert_picks_up_a_street_that_resolves_after_the_fan_out(self):
+        # The SOS picker stores "Pinned location on the map" and reverse
+        # geocoding answers after dispatch, so the same notification row has to
+        # gain the street without a second row being created.
+        notification = self.create_witness_notification(
+            "witness-later",
+            address="Pinned location on the map",
+        )
+        before = notification_display_payload(notification)["body"]
+        emergency = notification.emergency
+        emergency.resolved_location = "Champaca Street, Marikina Heights"
+        emergency.address = "Champaca Street, Marikina Heights"
+        emergency.save(update_fields=["resolved_location", "address"])
+
+        after = notification_display_payload(notification)["body"]
+
+        self.assertIn("near Marikina Heights, stay clear", before)
+        self.assertNotIn("Pinned", before)
+        self.assertIn("near Champaca Street, stay clear", after)
+
+    def test_witness_alert_keeps_the_street_when_the_model_is_configured(self):
+        notification = self.create_witness_notification(
+            "witness-model",
+            resolved_location="Champaca Street, Marikina Heights",
+        )
+
+        with override_settings(NOTIFICATION_COPY_LLM_ENABLED=True), patch(
+            "apps.notifications.notification_copy.is_configured", return_value=True
+        ), patch(
+            "apps.notifications.notification_copy.complete",
+            return_value=(
+                '{"header":"Fire nearby",'
+                '"description":"A fire was reported in your barangay, stay clear."}'
+            ),
+        ):
+            refresh_notification_copy(notification, force=True)
+            payload = notification_display_payload(notification)
+
+        self.assertIn("near Champaca Street", payload["body"])
+        self.assertNotIn("Marikina Heights", payload["body"])
 
     def test_reading_witness_notification_records_delivery_receipt(self):
         user = self.create_verified_user("witness-read")

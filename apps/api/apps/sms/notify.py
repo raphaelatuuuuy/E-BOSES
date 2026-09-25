@@ -18,6 +18,8 @@ def notify_responder_assigned(alert, responder):
         return
     profile = getattr(alert.reporter, "resident_profile", None)
     name = " ".join(filter(None, [getattr(profile, "first_name", ""), getattr(profile, "last_name", "")]))
+    from apps.emergencies.contacts import resolve_reporter_number
+
     try:
         assignment = alert.assignments.filter(responder=responder).order_by("-assigned_at", "-id").first()
         queue_sms(
@@ -27,7 +29,7 @@ def notify_responder_assigned(alert, responder):
                 recipient_name=getattr(getattr(responder, "resident_profile", None), "first_name", ""),
                 unit_name=templates.unit_label(alert),
                 reporter_name=name,
-                contact=alert.reporter_contact_number or getattr(alert.reporter, "phone_number", ""),
+                contact=resolve_reporter_number(alert),
             ),
             purpose=SmsPurpose.DISPATCH,
             idempotency_key=f"{PREFIX}:dispatch:{alert.pk}:{responder.pk}:{getattr(assignment, 'pk', 0)}",
@@ -41,14 +43,10 @@ def notify_responder_assigned(alert, responder):
 def notify_active_unit(alert):
     from apps.emergencies.views import active_unit_responders
 
-    if (
-        alert.reporter_verification != alert.ReporterVerification.ACCOUNT
-        and alert.latitude is not None
-        and alert.longitude is not None
-        and alert.reverse_geocoding_status == alert.ReverseGeocodingStatus.PENDING
-    ):
-        return []
-
+    # Dispatch SMS is an independent safety channel. It must not wait for a
+    # reverse-geocoder result, and it must not be skipped because a responder
+    # is currently online. Online responders receive the same SMS as offline
+    # responders; push/in-app presence is only an additional channel.
     responders = active_unit_responders(alert)
     if not alert.assignments.exists():
         return []
@@ -58,7 +56,9 @@ def notify_active_unit(alert):
 
 
 def notify_reporter(alert, body, *, key):
-    number = (alert.reporter_contact_number or "").strip() or getattr(alert.reporter, "phone_number", "")
+    from apps.emergencies.contacts import resolve_reporter_number
+
+    number = resolve_reporter_number(alert)
     if not number or not body:
         return
     try:

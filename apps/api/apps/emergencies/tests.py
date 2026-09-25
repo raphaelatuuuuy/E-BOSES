@@ -267,7 +267,7 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(notification.type, Notification.Type.EMERGENCY_SUBMITTED)
         self.assertFalse(notification.is_read)
 
-    def test_emergency_create_records_witness_notifications_for_same_barangay_residents(self):
+    def test_emergency_create_broadcasts_witness_notifications_to_all_residents(self):
         witness = get_user_model().objects.create_user(
             email="emergency-witness@example.com",
             phone_number="+639360000009",
@@ -296,6 +296,22 @@ class EmergencyAPITests(APITestCase):
             community=self.community,
         )
 
+        no_location_witness = get_user_model().objects.create_user(
+            email="emergency-witness-no-location@example.com",
+            phone_number="+639360000010",
+            password="pass",
+            status=get_user_model().Status.VERIFIED,
+        )
+        ResidentProfile.objects.create(
+            user=no_location_witness,
+            first_name="No Location",
+            last_name="Witness",
+            date_of_birth="1990-01-01",
+            address="A Different Street",
+            barangay="A Different Barangay",
+            community=self.community,
+        )
+
         alert = self.create_alert()
 
         witness_delivery = alert.witness_notifications.get(resident=witness)
@@ -305,14 +321,29 @@ class EmergencyAPITests(APITestCase):
             WitnessNotification.PushStatus.NOT_CONFIGURED,
         )
         self.assertTrue(Notification.objects.filter(recipient=witness, emergency=alert, type=Notification.Type.WITNESS_ALERT).exists())
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=no_location_witness,
+                emergency=alert,
+                type=Notification.Type.WITNESS_ALERT,
+            ).exists()
+        )
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.other,
+                emergency=alert,
+                type=Notification.Type.WITNESS_ALERT,
+            ).exists()
+        )
+        self.assertEqual(alert.witness_notifications.count(), 3)
 
         self.client.force_authenticate(self.official)
         detail = self.client.get(f"/api/emergencies/{alert.pk}/")
         self.assertEqual(detail.status_code, status.HTTP_200_OK)
         summary = detail.data["witness_notification_summary"]
-        self.assertEqual(summary["recipient_count"], 1)
-        self.assertEqual(summary["in_app_delivered_count"], 1)
-        self.assertEqual(summary["push_status_counts"]["not_configured"], 1)
+        self.assertEqual(summary["recipient_count"], 3)
+        self.assertEqual(summary["in_app_delivered_count"], 3)
+        self.assertEqual(summary["push_status_counts"]["not_configured"], 3)
 
     def test_resident_cannot_create_second_active_emergency(self):
         alert = self.create_alert()
@@ -1185,6 +1216,31 @@ class EmergencyAPITests(APITestCase):
         self.assertEqual(alert.status, EmergencyAlert.Status.RESOLVED)
         self.assertIsNotNone(alert.resolved_at)
         self.assertTrue(EmergencyStatusEvent.objects.filter(alert=alert, status=EmergencyAlert.Status.RESOLVED).exists())
+
+    def test_resolve_serializes_stored_route_timestamp(self):
+        alert = self.create_alert()
+        assignment = EmergencyResponderAssignment.objects.create(
+            alert=alert,
+            responder=self.responder,
+        )
+        EmergencyAssignmentRoute.objects.create(
+            assignment=assignment,
+            status=EmergencyAssignmentRoute.Status.OK,
+            geometry={"type": "LineString", "coordinates": []},
+        )
+        alert.status = EmergencyAlert.Status.ROUTED
+        alert.save(update_fields=["status", "updated_at"])
+        self.client.force_authenticate(self.responder)
+
+        response = self.client.post(
+            f"/api/emergencies/{alert.pk}/resolve/",
+            {"note": "Patient assisted."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(response.data["route"]["updated_at"], str)
+        self.assertTrue(response.data["route"]["updated_at"])
 
     def test_responder_acknowledges_routed_emergency(self):
         alert = self.create_alert()

@@ -4,6 +4,7 @@ import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  RefreshCwIcon,
   SearchIcon,
   SlidersHorizontalIcon,
 } from "lucide-react"
@@ -28,6 +29,8 @@ export function ConfigurationListToolbar({
   activeFilter,
   onFilter,
   trailing,
+  retry,
+  checking,
 }: {
   search: string
   onSearch: (value: string) => void
@@ -36,6 +39,8 @@ export function ConfigurationListToolbar({
   activeFilter: string
   onFilter: (value: string) => void
   trailing?: ReactNode
+  retry?: () => void
+  checking?: boolean
 }) {
   const [filterOpen, setFilterOpen] = useState(false)
   const searchRowRef = useRef<HTMLDivElement>(null)
@@ -89,6 +94,16 @@ export function ConfigurationListToolbar({
             aria-label={placeholder}
             className="min-w-0 flex-1 bg-transparent text-[15px] text-neutral-900 outline-none placeholder:text-neutral-400"
           />
+          {retry ? (
+            <button
+              type="button"
+              onClick={retry}
+              aria-label="Retry"
+              className="ml-auto flex size-5 shrink-0 items-center justify-center text-neutral-500 transition-colors hover:text-neutral-700"
+            >
+              <RefreshCwIcon className={cn("size-5", checking && "animate-spin")} aria-hidden="true" />
+            </button>
+          ) : null}
         </label>
         {trailing}
       </div>

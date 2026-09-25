@@ -140,6 +140,18 @@ class InboundSmsMessage(models.Model):
         on_delete=models.SET_NULL,
         related_name="inbound_sms_messages",
     )
+    chat_message = models.ForeignKey(
+        "emergencies.EmergencyChatMessage",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="inbound_sms_messages",
+        help_text=(
+            "The chat line this reply became. Lets the app label a message as "
+            "received by SMS, and lets an answer be sent by SMS because the "
+            "resident is texting rather than using the app."
+        ),
+    )
     detail = models.CharField(max_length=255, blank=True)
     raw_payload = models.JSONField(default=dict, blank=True)
 

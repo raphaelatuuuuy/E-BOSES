@@ -131,7 +131,7 @@ class ConcernSeverityTests(APITestCase):
         popular_but_minor = self._concern(estimate="low", votes=10_000)
         popular_but_minor.updated_at = timezone.now() - timedelta(days=30)
 
-        severe_but_quiet = self._concern(category="public_safety", estimate="high", urgent=True, votes=0)
+        severe_but_quiet = self._concern(category="public_safety", estimate="high", votes=0)
 
         self.assertGreater(
             priority_score(severe_but_quiet),

@@ -1616,6 +1616,7 @@ export function CreateReportDialog({
                     <UserAvatar
                       user={guest ? { full_name: "Community reporter" } : user}
                       online={Boolean(user) && !guest}
+                      showStatus={false}
                       className="!size-11 text-[17px] sm:!size-12 sm:text-[18px]"
                     />
                     <div className="min-w-0 flex-1">

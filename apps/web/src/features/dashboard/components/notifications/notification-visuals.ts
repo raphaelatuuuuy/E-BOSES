@@ -1,8 +1,12 @@
-import { BellRingIcon, TriangleAlertIcon, type LucideIcon } from "lucide-react"
+import { TriangleAlertIcon, Asterisk, Info, type LucideIcon } from "lucide-react"
 
 import type { NotificationItem } from "@/features/dashboard/components/notification-context"
 
-export type NotificationVisual = { Icon: LucideIcon; chipClass: string }
+export type NotificationVisual = {
+  Icon: LucideIcon
+  chipClass: string
+  iconBgClass: string
+}
 
 export function isConversationNotification(item: NotificationItem) {
   const type = item.type ?? ""
@@ -37,8 +41,11 @@ export function notificationActionLink(item: NotificationItem): string | null {
 }
 
 export function notificationIconFor(item: NotificationItem): NotificationVisual {
-  if (isEmergencyNotification(item)) {
-    return { Icon: TriangleAlertIcon, chipClass: "bg-sos/10 text-sos" }
+  if (item.type === "witness_alert") {
+    return { Icon: Asterisk, chipClass: "", iconBgClass: "" }
   }
-  return { Icon: BellRingIcon, chipClass: "bg-neutral-100 text-neutral-600" }
+  if (isEmergencyNotification(item)) {
+    return { Icon: TriangleAlertIcon, chipClass: "", iconBgClass: "" }
+  }
+  return { Icon: Info, chipClass: "", iconBgClass: "" }
 }

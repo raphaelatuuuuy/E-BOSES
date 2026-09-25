@@ -231,6 +231,7 @@ export function ResponderAssignment({
                   <UserAvatar
                     user={responder}
                     online={responder.is_online}
+                    showStatus={false}
                     size="sm"
                     className="!size-9 text-[14px]"
                   />

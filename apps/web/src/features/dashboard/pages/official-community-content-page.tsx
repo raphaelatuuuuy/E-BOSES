@@ -300,7 +300,7 @@ export default function OfficialCommunityContentPage({ embedded = false }: { emb
           {page.length === 0 ? (
             <div className="py-16 text-center">
               <MegaphoneIcon className="mx-auto size-7 text-neutral-300" aria-hidden />
-              <h2 className="mt-4 text-row font-semibold text-brand-navy">{announcements.length ? "No announcements match this view" : "No announcements yet"}</h2>
+              <h2 className="mt-4 text-meta text-neutral-500">{announcements.length ? "No announcements match this view" : "No announcements yet"}</h2>
               <p className="mt-2 text-read text-neutral-500">{emptyMessage}</p>
               <button type="button" onClick={announcements.length ? clearFilters : openNew} className="mt-5 font-semibold text-brand-navy underline underline-offset-4">
                 {announcements.length ? "Show all announcements" : "New announcement"}
