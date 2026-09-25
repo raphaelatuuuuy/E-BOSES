@@ -6,6 +6,10 @@ services:
     envVars:
       - key: VITE_DEV_HTTPS
         value: "false"
+      - key: VITE_CARTO_BASEMAP_KEY
+        value: cb1_25sm_1_eb458a2c847f0899e8f215e7
+      - key: VITE_API_BASE_URL
+        sync: false
     routes:
       - type: rewrite
         source: /*
@@ -77,13 +81,33 @@ services:
         sync: false
       - key: OUTBOUND_SMS_DRIVER
         sync: false
+      - key: SMS_GATE_SIM_NUMBER
+        value: "2"
+      - key: OUTBOUND_SMS_SIM_SLOT
+        value: "2"
+      - key: SMS_INBOUND_WEBHOOK_TOKEN
+        sync: false
+      - key: SMS_GATE_WEBHOOK_SIGNING_KEY
+        sync: false
       - key: OLLAMA_API_KEY
         sync: false
       - key: OCRSPACE_API_KEY
         sync: false
       - key: ROBOFLOW_API_KEY
         sync: false
+      - key: ASSISTANT_ENABLED
+        value: "true"
+      - key: ASSISTANT_BASE_URL
+        value: https://inference.poolside.ai/v1
+      - key: ASSISTANT_MODEL
+        value: poolside/laguna-xs-2.1
+      - key: ASSISTANT_API_KEY
+        sync: false
       - key: RESEND_API_KEY
+        sync: false
+      - key: IP2GEO_API_KEY
+        sync: false
+      - key: IP2GEO_API_URL
         sync: false
 
   # Paid path (free tier runs workers on your laptop instead — see Phase 5).
