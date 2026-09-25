@@ -10,3 +10,99 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
+
+  - type: web
+    name: eboses-api
+    runtime: python
+    rootDir: apps/api
+    buildCommand: bash build.sh
+    startCommand: python -m daphne -b 0.0.0.0 -p $PORT config.asgi:application
+    healthCheckPath: /api/health/
+    envVars:
+      - key: DJANGO_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: ENABLE_GIS
+        value: "false"
+      - key: STORAGE_BACKEND
+        value: cloudinary
+      - key: CELERY_TASK_ALWAYS_EAGER
+        value: "false"
+      - key: SECURE_SSL_REDIRECT
+        value: "true"
+      - key: SECURE_HSTS_SECONDS
+        value: "31536000"
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: CSRF_COOKIE_SECURE
+        value: "true"
+      - key: REFRESH_COOKIE_SECURE
+        value: "true"
+      - key: TRUST_X_FORWARDED_PROTO
+        value: "true"
+      - key: LOG_LEVEL
+        value: INFO
+      # Secrets are dashboard-managed (sync: false) — never commit values.
+      # Fill them in Render → eboses-api → Environment before first deploy.
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: JWT_SIGNING_KEY
+        sync: false
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CELERY_BROKER_URL
+        sync: false
+      - key: CELERY_RESULT_BACKEND
+        sync: false
+      - key: CACHE_REDIS_URL
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+      - key: SMS_GATE_BASE_URL
+        sync: false
+      - key: SMS_GATE_USERNAME
+        sync: false
+      - key: SMS_GATE_PASSWORD
+        sync: false
+      - key: OUTBOUND_SMS_DRIVER
+        sync: false
+      - key: OLLAMA_API_KEY
+        sync: false
+      - key: OCRSPACE_API_KEY
+        sync: false
+      - key: ROBOFLOW_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+
+  # Paid path (free tier runs workers on your laptop instead — see Phase 5).
+  # Uncomment when off free tier: one service per role, same envVars as above.
+  # - type: worker
+  #   name: eboses-worker-fast
+  #   runtime: python
+  #   rootDir: apps/api
+  #   buildCommand: pip install -r requirements.txt
+  #   startCommand: python -m celery -A config worker -l INFO -Q eboses --concurrency 2
+  # - type: worker
+  #   name: eboses-worker-heavy
+  #   runtime: python
+  #   rootDir: apps/api
+  #   buildCommand: pip install -r requirements.txt
+  #   startCommand: python -m celery -A config worker -l INFO -Q heavy --concurrency 1
+  # - type: worker
+  #   name: eboses-beat
+  #   runtime: python
+  #   rootDir: apps/api
+  #   buildCommand: pip install -r requirements.txt
+  #   startCommand: python -m celery -A config beat -l INFO --pidfile /tmp/celerybeat.pid

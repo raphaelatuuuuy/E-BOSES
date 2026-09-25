@@ -15,6 +15,9 @@ channels>=4.2
 channels-redis>=4.2
 daphne>=4.2
 
+# Static files (prod: Daphne does not serve static; WhiteNoise does)
+whitenoise>=6.6
+
 # Database
 psycopg2-binary>=2.9
 # psycopg[c]>=3.2  # Uncomment for psycopg 3 support

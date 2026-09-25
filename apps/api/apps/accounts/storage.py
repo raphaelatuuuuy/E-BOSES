@@ -44,7 +44,7 @@ class PrivateMediaStorage(_PrivateBase):
             return cloudinary.uploader.upload(
                 content,
                 public_id=name,
-                resource_type=self._get_resource_type(),
+                resource_type=self._get_resource_type(name),
                 **self.get_upload_options(),
             )
 
@@ -58,11 +58,22 @@ def signed_private_url(name, *, expires_in=300):
 
     import time
     import cloudinary.utils
+    from cloudinary_storage import app_settings as cloudinary_settings
 
-    public_id, _, extension = name.rpartition(".")
+    # Migrated rows store the bare field path (raw/...); the Cloudinary
+    # backend prefixes every id (config/storage _prepend_prefix), and new
+    # saves store the prefixed id. Normalise both to the stored form.
+    name = name.replace("\\", "/")
+    prefix = str(getattr(cloudinary_settings, "PREFIX", "media") or "media").strip("/")
+    if prefix and not name.startswith(prefix + "/"):
+        name = f"{prefix}/{name}"
+
+    # Raw assets keep the extension inside the stored public id (the
+    # uploader appends/keeps it), so the download lookup needs the full
+    # name with an empty format; splitting the extension off 404s.
     return cloudinary.utils.private_download_url(
-        public_id or name,
-        extension or "",
+        name,
+        "",
         resource_type="raw",
         type="authenticated",
         expires_at=int(time.time()) + int(expires_in),

@@ -92,6 +92,7 @@ MIDDLEWARE = [
     "config.middleware.SlowRequestLoggingMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "config.middleware.SecurityHeadersMiddleware",
     "django.middleware.gzip.GZipMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -412,6 +413,11 @@ USE_TZ = True
 # Static & Media
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# Daphne never serves static files; WhiteNoise does (compressed + cached).
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 MEDIA_URL = env("MEDIA_URL", default="/media/")
 MEDIA_ROOT = env("MEDIA_ROOT", default=BASE_DIR / "public_media")
 PRIVATE_MEDIA_ROOT = env("PRIVATE_MEDIA_ROOT", default=BASE_DIR / "private_media")
