@@ -26,11 +26,11 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
-  checkConcernMedia,
-  checkGuestConcernMedia,
+  checkConcernMediaAsync,
+  checkGuestConcernMediaAsync,
   createConcern,
   getConcern,
-  precheckConcern,
+  precheckConcernAsync,
   submitGuestConcern,
   type Concern,
   type ConcernActiveDuplicate,
@@ -850,8 +850,8 @@ export function CreateReportDialog({
         checkData.append("forensics_only", "true")
         for (const file of filesToCheck) checkData.append("media", file)
         const result = guest
-          ? await checkGuestConcernMedia(checkData)
-          : await checkConcernMedia(checkData)
+          ? await checkGuestConcernMediaAsync(checkData)
+          : await checkConcernMediaAsync(checkData)
         const checkedFiles = Array.isArray(result.files) ? result.files : []
         const rejectedIndexes = new Set<number>()
         for (const [resultIndex, checkedFile] of checkedFiles.entries()) {
@@ -1404,7 +1404,7 @@ export function CreateReportDialog({
       }
       for (const file of mediaFiles) precheckData.append("media", file)
 
-      const precheck = await precheckConcern(precheckData)
+      const precheck = await precheckConcernAsync(precheckData)
       applyPhotoVerdicts(precheck.photo_verdicts || [])
       setPrivacyPreview(precheck.privacy_preview ?? null)
 

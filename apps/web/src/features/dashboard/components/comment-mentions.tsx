@@ -155,9 +155,9 @@ export function collectThreadMentionUsers(
   }
   add(post.reporter)
   add(sessionUser)
-  for (const c of post.comments) {
+  for (const c of post.comments ?? []) {
     add(c.author)
-    for (const r of c.replies) add(r.author)
+    for (const r of c.replies ?? []) add(r.author)
   }
   return [...map.values()]
 }

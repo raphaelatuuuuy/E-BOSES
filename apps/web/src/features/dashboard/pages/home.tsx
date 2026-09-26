@@ -35,6 +35,7 @@ import {
   liveDotAriaLabel,
 } from "@/features/dashboard/components/home/live-dot"
 import { FeedPostCard } from "@/features/dashboard/components/feed-post-card"
+import { FeedPostErrorBoundary } from "@/features/dashboard/components/feed-post-error-boundary"
 import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
 import {
   ResidentNotificationsButton,
@@ -656,6 +657,7 @@ export default function HomePage() {
                     "eboses-feed-highlight ring-2 ring-primary/50 ring-offset-2"
                 )}
               >
+                <FeedPostErrorBoundary key={`boundary-${post.id}`}>
                 <FeedPostCard
                   post={post}
                   sessionUser={sessionUserAsPublic}
@@ -675,6 +677,7 @@ export default function HomePage() {
                   onEditComment={saveCommentEdit}
                   onDeleteComment={removeComment}
                 />
+                </FeedPostErrorBoundary>
               </div>
             ))}
 

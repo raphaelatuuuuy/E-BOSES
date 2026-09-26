@@ -1163,6 +1163,30 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual([item["id"] for item in response.data], [supported.pk, quiet.pk])
         self.assertGreater(response.data[0]["priority_score"], response.data[1]["priority_score"])
 
+    def test_feed_rows_expose_empty_collections_for_dropped_relations(self):
+        """Slim rows must stay shape-compatible: clients index comments etc.
+        directly, so absent keys crash them. The feed omits the data but must
+        still emit explicit empty arrays."""
+        Concern.objects.create(
+            reporter=self.other,
+            title="Shape probe concern",
+            status=Concern.Status.UNDER_REVIEW,
+            visibility=Concern.Visibility.COMMUNITY,
+            validation_status=Concern.ValidationStatus.ACCEPTED,
+        )
+
+        response = self.client.get("/api/concerns/feed/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        row = next(item for item in response.data if item["title"] == "Shape probe concern")
+        for field in (
+            "comments", "timeline", "conversation", "clarifications",
+            "appeals", "official_remarks", "form_values", "viewers",
+            "assignments",
+        ):
+            self.assertIn(field, row)
+            self.assertEqual(row[field], [])
+
     def test_upvote_is_persistent_and_unique_per_user(self):
         concern = Concern.objects.create(
             reporter=self.other,

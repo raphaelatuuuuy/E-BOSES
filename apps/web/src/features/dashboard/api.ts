@@ -1,4 +1,4 @@
-import { apiRequest, unwrapList, type ListEnvelope } from "@/lib/api"
+import { ApiError, apiRequest, unwrapList, type ListEnvelope } from "@/lib/api"
 export type ConcernCategory =
   | "infrastructure"
   | "environment"
@@ -817,6 +817,94 @@ export function checkGuestConcernMedia(formData: FormData) {
       body: formData,
     },
     { auth: false, csrf: true, refreshOnUnauthorized: false }
+  )
+}
+
+export interface AsyncJob<T> {
+  job_id: string
+  status: "queued" | "processing" | "completed" | "failed"
+  result: T | null
+  error_code: string | null
+  status_url?: string
+}
+
+/** Poll a 202 job status URL until it completes. Throws on failure or
+ * after ~80s so the server never holds image work inside a request. */
+async function pollAsyncJob<T>(
+  statusUrl: string,
+  options: { auth?: boolean; signal?: AbortSignal } = {}
+): Promise<T> {
+  const path = statusUrl.startsWith("http")
+    ? new URL(statusUrl).pathname + new URL(statusUrl).search
+    : statusUrl
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(resolve, 2000)
+      options.signal?.addEventListener("abort", () => {
+        window.clearTimeout(timer)
+        reject(new DOMException("Aborted", "AbortError"))
+      })
+    })
+    const job = await apiRequest<AsyncJob<T>>(
+      path,
+      {},
+      { auth: options.auth, refreshOnUnauthorized: false }
+    )
+    if (job.status === "completed" && job.result) return job.result
+    if (job.status === "failed") {
+      if (job.result) return job.result
+      throw new ApiError(
+        "The check couldn't finish. You can still continue — it will be reviewed.",
+        503,
+        job
+      )
+    }
+  }
+  throw new ApiError(
+    "The check is taking too long. Please try again in a bit.",
+    504,
+    null
+  )
+}
+
+async function postAsyncJob<T>(
+  path: string,
+  formData: FormData,
+  options: { auth?: boolean; csrf?: boolean; refreshOnUnauthorized?: boolean } = {}
+): Promise<T> {
+  const separator = path.includes("?") ? "&" : "?"
+  const job = await apiRequest<AsyncJob<T>>(
+    `${path}${separator}async=1`,
+    { method: "POST", body: formData },
+    options
+  )
+  if (job.status === "completed" && job.result) return job.result
+  const pollPath = job.job_id
+    ? path.replace(/\/?$/, "") + `/jobs/${job.job_id}/`
+    : path
+  return pollAsyncJob<T>(pollPath, { auth: options.auth })
+}
+
+/** Async media check: 202 immediately, worker processes, poll to completion. */
+export function checkConcernMediaAsync(formData: FormData) {
+  return postAsyncJob<ConcernMediaCheckResult>("/concerns/media/check/", formData)
+}
+
+/** Async guest media check (unauthenticated, session-scoped jobs). */
+export function checkGuestConcernMediaAsync(formData: FormData) {
+  return postAsyncJob<ConcernMediaCheckResult>(
+    "/public/concerns/guest/media-check/",
+    formData,
+    { auth: false, csrf: true, refreshOnUnauthorized: false }
+  )
+}
+
+/** Async precheck: 202 immediately, worker classifies, poll to completion.
+ * A failed job still resolves (fail-safe: submittable, flagged for review). */
+export function precheckConcernAsync(formData: FormData) {
+  return postAsyncJob<ConcernPrecheckResult>(
+    "/concerns/classification/precheck/",
+    formData
   )
 }
 

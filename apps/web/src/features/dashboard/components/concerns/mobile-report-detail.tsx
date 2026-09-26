@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import {
   CircleCheck,
   ClockIcon,
@@ -17,6 +17,7 @@ import {
 } from "@/features/dashboard/components/concerns/report-detail-content"
 
 import type { Concern, PublicUser } from "@/features/dashboard/api"
+import { getConcern } from "@/features/dashboard/api"
 import type { EmergencyAlert } from "@/features/dashboard/emergency-api"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { useReporterPhone } from "@/features/dashboard/lib/use-reporter-phone"
@@ -134,6 +135,23 @@ export function MobileReportDetailPage({
 }) {
   const { user } = useAuthSession()
   const [tab, setTab] = useState<MobileTab>("info")
+  // Feed rows mask exact coordinates for privacy, so a sheet opened from
+  // the list would draw an empty map. Load the full record once in that
+  // case and render the map from it.
+  const [fullReport, setFullReport] = useState<Concern | null>(null)
+  useEffect(() => {
+    if (report.latitude != null && report.longitude != null) return
+    let cancelled = false
+    void getConcern(report.public_id ?? report.id)
+      .then((detail) => {
+        if (!cancelled) setFullReport(detail)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [report.id, report.public_id, report.latitude, report.longitude])
+  const mapReport = fullReport ?? report
   const [proofPreview, setProofPreview] = useState<{
     items: MediaPreviewItem[]
     index: number
@@ -218,15 +236,15 @@ export function MobileReportDetailPage({
         backdropInteractive
         backdrop={
           <ReportLocationMap
-            latitude={report.latitude}
-            longitude={report.longitude}
+            latitude={mapReport.latitude}
+            longitude={mapReport.longitude}
             streetAddress={
-              report.community_incident?.address || report.address
+              mapReport.community_incident?.address || mapReport.address
             }
-            category={report.category}
-            iconKey={report.category_ref?.icon_key}
-            status={report.status}
-            severity={report.severity}
+            category={mapReport.category}
+            iconKey={mapReport.category_ref?.icon_key}
+            status={mapReport.status}
+            severity={mapReport.severity}
             heightClassName="h-full"
             focusAboveSheet
             onBack={visibleTab === "chat" ? () => setTab("info") : onBack}

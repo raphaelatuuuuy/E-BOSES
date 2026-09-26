@@ -1779,6 +1779,25 @@ class ConcernFeedSerializer(ConcernSerializer):
             }
         )
 
+    def to_representation(self, instance):
+        # Shape-compatibility: feed rows never load these collections (they
+        # come from the detail view), but older clients index them directly.
+        # Emit explicit empty arrays so no client can crash on a missing key.
+        data = super().to_representation(instance)
+        for name in (
+            "comments",
+            "timeline",
+            "conversation",
+            "clarifications",
+            "appeals",
+            "official_remarks",
+            "form_values",
+            "viewers",
+            "assignments",
+        ):
+            data.setdefault(name, [])
+        return data
+
 
 class ConcernListSerializer(serializers.ModelSerializer):
     """Slim row payload for list endpoints.

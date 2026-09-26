@@ -34,9 +34,14 @@ class PresenceStatusView(APIView):
         started = time.perf_counter()
         raw_ids = request.query_params.get("ids", "")
         try:
-            ids = list(dict.fromkeys(int(value) for value in raw_ids.split(",") if value.strip()))
+            ids = list(dict.fromkeys(
+                int(value) for value in raw_ids.split(",") if value.strip()
+            ))
         except ValueError:
             return Response({"detail": "Presence ids must be whole numbers."}, status=status.HTTP_400_BAD_REQUEST)
+        # Drop non-positive ids (unset/guest placeholders like 0): they can
+        # never be online and only waste a cache lookup each.
+        ids = [user_id for user_id in ids if user_id > 0]
         if len(ids) > 100:
             return Response({"detail": "A maximum of 100 presence ids may be requested."}, status=status.HTTP_400_BAD_REQUEST)
         cache_started = time.perf_counter()

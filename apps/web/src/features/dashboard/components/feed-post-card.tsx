@@ -146,7 +146,9 @@ function PostCommentsBlock({
   const linked = relatedReports(post)
   const reportReplies = new Map<number, UnifiedComment[]>()
   const rest: UnifiedComment[] = []
-  for (const comment of post.comments.map((row) =>
+  // Slim feed rows omit the comments collection (detail view loads it);
+  // never crash when it is absent.
+  for (const comment of (post.comments ?? []).map((row) =>
     fromConcernComment(row, sessionUser)
   )) {
     const report = linked.find((entry) =>
