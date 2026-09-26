@@ -1022,6 +1022,10 @@ class ConcernSerializer(serializers.ModelSerializer):
     # Severity band, derived from the AI assessment. Exposed so clients can
     # show it without recomputing, and so API ordering and UI ordering agree.
     severity = serializers.CharField(read_only=True, default="low")
+    # Sortable priority (severity band first, then recency/support within the
+    # band). Pure Python over annotated/prefetched relations — no queries for
+    # unassessed rows, cache-backed config for assessed ones.
+    priority_score = serializers.SerializerMethodField()
     # Coarse distance (meters) from the requesting viewer's own position to
     # this concern. Set by the feed view when the client passes its lat/lng;
     # it lets "nearby" ranking work without exposing the concern's exact
@@ -1055,13 +1059,22 @@ class ConcernSerializer(serializers.ModelSerializer):
 
     def get_upvoters(self, obj) -> list[str]:
         names = []
-        for vote in obj.votes.all().order_by("-created_at", "-id")[:3]:
+        # Sort the prefetched cache in Python: .order_by()[:3] would issue
+        # one query per row and defeat decorate_concerns() prefetching.
+        votes = list(obj.votes.all())
+        votes.sort(key=lambda vote: (vote.created_at, vote.pk), reverse=True)
+        for vote in votes[:3]:
             profile = getattr(vote.user, "resident_profile", None)
             if profile:
                 names.append(f"{profile.first_name.strip()} {profile.last_name.strip()}".strip())
             else:
                 names.append(vote.user.get_full_name() or vote.user.email.split("@", 1)[0])
         return names
+
+    def get_priority_score(self, obj) -> int:
+        from .severity import priority_score
+
+        return priority_score(obj)
 
     class Meta:
         model = Concern
@@ -1121,6 +1134,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             "comment_count",
             "upvoters",
             "severity",
+            "priority_score",
             "user_vote",
             "distance_meters",
             "created_at",
@@ -1867,7 +1881,11 @@ class ConcernListSerializer(serializers.ModelSerializer):
 
     def get_upvoters(self, obj) -> list[str]:
         names = []
-        for vote in obj.votes.all().order_by("-created_at", "-id")[:3]:
+        # Sort the prefetched cache in Python: .order_by()[:3] would issue
+        # one query per row and defeat decorate_concerns() prefetching.
+        votes = list(obj.votes.all())
+        votes.sort(key=lambda vote: (vote.created_at, vote.pk), reverse=True)
+        for vote in votes[:3]:
             profile = getattr(vote.user, "resident_profile", None)
             if profile:
                 names.append(f"{profile.first_name.strip()} {profile.last_name.strip()}".strip())

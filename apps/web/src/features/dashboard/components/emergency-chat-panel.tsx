@@ -19,6 +19,7 @@ import { toast } from "sonner"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { initialsFor } from "@/features/dashboard/lib/people"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import {
@@ -345,6 +346,7 @@ export function EmergencyChatPanel({
     if (!open || !alertId) return
     const id = window.setInterval(
       () => {
+        if (shouldSkipPoll()) return
         void listEmergencyChat(alertId)
           .then((next) => {
             setMessages((prev) => {

@@ -12,6 +12,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { usePageTitle } from "@/hooks/use-page-title"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { distanceKm } from "@/features/dashboard/lib/responder-format"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
 import {
   getEmergencyRoute,
@@ -335,12 +336,22 @@ export default function ResponderDispatchPage() {
   }, [refresh])
 
   useEffect(() => {
-    const refreshAssigned = () => void refresh().catch(() => {})
+    const refreshAssigned = () => {
+      if (shouldSkipPoll()) return
+      void refresh().catch(() => {})
+    }
     const timer = window.setInterval(refreshAssigned, 30_000)
+    const refreshVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        refreshAssigned()
+      }
+    }
     window.addEventListener("focus", refreshAssigned)
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       window.clearInterval(timer)
       window.removeEventListener("focus", refreshAssigned)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [refresh])
 
@@ -392,6 +403,7 @@ export default function ResponderDispatchPage() {
     if (selectedId_ == null) return
     let cancelled = false
     const load = async () => {
+      if (shouldSkipPoll()) return
       try {
         const next = await getEmergencyRoute(selectedId_, { steps: true })
         if (!cancelled) setRouteDetail(next ?? null)
@@ -401,9 +413,16 @@ export default function ResponderDispatchPage() {
     }
     void load()
     const timer = window.setInterval(() => void load(), 30_000)
+    const refreshVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void load()
+      }
+    }
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       cancelled = true
       window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [selectedId_])
 

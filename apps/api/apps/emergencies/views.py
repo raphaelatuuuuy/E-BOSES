@@ -1120,6 +1120,9 @@ def active_alert_for_phone(phone_number):
 
 ALERT_SERIALIZATION_PREFETCH = (
     "media",
+    "resolution_evidence",
+    "resolution_evidence__uploaded_by",
+    "resolution_evidence__uploaded_by__resident_profile",
 
     "status_events__actor",
     "status_events__actor__resident_profile",
@@ -1242,7 +1245,12 @@ class EmergencyMediaPreviewView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         if _preview_is_ready(media.preview_file):
-            return FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
+            response = FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
+            # Authenticated preview, immutable bytes: private browser cache is
+            # safe (per-media permission already checked above). Pending
+            # placeholders below stay uncached so the client keeps polling.
+            response["Cache-Control"] = "private, max-age=3600, immutable"
+            return response
         # Never run the SAM3 segmentation (up to a 60s HTTP call) on the
         # request thread. Re-enqueue and serve a placeholder until done.
         transaction.on_commit(lambda media_id=media.pk: enqueue_emergency_media_preview("media", media_id))

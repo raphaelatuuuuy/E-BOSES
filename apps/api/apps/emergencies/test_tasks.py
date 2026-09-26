@@ -12,8 +12,15 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 
-from .models import EmergencyAlert, EmergencyLocationPing, EmergencyResponderAssignment
-from .tasks import periodic_housekeeping_task
+from .models import (
+    EmergencyAlert,
+    EmergencyChatAttachment,
+    EmergencyChatMessage,
+    EmergencyLocationPing,
+    EmergencyMedia,
+    EmergencyResponderAssignment,
+)
+from .tasks import periodic_housekeeping_task, recover_missing_emergency_previews_task
 
 
 def make_user(*, email="task-responder@example.com", role=None):
@@ -133,6 +140,7 @@ class BeatScheduleTests(TestCase):
         "recover-stuck-inbound-sms",
         "emergency-assignment-escalation",
         "refresh-map-service-pois",
+        "warm-map-cache",
         "periodic-housekeeping",
         "service-health-sample",
         "service-health-worker-heartbeat",
@@ -142,15 +150,23 @@ class BeatScheduleTests(TestCase):
     }
 
     # Retention deletes files in bulk; it belongs on the heavy worker so a
-    # long sweep never delays SOS-path deliveries.
-    HEAVY_QUEUE_ENTRIES = {"enforce-retention-limits"}
+    # long sweep never delays SOS-path deliveries. Same for the hourly map
+    # cache warmer (panorama downloads + geometry compute).
+    HEAVY_QUEUE_ENTRIES = {"enforce-retention-limits", "warm-map-cache"}
+    # Time-sensitive dispatch must never wait behind AI/media work.
+    EMERGENCY_QUEUE_ENTRIES = {"emergency-assignment-escalation"}
 
     def test_every_expected_entry_is_present(self):
         self.assertSetEqual(set(settings.CELERY_BEAT_SCHEDULE), self.EXPECTED_ENTRIES)
 
     def test_every_entry_runs_on_its_designated_queue(self):
         for name, entry in settings.CELERY_BEAT_SCHEDULE.items():
-            expected_queue = "heavy" if name in self.HEAVY_QUEUE_ENTRIES else "eboses"
+            if name in self.HEAVY_QUEUE_ENTRIES:
+                expected_queue = "heavy"
+            elif name in self.EMERGENCY_QUEUE_ENTRIES:
+                expected_queue = "emergency"
+            else:
+                expected_queue = "eboses"
             self.assertEqual(
                 entry["options"]["queue"],
                 expected_queue,
@@ -161,15 +177,20 @@ class BeatScheduleTests(TestCase):
         for name in ("ocr-health-canary", "ocr-recovery"):
             self.assertEqual(settings.CELERY_BEAT_SCHEDULE[name]["schedule"], 300.0)
 
-    def test_escalation_tick_is_15_seconds(self):
+    def test_escalation_tick_is_30_seconds(self):
         self.assertEqual(
             settings.CELERY_BEAT_SCHEDULE["emergency-assignment-escalation"]["schedule"],
-            15.0,
+            30.0,
         )
 
     def test_housekeeping_and_poi_refresh_are_daily(self):
         for name in ("periodic-housekeeping", "refresh-map-service-pois"):
             self.assertEqual(settings.CELERY_BEAT_SCHEDULE[name]["schedule"], 24 * 60 * 60.0)
+
+    def test_map_cache_warmer_runs_hourly_on_heavy(self):
+        entry = settings.CELERY_BEAT_SCHEDULE["warm-map-cache"]
+        self.assertEqual(entry["schedule"], 60 * 60.0)
+        self.assertEqual(entry["options"]["queue"], "heavy")
 
     def test_scheduled_task_names_point_at_the_declared_task_objects(self):
         from config.celery import app
@@ -189,3 +210,129 @@ class BeatScheduleTests(TestCase):
                 f"{name} schedules {entry['task']!r} but it is not registered",
             )
             self.assertEqual(task.name, entry["task"])
+
+
+class RecoverMissingEmergencyPreviewsTaskTests(TestCase):
+    """recover_missing_emergency_previews_task uses uploaded_at, not created_at."""
+
+    def _make_alert(self, user):
+        return EmergencyAlert.objects.create(
+            reporter=user,
+            type=EmergencyAlert.Type.FIRE,
+            latitude="14.6507000",
+            longitude="121.1133000",
+            address="Champaca Street",
+            barangay="Marikina Heights",
+        )
+
+    @staticmethod
+    def _jpeg(name="photo.jpg"):
+        from io import BytesIO
+
+        from django.core.files.base import ContentFile
+        from PIL import Image
+
+        output = BytesIO()
+        Image.new("RGB", (64, 48), (90, 110, 130)).save(output, "JPEG", quality=88)
+        return ContentFile(output.getvalue(), name=name)
+
+    def _backdate(self, model, pk, *, minutes_old):
+        cutoff_old = timezone.now() - timedelta(minutes=minutes_old)
+        model.objects.filter(pk=pk).update(uploaded_at=cutoff_old)
+
+    def test_selects_old_media_without_preview(self):
+        from unittest.mock import patch
+
+        from django.core.files.base import ContentFile
+
+        user = make_user(email="preview-old@example.com")
+        alert = self._make_alert(user)
+        media = EmergencyMedia.objects.create(
+            alert=alert,
+            file=self._jpeg("old.jpg"),
+            original_filename="old.jpg",
+            mime_type="image/jpeg",
+            file_size=3,
+            sha256_hash="a" * 64,
+        )
+        self._backdate(EmergencyMedia, media.pk, minutes_old=10)
+
+        with patch(
+            "apps.emergencies.tasks.enqueue_emergency_media_preview"
+        ) as enqueue:
+            result = recover_missing_emergency_previews_task.run()
+
+        self.assertGreaterEqual(result["queued"], 1)
+        enqueue.assert_any_call("media", media.pk)
+
+    def test_skips_recent_and_existing_previews(self):
+        from unittest.mock import patch
+
+        from django.core.files.base import ContentFile
+
+        user = make_user(email="preview-recent@example.com")
+        alert = self._make_alert(user)
+        recent = EmergencyMedia.objects.create(
+            alert=alert,
+            file=self._jpeg("recent.jpg"),
+            original_filename="recent.jpg",
+            mime_type="image/jpeg",
+            file_size=3,
+            sha256_hash="b" * 64,
+        )
+        old_with_preview = EmergencyMedia.objects.create(
+            alert=alert,
+            file=self._jpeg("done.jpg"),
+            preview_file=self._jpeg("done-prev.jpg"),
+            original_filename="done.jpg",
+            mime_type="image/jpeg",
+            file_size=3,
+            sha256_hash="c" * 64,
+        )
+        self._backdate(EmergencyMedia, old_with_preview.pk, minutes_old=60)
+
+        with patch(
+            "apps.emergencies.tasks.enqueue_emergency_media_preview"
+        ) as enqueue:
+            result = recover_missing_emergency_previews_task.run()
+
+        enqueued_ids = {
+            call.args[1] for call in enqueue.call_args_list if call.args[0] == "media"
+        }
+        self.assertNotIn(recent.pk, enqueued_ids)
+        self.assertNotIn(old_with_preview.pk, enqueued_ids)
+        # Only chat attachments (none here) or nothing extra may be queued.
+        self.assertNotIn(old_with_preview.pk, enqueued_ids)
+
+    def test_covers_chat_attachments_and_never_raises_field_error(self):
+        from unittest.mock import patch
+
+        from django.core.files.base import ContentFile
+
+        user = make_user(email="preview-chat@example.com")
+        alert = self._make_alert(user)
+        message = EmergencyChatMessage.objects.create(
+            alert=alert, sender=user, body="photo"
+        )
+        attachment = EmergencyChatAttachment.objects.create(
+            message=message,
+            file=self._jpeg("chat.jpg"),
+            original_filename="chat.jpg",
+            mime_type="image/jpeg",
+            file_size=3,
+            sha256_hash="d" * 64,
+            media_type=EmergencyChatAttachment.MediaType.IMAGE,
+            analysis_status=EmergencyChatAttachment.AnalysisStatus.PENDING,
+        )
+        self._backdate(EmergencyChatAttachment, attachment.pk, minutes_old=10)
+
+        with patch(
+            "apps.emergencies.tasks.enqueue_emergency_media_preview"
+        ) as enqueue:
+            try:
+                result = recover_missing_emergency_previews_task.run()
+            except Exception as exc:  # noqa: BLE001 — must never be FieldError
+                self.fail(f"preview recovery raised {exc!r}")
+
+        enqueue.assert_any_call("chat", attachment.pk)
+        self.assertGreaterEqual(result["queued"], 1)

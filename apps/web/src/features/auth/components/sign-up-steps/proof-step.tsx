@@ -32,6 +32,7 @@ import {
   sideLabel,
   sidesForOption,
 } from "@/features/auth/lib/process-proof-file"
+import { prepareProofImage } from "@/features/auth/lib/prepare-proof-image"
 import type { SignUpErrors, SignUpValues } from "@/features/auth/schemas/sign-up-schema"
 import type { ResidenceProofOption } from "@/features/ocr/api"
 
@@ -291,6 +292,17 @@ export function ProofStep({
     if (!raw || !dialogOption) return
 
     const sideIndex = activeSide
+    const probe = await prepareProofImage(raw, setCheckStatus)
+    if (!probe.ok) {
+      setSideErrors((prev) => {
+        const next = [...prev]
+        next[sideIndex] = probe.message
+        return next
+      })
+      setCheckStatus("")
+      return
+    }
+
     const others = acceptedFiles
       .map((f, i) => (i === sideIndex ? null : f))
       .filter((f): f is File => f instanceof File)

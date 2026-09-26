@@ -5,6 +5,7 @@ import {
   type EmergencyAlert,
 } from "@/features/dashboard/emergency-api"
 import { ACTIVE_EMERGENCY_STATUSES } from "@/features/dashboard/components/record/status"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
 
 export const ACTIVE_DISPATCH_STATUSES = ACTIVE_EMERGENCY_STATUSES
@@ -30,6 +31,7 @@ export function useAssignedDispatches(enabled: boolean): AssignedDispatches {
   const lastLoadAt = useRef(0)
 
   const load = useCallback(async ({ force = false } = {}) => {
+    if (shouldSkipPoll()) return
     if (!force && Date.now() - lastLoadAt.current < MIN_LOAD_GAP_MS) return
     lastLoadAt.current = Date.now()
     try {
@@ -53,10 +55,16 @@ export function useAssignedDispatches(enabled: boolean): AssignedDispatches {
     if (!enabled) return
     const initial = window.setTimeout(() => void load({ force: true }), 0)
     const timer = window.setInterval(() => void load({ force: true }), POLL_MS)
+    const refreshVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        eventRefresh()
+      }
+    }
     window.addEventListener("eboses:notification-created", eventRefresh)
     window.addEventListener("eboses:emergency-updated", eventRefresh)
     window.addEventListener("online", eventRefresh)
     window.addEventListener("focus", eventRefresh)
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       window.clearTimeout(initial)
       window.clearInterval(timer)
@@ -64,6 +72,7 @@ export function useAssignedDispatches(enabled: boolean): AssignedDispatches {
       window.removeEventListener("eboses:emergency-updated", eventRefresh)
       window.removeEventListener("online", eventRefresh)
       window.removeEventListener("focus", eventRefresh)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [enabled, load, eventRefresh])
 

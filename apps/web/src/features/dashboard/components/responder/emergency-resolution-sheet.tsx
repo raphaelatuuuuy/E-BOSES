@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import { CameraIcon, LoaderCircleIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 
@@ -27,16 +27,31 @@ export function EmergencyResolutionSheet({
   const [internalNote, setInternalNote] = useState("")
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
-  const previews = useMemo(
-    () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
-    [files]
-  )
+  const previewCacheRef = useRef(new Map<File, string>())
+  const previews = useMemo(() => {
+    const cache = previewCacheRef.current
+    const live = new Set(files)
+    cache.forEach((url, file) => {
+      if (!live.has(file)) {
+        URL.revokeObjectURL(url)
+        cache.delete(file)
+      }
+    })
+    return files.map((file) => {
+      const existing = cache.get(file)
+      if (existing) return { file, url: existing }
+      const url = URL.createObjectURL(file)
+      cache.set(file, url)
+      return { file, url }
+    })
+  }, [files])
 
   useEffect(
     () => () => {
-      previews.forEach(({ url }) => URL.revokeObjectURL(url))
+      previewCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
+      previewCacheRef.current.clear()
     },
-    [previews]
+    []
   )
 
   function addFiles(event: ChangeEvent<HTMLInputElement>) {

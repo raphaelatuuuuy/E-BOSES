@@ -450,7 +450,7 @@ class PublicStreetViewCoverageView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        cache_key = f"public:street-view-coverage:v1:{latitude:.6f}:{longitude:.6f}"
+        cache_key = f"public:street-view-coverage:v2:{latitude:.4f}:{longitude:.4f}"
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached)
@@ -481,6 +481,98 @@ class PublicStreetViewImageThrottle(LocalAnonRateThrottle):
     rate = "20/minute"
 
 
+def _upload_street_imagery_to_storage(imagery) -> str | None:
+    """Store a fetched panorama in object storage, returning its URL.
+
+    Returns None when storage is local or the upload fails — callers fall
+    back to the inline data URL. The bytes stay out of the shared Redis
+    cache either way (URL string vs 3MB base64).
+    """
+    try:
+        from apps.accounts.storage import BACKEND as _STORAGE_BACKEND
+    except Exception:
+        return None
+    if _STORAGE_BACKEND != "cloudinary":
+        return None
+    try:
+        import cloudinary.uploader
+
+        result = cloudinary.uploader.upload(
+            f"data:{imagery.mime_type};base64,{imagery.image_b64}",
+            public_id=f"street-view/{imagery.pano_id}",
+            resource_type="image",
+            overwrite=False,
+            invalidate=False,
+        )
+        url = (result or {}).get("secure_url") or (result or {}).get("url")
+        return url or None
+    except Exception as exc:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "Street imagery storage upload failed: %s", exc.__class__.__name__
+        )
+        return None
+
+
+def get_or_fetch_street_view_image(latitude: float, longitude: float) -> dict:
+    """Shared fetch used by the public endpoint and the cache warmer.
+
+    Returns the response payload (cached, fetched, or no_coverage). Nearby
+    pins share 4dp cache entries; the payload records the true panorama
+    coordinates so consumers see the real distance.
+    """
+    cache_key = f"public:street-view-image:v5:{latitude:.4f}:{longitude:.4f}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Distributed generation lock: concurrent misses for the same rounded
+    # coordinate share one upstream fetch instead of stampeding Google.
+    import time as _time
+
+    lock_key = f"{cache_key}:lock"
+    locked = cache.add(lock_key, True, 60)
+    started = _time.perf_counter()
+    try:
+        imagery = fetch_latest_street_imagery(
+            latitude=latitude,
+            longitude=longitude,
+            radius_meters=100,
+        )
+    finally:
+        if locked:
+            cache.delete(lock_key)
+    elapsed_ms = (_time.perf_counter() - started) * 1000
+    if elapsed_ms >= 2000:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "slow street-view-image lat=%.5f lng=%.5f ms=%.0f locked=%s",
+            latitude,
+            longitude,
+            elapsed_ms,
+            locked,
+        )
+    if not imagery:
+        payload: dict = {"status": "no_coverage"}
+    else:
+        image_ref = _upload_street_imagery_to_storage(imagery)
+        payload = {
+            "status": "available",
+            "latitude": imagery.latitude,
+            "longitude": imagery.longitude,
+            "distance_meters": imagery.distance_meters,
+            # https URL when object storage accepted it (web <img> compatible),
+            # data URL fallback otherwise.
+            "image": image_ref or f"data:{imagery.mime_type};base64,{imagery.image_b64}",
+        }
+    # Negative caching keeps no-coverage pins cheap. Positive entries hold a
+    # short URL string once stored remotely, so a longer TTL is safe there.
+    cache.set(cache_key, payload, 3600 if payload.get("status") == "available" and str(payload.get("image", "")).startswith("http") else 600)
+    return payload
+
+
 class PublicStreetViewImageView(APIView):
     """Return the actual nearby panorama image without a Maps API key."""
 
@@ -507,30 +599,7 @@ class PublicStreetViewImageView(APIView):
                 {"detail": "A valid latitude and longitude are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        cache_key = f"public:street-view-image:v4:{latitude:.5f}:{longitude:.5f}"
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return Response(cached)
-
-        imagery = fetch_latest_street_imagery(
-            latitude=latitude,
-            longitude=longitude,
-            radius_meters=100,
-        )
-        payload = (
-            {
-                "status": "available",
-                "latitude": imagery.latitude,
-                "longitude": imagery.longitude,
-                "distance_meters": imagery.distance_meters,
-                "image": f"data:{imagery.mime_type};base64,{imagery.image_b64}",
-            }
-            if imagery
-            else {"status": "no_coverage"}
-        )
-        cache.set(cache_key, payload, 600)
-        return Response(payload)
+        return Response(get_or_fetch_street_view_image(latitude, longitude))
 
 
 def _offline_path(geometry, bounds):

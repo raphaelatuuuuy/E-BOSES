@@ -127,12 +127,15 @@ ASGI_APPLICATION = "config.asgi.application"
 
 IS_TEST_RUN = "test" in sys.argv
 if IS_TEST_RUN:
+    # Tests must stay hermetic: local file storage even when the machine env
+    # points at Cloudinary (the module-level BACKEND in apps/accounts/storage
+    # is read once at import, so the env override below must not clobber this).
     STORAGE_BACKEND = "local"
+else:
+    STORAGE_BACKEND = env("STORAGE_BACKEND", default="local")
 # Reverse geocoding calls Nominatim. Tests must stay hermetic and must not
 # depend on the machine having internet, so it is off by default under test.
 REVERSE_GEOCODE_ENABLED = env.bool("REVERSE_GEOCODE_ENABLED", default=not IS_TEST_RUN)
-
-STORAGE_BACKEND = env("STORAGE_BACKEND", default="local")
 
 # Database
 if "test" in sys.argv:
@@ -274,11 +277,16 @@ CELERY_TASK_DEFAULT_QUEUE = env("CELERY_TASK_DEFAULT_QUEUE", default="eboses")
 # on the default "eboses" queue and must never sit behind minutes-long
 # vision/AI jobs. Everything slow or optional is pinned to "heavy";
 # scripts\start-celery.ps1 runs one dedicated solo worker per queue.
+# "emergency" isolates time-sensitive dispatch; "maintenance" isolates
+# periodic probes/cleanup. Full ai/maintenance worker split is the follow-up;
+# maintenance currently reuses eboses and ai reuses heavy so current
+# deployments keep working.
 CELERY_TASK_ROUTES = {
     # Gemma review + SAM3 segmentation
     "apps.concerns.tasks.process_concern_ai_task": {"queue": "heavy"},
     "apps.concerns.tasks.process_concern_media_privacy_task": {"queue": "heavy"},
     "apps.concerns.tasks.run_content_moderation_ai_task": {"queue": "heavy"},
+    "apps.concerns.tasks.run_resident_precheck_job": {"queue": "heavy"},
     "apps.emergencies.tasks.generate_emergency_media_preview_task": {"queue": "heavy"},
     "apps.sms.tasks.sms_ai_assist_task": {"queue": "heavy"},
     "apps.sms.tasks.reverse_geocode_alert_task": {"queue": "heavy"},
@@ -374,12 +382,13 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 24 * 60 * 60.0,
         "options": {"queue": "heavy"},
     },
-    # 15s tick so a 45-second critical acknowledgment timeout is actually
-    # enforceable; the real deadline comes from each routing rule.
+    # 30s tick so a 45-second critical acknowledgment timeout stays enforceable
+    # while halving DB pressure vs the old 15s tick; the real deadline comes
+    # from each routing rule.
     "emergency-assignment-escalation": {
         "task": "apps.emergencies.tasks.escalate_overdue_emergencies_task",
-        "schedule": 15.0,
-        "options": {"queue": "eboses"},
+        "schedule": 30.0,
+        "options": {"queue": "emergency"},
     },
     # Once a day, refresh OSM service POIs so the map's Services layer stays
     # current without ever blocking a request on the public Overpass mirrors.
@@ -387,6 +396,13 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.emergencies.tasks.refresh_map_service_pois_task",
         "schedule": 24 * 60 * 60.0,
         "options": {"queue": "eboses"},
+    },
+    # Hourly, warm map-context + recent street-view entries so the first
+    # viewer of an area hits cache instead of paying full compute.
+    "warm-map-cache": {
+        "task": "apps.emergencies.tasks.warm_map_cache_task",
+        "schedule": 60 * 60.0,
+        "options": {"queue": "heavy"},
     },
     # Daily maintenance: flush expired refresh tokens and prune old pings.
     "periodic-housekeeping": {
@@ -611,6 +627,9 @@ frontend_origin = f"{frontend_parts.scheme}://{frontend_parts.netloc}" if fronte
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ["X-EBOSES-Preview-Status"]
+# Cache preflights for a day: the APK issues OPTIONS before nearly every GET,
+# and without this each preflight is a full round-trip that doubles traffic.
+CORS_PREFLIGHT_MAX_AGE = 86400
 _default_cors_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -1053,6 +1072,10 @@ OCRSPACE_OVERLAY = env.bool("OCRSPACE_OVERLAY", default=True)
 OCRSPACE_CONNECT_TIMEOUT = env.int("OCRSPACE_CONNECT_TIMEOUT", default=10)
 OCRSPACE_READ_TIMEOUT = env.int("OCRSPACE_READ_TIMEOUT", default=60)
 OCRSPACE_MAX_RETRIES = env.int("OCRSPACE_MAX_RETRIES", default=3)
+# Local EasyOCR fallback needs torch + model weights in RAM (500MB+).
+# Small hosts (Render Free) must set this false: loading the models OOM-kills
+# the whole API, while a provider outage degrades gracefully to manual review.
+OCR_LOCAL_FALLBACK_ENABLED = env.bool("OCR_LOCAL_FALLBACK_ENABLED", default=True)
 # Live OCR tests are opt-in so a normal test run can never spend API quota.
 OCR_LIVE_TESTS = env.bool("OCR_LIVE_TESTS", default=False)
 OSM_ROUTE_URL = env("OSM_ROUTE_URL", default="https://router.project-osrm.org/route/v1/driving")

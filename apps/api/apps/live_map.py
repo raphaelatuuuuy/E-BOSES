@@ -207,7 +207,10 @@ def static_map_payload(community=None):
     if not street_rows:
         streets = _group_streets([])
         payload = {"boundary": boundary_payload, "streets": streets}
-        cache.set(cache_key, payload, 300)
+        # 1h like the map-context TTL below: keys version boundary/map
+        # revisions, and the per-street point-in-polygon filter is seconds of
+        # CPU on small hosts — recompute hourly, not every 5 minutes.
+        cache.set(cache_key, payload, 3600)
         return payload
     by_name = {}
     for row in street_rows:
@@ -225,7 +228,7 @@ def static_map_payload(community=None):
             street["geometries"].append(row["geometry"])
     streets = sorted(by_name.values(), key=lambda item: item["name"].casefold())
     payload = {"boundary": boundary_payload, "streets": _group_streets(streets)}
-    cache.set(cache_key, payload, 300)
+    cache.set(cache_key, payload, 3600)
     return payload
 
 

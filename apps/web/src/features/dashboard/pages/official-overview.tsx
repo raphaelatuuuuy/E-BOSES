@@ -28,6 +28,7 @@ import { StatTiles } from "@/features/dashboard/components/resident-overview/sta
 import { WeekChart } from "@/features/dashboard/components/resident-overview/week-chart"
 import { OfficialOverviewReports } from "@/features/dashboard/components/official-overview/report-rows"
 import { compareReportPriority } from "@/features/dashboard/lib/report-priority"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 import { OverviewReportsSheet } from "@/features/dashboard/components/resident-overview/reports-sheet"
 import { OverviewReportDetailSheet } from "@/features/dashboard/components/resident-overview/report-detail-sheet"
 import { MobileEmergencyReportDetailPage } from "@/features/dashboard/components/concerns/mobile-report-detail"
@@ -335,7 +336,14 @@ export default function OfficialOverviewPage({
     }
 
     function refresh() {
+      if (shouldSkipPoll()) return
       void load()
+    }
+
+    function refreshVisible() {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        refresh()
+      }
     }
 
     void load()
@@ -344,6 +352,7 @@ export default function OfficialOverviewPage({
     window.addEventListener("eboses:notification-created", refresh)
     window.addEventListener("eboses:concern-updated", refresh)
     window.addEventListener("eboses:emergency-updated", refresh)
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       cancelled = true
       window.clearInterval(interval)
@@ -351,6 +360,7 @@ export default function OfficialOverviewPage({
       window.removeEventListener("eboses:notification-created", refresh)
       window.removeEventListener("eboses:concern-updated", refresh)
       window.removeEventListener("eboses:emergency-updated", refresh)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [isResponder, reportPeriod, selectedUnitId, user?.barangay])
 

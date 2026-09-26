@@ -29,11 +29,11 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-TILE_TIMEOUT_SECONDS = 10
+TILE_TIMEOUT_SECONDS = 6
 TILE_ZOOM = 3
 TILE_SIZE = 512
 OUTPUT_WIDTH = 3072
-TILE_WORKERS = 16
+TILE_WORKERS = 8
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -41,7 +41,7 @@ USER_AGENT = (
 
 _TILE_URL = "https://streetviewpixels-pa.googleapis.com/v1/tile"
 _PANORAMA_SEARCH_ORIGIN = "https://maps.google.com"
-_PANORAMA_SEARCH_TIMEOUT_SECONDS = 20
+_PANORAMA_SEARCH_TIMEOUT_SECONDS = 10
 
 
 @dataclass(frozen=True)

@@ -363,6 +363,31 @@ export function OfficialStatusPanel({
     items: MediaPreviewItem[]
     index: number
   } | null>(null)
+  const resolutionUrlCacheRef = useRef(new Map<File, string>())
+  function resolutionFileUrl(file: File) {
+    const cache = resolutionUrlCacheRef.current
+    const existing = cache.get(file)
+    if (existing) return existing
+    const created = URL.createObjectURL(file)
+    cache.set(file, created)
+    return created
+  }
+  useEffect(() => {
+    const live = new Set(resolutionFiles)
+    resolutionUrlCacheRef.current.forEach((url, file) => {
+      if (!live.has(file)) {
+        URL.revokeObjectURL(url)
+        resolutionUrlCacheRef.current.delete(file)
+      }
+    })
+  }, [resolutionFiles])
+  useEffect(
+    () => () => {
+      resolutionUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
+      resolutionUrlCacheRef.current.clear()
+    },
+    []
+  )
   const [unitId, setUnitId] = useState<number | "">(
     report.assigned_department?.id ?? ""
   )
@@ -634,7 +659,7 @@ export function OfficialStatusPanel({
                     className="relative aspect-square overflow-hidden rounded-[10px]"
                   >
                     <img
-                      src={URL.createObjectURL(file)}
+                      src={resolutionFileUrl(file)}
                       alt={file.name}
                       className="size-full object-cover"
                     />
@@ -657,7 +682,7 @@ export function OfficialStatusPanel({
                     onClick={() => {
                       const items: MediaPreviewItem[] = resolutionFiles.map(
                         (f) => ({
-                          src: URL.createObjectURL(f),
+                          src: resolutionFileUrl(f),
                           filename: f.name,
                           kind: "image" as const,
                         })
@@ -666,11 +691,11 @@ export function OfficialStatusPanel({
                     }}
                     className="relative flex aspect-square items-center justify-center overflow-hidden rounded-[10px] bg-neutral-100 text-[14px] font-medium text-neutral-500"
                   >
-                    <img
-                      src={URL.createObjectURL(resolutionFiles[3])}
-                      alt=""
-                      className="absolute inset-0 size-full object-cover opacity-40"
-                    />
+                      <img
+                        src={resolutionFileUrl(resolutionFiles[3])}
+                        alt=""
+                        className="absolute inset-0 size-full object-cover opacity-40"
+                      />
                     <span className="relative">
                       +{resolutionFiles.length - 3}
                     </span>

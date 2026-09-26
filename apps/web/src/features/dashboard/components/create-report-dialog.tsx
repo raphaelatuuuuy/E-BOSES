@@ -474,6 +474,7 @@ export function CreateReportDialog({
     source?: "gps" | "manual_pin"
   } | null>(null)
   const [mediaFiles, setMediaFiles] = useState<File[]>([])
+  const previewCacheRef = useRef(new Map<File, string>())
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [awaitingValidation, setAwaitingValidation] = useState(false)
@@ -509,10 +510,23 @@ export function CreateReportDialog({
   const pendingPrecheckRef = useRef<ConcernPrecheckResult | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
-  const previewUrls = useMemo(
-    () => mediaFiles.map((file) => URL.createObjectURL(file)),
-    [mediaFiles]
-  )
+  const previewUrls = useMemo(() => {
+    const cache = previewCacheRef.current
+    const live = new Set(mediaFiles)
+    cache.forEach((url, file) => {
+      if (!live.has(file)) {
+        URL.revokeObjectURL(url)
+        cache.delete(file)
+      }
+    })
+    return mediaFiles.map((file) => {
+      const existing = cache.get(file)
+      if (existing) return existing
+      const created = URL.createObjectURL(file)
+      cache.set(file, created)
+      return created
+    })
+  }, [mediaFiles])
   const displayName = guest
     ? "Community reporter"
     : user
@@ -527,8 +541,11 @@ export function CreateReportDialog({
     submittedReport.ai_assessment?.status !== "failed"
 
   useEffect(
-    () => () => previewUrls.forEach((url) => URL.revokeObjectURL(url)),
-    [previewUrls]
+    () => () => {
+      previewCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
+      previewCacheRef.current.clear()
+    },
+    []
   )
 
   useEffect(() => {

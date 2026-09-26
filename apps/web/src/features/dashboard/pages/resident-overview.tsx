@@ -28,6 +28,7 @@ import {
 } from "@/features/dashboard/components/home/live-dot"
 import { streetLabelFromAddress } from "@/features/dashboard/components/feed-post-text"
 import { railLiveMapSrc } from "@/features/dashboard/components/home/home-style"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 import { ResidentNotificationsButton } from "@/features/dashboard/components/resident/resident-account-dialogs"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { openSettingsDialog } from "@/features/dashboard/components/settings/settings-event"
@@ -83,6 +84,7 @@ export default function ResidentOverviewPage() {
   useEffect(() => {
     let cancelled = false
     async function load() {
+      if (shouldSkipPoll()) return
       try {
         const [
           nextAnnouncements,
@@ -113,15 +115,22 @@ export default function ResidentOverviewPage() {
     void load()
     const refresh = () => void load()
     const interval = window.setInterval(refresh, 30000)
+    const refreshVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        refresh()
+      }
+    }
     window.addEventListener("eboses:report-created", refresh)
     window.addEventListener("eboses:concern-updated", refresh)
     window.addEventListener("eboses:emergency-updated", refresh)
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       cancelled = true
       window.clearInterval(interval)
       window.removeEventListener("eboses:report-created", refresh)
       window.removeEventListener("eboses:concern-updated", refresh)
       window.removeEventListener("eboses:emergency-updated", refresh)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [])
 

@@ -65,6 +65,19 @@ from .ocr_engine import (
 
 logger = logging.getLogger(__name__)
 PROVIDER = "ocrspace"
+def _local_ocr_provider():
+    """Local EasyOCR provider, unless disabled for low-memory hosts.
+
+    Render Free (512 MB) cannot hold torch + detection models; loading them
+    OOM-kills the whole API. Hosts with OCR_LOCAL_FALLBACK_ENABLED=false
+    fail closed to manual review instead (callers already handle
+    OCRProviderError).
+    """
+    if not getattr(settings, "OCR_LOCAL_FALLBACK_ENABLED", True):
+        raise OCRProviderUnavailable("Local OCR fallback is disabled on this host.")
+    return EasyOCRProvider(gpu=False)
+
+
 OFFICIAL_OCR_PROVIDER = "easyocr_official"
 ACTIVE_CASE_STATUSES = {
     ResidenceVerificationCase.Status.AWAITING_EMAIL,
@@ -502,15 +515,15 @@ def detect_residence_proof(
     except Exception:
         logger.exception("Sign-up detect OCR enhance skipped")
 
-    if cloud_allowed:
-        provider = FallbackOCRProvider(
-            primary=OCRSpaceProvider(max_retries=1),
-            fallback_factory=lambda: EasyOCRProvider(gpu=False),
-            caller="signup.detect",
-        )
-    else:
-        provider = EasyOCRProvider(gpu=False)
     try:
+        if cloud_allowed:
+            provider = FallbackOCRProvider(
+                primary=OCRSpaceProvider(max_retries=1),
+                fallback_factory=_local_ocr_provider,
+                caller="signup.detect",
+            )
+        else:
+            provider = _local_ocr_provider()
         # deskew=False when regions are used so OCR geometry matches Mark Areas boxes.
         response = provider.recognize(
             content,
@@ -1007,6 +1020,10 @@ def process_verification_case(case_id, *, trigger=VerificationCheck.Trigger.SYST
         service = service_status()
         cloud_allowed = service.status == OCRServiceStatus.Status.NOT_CONFIGURED or circuit_allows_request(force=force)
         if not cloud_allowed:
+            if not getattr(settings, "OCR_LOCAL_FALLBACK_ENABLED", True):
+                error = OCRProviderUnavailable("Local OCR fallback is disabled on this host.")
+                record_provider_failure(error)
+                return fail_case_attempts(case.pk, attempts, error)
             provider = EasyOCRProvider(gpu=False)
         else:
             provider = FallbackOCRProvider(

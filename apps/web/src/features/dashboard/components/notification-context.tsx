@@ -2,6 +2,7 @@ import * as React from "react"
 import { apiRequest, websocketTicket, websocketUrl } from "@/lib/api"
 import type { Concern } from "@/features/dashboard/api"
 import { registerNotificationWorker, showBrowserNotification } from "@/features/dashboard/browser-notifications"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 import { registerNativePush } from "@/features/dashboard/native-push"
 
 export interface NotificationItem {
@@ -144,7 +145,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     void registerNotificationWorker().catch(() => null)
     void registerNativePush().catch(() => undefined)
     const interval = setInterval(() => {
-      if (!socketLiveRef.current) void fetchAll()
+      if (!socketLiveRef.current && !shouldSkipPoll()) void fetchAll()
     }, 30_000)
     function handleWorkerClick(event: MessageEvent) {
       if (event.data?.type === "eboses.notification-click" && typeof event.data.url === "string") {

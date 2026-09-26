@@ -35,6 +35,7 @@ Write-Host "Loaded $loaded vars from .env.production (DJANGO_ENV=$env:DJANGO_ENV
 
 $FastPid = Join-Path $LogDir 'celery-prod-worker.pid'
 $HeavyPid = Join-Path $LogDir 'celery-prod-worker-heavy.pid'
+$EmergencyPid = Join-Path $LogDir 'celery-prod-worker-emergency.pid'
 $BeatPid = Join-Path $LogDir 'celery-prod-beat.pid'
 
 function Test-CeleryRunning {
@@ -59,7 +60,7 @@ function Start-CeleryProc {
     return
   }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
-  $cmd = '-m celery -A config beat -l INFO --logfile "{0}" --pidfile "{1}"' -f $LogFile, $PidFile
+  $cmd = '-m celery -A config beat -l INFO --schedule "{0}" --logfile "{1}" --pidfile "{2}"' -f (Join-Path $LogDir 'celerybeat-schedule-prod'), $LogFile, $PidFile
   if ($Role -like 'worker*') {
     $cmd = '-m celery -A config worker -l INFO -Q {0} --pool=solo --hostname {1}@%h --logfile "{2}" --pidfile "{3}"' -f $Queue, $NodeName, $LogFile, $PidFile
   }
@@ -74,8 +75,10 @@ function Start-CeleryProc {
 
 # Queue split mirrors production: fast OTP/SMS/emergency work must never sit
 # behind vision/AI jobs. Exactly ONE beat anywhere (never also on Render).
+# emergency has its own solo worker so dispatch never waits behind AI/media.
 Start-CeleryProc -Name 'Prod worker (fast)'  -Role 'worker'        -Queue 'eboses' -NodeName 'prod-eboses' -PidFile $FastPid  -LogFile (Join-Path $LogDir 'celery-prod-worker.log')
 Start-CeleryProc -Name 'Prod worker (heavy)' -Role 'worker-heavy'  -Queue 'heavy'  -NodeName 'prod-heavy'  -PidFile $HeavyPid -LogFile (Join-Path $LogDir 'celery-prod-worker-heavy.log')
+Start-CeleryProc -Name 'Prod worker (emergency)' -Role 'worker-emergency' -Queue 'emergency' -NodeName 'prod-emergency' -PidFile $EmergencyPid -LogFile (Join-Path $LogDir 'celery-prod-worker-emergency.log')
 Start-CeleryProc -Name 'Prod beat'           -Role 'beat'          -PidFile $BeatPid -LogFile (Join-Path $LogDir 'celery-prod-beat.log')
 
 Write-Host ''

@@ -194,7 +194,7 @@ def recover_missing_emergency_previews_task(batch_size=50):
     limit = max(1, min(int(batch_size), 200))
     queued = 0
     for media in (
-        EmergencyMedia.objects.filter(preview_file="", created_at__lte=cutoff).order_by("pk")[:limit]
+        EmergencyMedia.objects.filter(preview_file="", uploaded_at__lte=cutoff).order_by("pk")[:limit]
     ):
         try:
             enqueue_emergency_media_preview("media", media.pk)
@@ -203,7 +203,7 @@ def recover_missing_emergency_previews_task(batch_size=50):
             continue
     for attachment in (
         EmergencyChatAttachment.objects.filter(
-            media_type="image", preview_file="", created_at__lte=cutoff
+            media_type="image", preview_file="", uploaded_at__lte=cutoff
         ).order_by("pk")[:limit]
     ):
         try:
@@ -237,13 +237,23 @@ def escalate_overdue_emergencies_task(minutes=None):
     """Sweep for unacknowledged assignments and retry waiting alerts.
 
     The deadline comes from each emergency's routing rule; `minutes` is only a
-    floor for callers that want a coarser sweep.
+    floor for callers that want a coarser sweep. Overlap-locked: if a run
+    takes longer than the 30s beat, the next tick skips instead of
+    double-escalating. Handlers underneath must stay idempotent.
     """
-    from .views import escalate_overdue_assignments, retry_waiting_alerts
+    from django.core.cache import cache
 
-    escalations = escalate_overdue_assignments(minutes=minutes)
-    routed = retry_waiting_alerts()
-    return {"escalated": len(escalations), "routed": len(routed), "minutes": minutes}
+    lock_key = "lock:emergency-assignment-escalation"
+    if not cache.add(lock_key, True, 55):
+        return {"escalated": 0, "routed": 0, "minutes": minutes, "skipped": "overlap"}
+    try:
+        from .views import escalate_overdue_assignments, retry_waiting_alerts
+
+        escalations = escalate_overdue_assignments(minutes=minutes)
+        routed = retry_waiting_alerts()
+        return {"escalated": len(escalations), "routed": len(routed), "minutes": minutes}
+    finally:
+        cache.delete(lock_key)
 
 
 @shared_task(time_limit=120, soft_time_limit=90)
@@ -329,3 +339,60 @@ def refresh_map_service_pois_task():
         len(merged),
     )
     return {"osm": len(osm), "merged": len(merged)}
+
+
+@shared_task(time_limit=600, soft_time_limit=540)
+def warm_map_cache_task(batch_size=15):
+    """Hourly: pre-warm map-context + street-view caches for active areas.
+
+    The first viewer of a cold cache otherwise pays the full compute
+    (point-in-polygon street filter, panorama tile downloads). Warming the
+    recent report locations plus every active community moves that cost off
+    the request path. Each pin is independent — one failure never aborts
+    the sweep. Idempotent: pure cache fills.
+    """
+    import logging
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    logger = logging.getLogger(__name__)
+    warmed = {"communities": 0, "street_view": 0, "skipped": 0}
+
+    from apps.geo_services import map_context_payload
+
+    from .models import Community
+
+    for community in Community.objects.filter(status=Community.Status.ACTIVE).select_related("boundary"):
+        try:
+            map_context_payload(community)
+            warmed["communities"] += 1
+        except Exception:
+            warmed["skipped"] += 1
+
+    from apps.concerns.models import Concern
+
+    from .public_api import get_or_fetch_street_view_image
+
+    cutoff = timezone.now() - timedelta(days=7)
+    limit = max(1, min(int(batch_size), 50))
+    pins = (
+        Concern.objects.filter(
+            latitude__isnull=False,
+            longitude__isnull=False,
+            created_at__gte=cutoff,
+        )
+        .order_by("-created_at")
+        .values_list("latitude", "longitude")[:limit]
+    )
+    for latitude, longitude in pins:
+        try:
+            payload = get_or_fetch_street_view_image(float(latitude), float(longitude))
+            if payload.get("status") == "available":
+                warmed["street_view"] += 1
+            else:
+                warmed["skipped"] += 1
+        except Exception:
+            warmed["skipped"] += 1
+    logger.info("Warmed map caches: %s", warmed)
+    return warmed

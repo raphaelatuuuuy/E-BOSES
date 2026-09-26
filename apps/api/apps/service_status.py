@@ -851,14 +851,15 @@ def collect(use_cache=True, run_checks=False, record=False):
     return payload
 
 
-@shared_task(name="apps.service_status.record_service_health_task", ignore_result=True)
+@shared_task(name="apps.service_status.record_service_health_task", ignore_result=True, time_limit=90, soft_time_limit=60)
 def record_service_health_task():
     """Probe on a schedule so history exists without anyone opening the page.
 
     The request path still records too, and deliberately so: this task cannot
     report that the worker is down, because a dead worker never runs it. The
     two together cover each other — the worker records the rest of the system,
-    the page records the worker.
+    the page records the worker. Bounded to 60-90s so live 3P probes
+    (ollama/sms-gate/poolside) can never block heartbeats on solo workers.
     """
     collect(use_cache=False, run_checks=True, record=True)
 

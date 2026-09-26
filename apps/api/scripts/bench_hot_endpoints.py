@@ -59,6 +59,7 @@ def setup():
             "date_of_birth": "1990-01-01",
             "address": "Bench Street",
             "barangay": BARANGAY,
+            "community_id": 1,
         },
     )
 

@@ -1,0 +1,211 @@
+[
+  {
+    "endpoint": "presence 1 id",
+    "status": 200,
+    "min_ms": 2.0,
+    "median_ms": 3.3,
+    "max_ms": 1354.1,
+    "queries": 0,
+    "sql_ms": 0.0,
+    "records": null,
+    "payload_kb": 0.0
+  },
+  {
+    "endpoint": "presence 53 ids",
+    "status": 200,
+    "min_ms": 3.7,
+    "median_ms": 4.2,
+    "max_ms": 13.5,
+    "queries": 0,
+    "sql_ms": 0.0,
+    "records": null,
+    "payload_kb": 0.6
+  },
+  {
+    "endpoint": "announcements size=5",
+    "status": 200,
+    "min_ms": 19.3,
+    "median_ms": 19.8,
+    "max_ms": 146.8,
+    "queries": 5,
+    "sql_ms": 3.0,
+    "records": 1,
+    "payload_kb": 1.0
+  },
+  {
+    "endpoint": "announcements size=50",
+    "status": 200,
+    "min_ms": 17.6,
+    "median_ms": 20.4,
+    "max_ms": 28.6,
+    "queries": 5,
+    "sql_ms": 3.0,
+    "records": 1,
+    "payload_kb": 1.0
+  },
+  {
+    "endpoint": "feed limit=5",
+    "status": 200,
+    "min_ms": 259.4,
+    "median_ms": 272.5,
+    "max_ms": 499.6,
+    "queries": 16,
+    "sql_ms": 178.0,
+    "records": 5,
+    "payload_kb": 12.0
+  },
+  {
+    "endpoint": "feed limit=20",
+    "status": 200,
+    "min_ms": 383.4,
+    "median_ms": 425.1,
+    "max_ms": 468.8,
+    "queries": 16,
+    "sql_ms": 159.0,
+    "records": 20,
+    "payload_kb": 48.0
+  },
+  {
+    "endpoint": "feed limit=50",
+    "status": 200,
+    "min_ms": 673.5,
+    "median_ms": 749.9,
+    "max_ms": 982.2,
+    "queries": 16,
+    "sql_ms": 213.0,
+    "records": 50,
+    "payload_kb": 120.1
+  },
+  {
+    "endpoint": "feed default",
+    "status": 200,
+    "min_ms": 1134.4,
+    "median_ms": 1321.6,
+    "max_ms": 1447.2,
+    "queries": 16,
+    "sql_ms": 172.0,
+    "records": 100,
+    "payload_kb": 240.2
+  },
+  {
+    "endpoint": "concerns/mine size=5",
+    "status": 200,
+    "min_ms": 164.2,
+    "median_ms": 175.9,
+    "max_ms": 189.3,
+    "queries": 17,
+    "sql_ms": 109.0,
+    "records": 250,
+    "payload_kb": 4.4
+  },
+  {
+    "endpoint": "concerns/mine size=50",
+    "status": 200,
+    "min_ms": 269.6,
+    "median_ms": 296.4,
+    "max_ms": 326.4,
+    "queries": 17,
+    "sql_ms": 114.0,
+    "records": 250,
+    "payload_kb": 42.8
+  },
+  {
+    "endpoint": "emergencies/mine size=5",
+    "status": 200,
+    "min_ms": 118.3,
+    "median_ms": 130.0,
+    "max_ms": 475.5,
+    "queries": 16,
+    "sql_ms": 22.0,
+    "records": 120,
+    "payload_kb": 9.1
+  },
+  {
+    "endpoint": "emergencies/mine size=50",
+    "status": 200,
+    "min_ms": 586.5,
+    "median_ms": 758.4,
+    "max_ms": 1465.9,
+    "queries": 16,
+    "sql_ms": 25.0,
+    "records": 120,
+    "payload_kb": 91.4
+  },
+  {
+    "endpoint": "dashboard resident",
+    "status": 200,
+    "min_ms": 148.8,
+    "median_ms": 176.4,
+    "max_ms": 368.6,
+    "queries": 26,
+    "sql_ms": 60.0,
+    "records": null,
+    "payload_kb": 2.5
+  },
+  {
+    "endpoint": "dashboard official",
+    "status": 200,
+    "min_ms": 145.0,
+    "median_ms": 167.1,
+    "max_ms": 259.4,
+    "queries": 31,
+    "sql_ms": 68.0,
+    "records": null,
+    "payload_kb": 0.9
+  },
+  {
+    "endpoint": "map-context",
+    "status": 200,
+    "min_ms": 17.4,
+    "median_ms": 24.4,
+    "max_ms": 38.2,
+    "queries": 3,
+    "sql_ms": 3.0,
+    "records": null,
+    "payload_kb": 88.2
+  },
+  {
+    "endpoint": "realtime-ticket",
+    "status": 200,
+    "min_ms": 1.5,
+    "median_ms": 1.6,
+    "max_ms": 2.5,
+    "queries": 0,
+    "sql_ms": 0.0,
+    "records": null,
+    "payload_kb": 0.2
+  },
+  {
+    "endpoint": "precheck (202 only)",
+    "status": 200,
+    "min_ms": 2111.1,
+    "median_ms": 2348.7,
+    "max_ms": 3707.9,
+    "queries": 14,
+    "sql_ms": 13.0,
+    "records": null,
+    "payload_kb": 1.4
+  },
+  {
+    "endpoint": "street-view cold",
+    "status": 200,
+    "min_ms": 9223.5,
+    "median_ms": 9223.5,
+    "max_ms": 9223.5,
+    "queries": 0,
+    "sql_ms": 0.0,
+    "records": null,
+    "payload_kb": 797.3
+  },
+  {
+    "endpoint": "street-view warm",
+    "status": 200,
+    "min_ms": 10.8,
+    "median_ms": 12.6,
+    "max_ms": 35.7,
+    "queries": 0,
+    "sql_ms": 0.0,
+    "records": null,
+    "payload_kb": 797.3
+  }
+]

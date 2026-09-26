@@ -915,7 +915,7 @@ def _broadcast(group_name: str, event_type: str, payload: dict) -> str:
                 "emitted_at": timezone.now().isoformat(),
             },
         )
-        logger.warning("_broadcast SENT %s to %s", event_type, group_name)
+        logger.info("_broadcast SENT %s to %s", event_type, group_name)
         return "sent"
     except Exception as exc:
         logger.warning("_broadcast FAILED %s to %s: %s", event_type, group_name, type(exc).__name__)
@@ -964,7 +964,7 @@ def broadcast_notification(notification) -> dict:
     browser_result = send_browser_push(notification, payload)
     native_result = send_native_push(notification, payload)
     push_result = _merge_push_results(browser_result, native_result)
-    logger.warning(
+    logger.info(
         "Notification #%s to user #%s (%s): ws=%s browser=%s native=%s final=%s",
         notification.pk,
         notification.recipient_id,
@@ -993,7 +993,7 @@ def send_native_push(notification, payload: dict) -> dict:
     logger = logging.getLogger(__name__)
     devices = list(notification.recipient.native_push_devices.filter(is_active=True))
     credential_path = getattr(settings, "FIREBASE_CREDENTIALS_PATH", "")
-    logger.warning(
+    logger.info(
         "send_native_push user=%s devices=%d credential_set=%s push_alerts=%s",
         notification.recipient_id,
         len(devices),

@@ -41,6 +41,14 @@ class PrivateMediaStorage(_PrivateBase):
         def _upload(self, name, content):
             import cloudinary.uploader
 
+            # Callers often reuse one validated file object across two saves
+            # (sample + legacy sync); upload from the start so the second
+            # save is not an empty stream (Cloudinary 500s, disk writes 0B).
+            if hasattr(content, "seek"):
+                try:
+                    content.seek(0)
+                except Exception:
+                    pass
             return cloudinary.uploader.upload(
                 content,
                 public_id=name,

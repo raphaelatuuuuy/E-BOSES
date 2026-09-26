@@ -74,6 +74,7 @@ from .classification_api import (
     OfficialClassificationTextTestView,
     OfficialClassificationView,
     ResidentConcernPrecheckView,
+    ResidentPrecheckJobStatusView,
 )
 from apps.emergencies.simulation_api import EmergencySimulationView
 from apps.sms.simulation_api import SmsSimulationView
@@ -103,6 +104,7 @@ urlpatterns = [
     path("classification/test-submission/", OfficialClassificationSubmissionTestView.as_view(), name="classification-test-submission"),
     path("classification/generate-sample/", OfficialClassificationSampleGeneratorView.as_view(), name="classification-generate-sample"),
     path("classification/precheck/", ResidentConcernPrecheckView.as_view(), name="classification-precheck"),
+    path("classification/precheck/jobs/<str:job_id>/", ResidentPrecheckJobStatusView.as_view(), name="classification-precheck-job"),
     path("classification/test-emergency/", EmergencySimulationView.as_view(), name="classification-test-emergency"),
     path("classification/test-sms/", SmsSimulationView.as_view(), name="classification-test-sms"),
     path("classification/test-community/", CommunityModerationSimulationView.as_view(), name="classification-test-community"),

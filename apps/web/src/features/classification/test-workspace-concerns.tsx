@@ -87,13 +87,31 @@ export function ConcernTestWorkspace({
   const [selectedCategory, setSelectedCategory] = useState("infrastructure")
   const [files, setFiles] = useState<File[]>([])
   const [pin, setPin] = useState<LocationPin | null>(null)
-  const previews = useMemo(
-    () => files.map((file) => URL.createObjectURL(file)),
-    [files]
+  const workspacePreviewCacheRef = useRef(new Map<File, string>())
+  const previews = useMemo(() => {
+    const cache = workspacePreviewCacheRef.current
+    const live = new Set(files)
+    cache.forEach((url, file) => {
+      if (!live.has(file)) {
+        URL.revokeObjectURL(url)
+        cache.delete(file)
+      }
+    })
+    return files.map((file) => {
+      const existing = cache.get(file)
+      if (existing) return existing
+      const created = URL.createObjectURL(file)
+      cache.set(file, created)
+      return created
+    })
+  }, [files])
+  useEffect(
+    () => () => {
+      workspacePreviewCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
+      workspacePreviewCacheRef.current.clear()
+    },
+    []
   )
-  useEffect(() => {
-    return () => previews.forEach((url) => URL.revokeObjectURL(url))
-  }, [previews])
   const [description, setDescription] = useState("")
   const [reportResult, setReportResult] =
     useState<ReportValidationResult | null>(null)

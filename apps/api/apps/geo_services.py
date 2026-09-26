@@ -75,7 +75,11 @@ OVERPASS_BREAKER_TTL = 10 * 60
 OVERPASS_CONNECT_TIMEOUT = 3.0
 OVERPASS_READ_TIMEOUT = 8.0
 MAP_CONTEXT_CACHE_KEY = "locations-map-context:v4"
-MAP_CONTEXT_CACHE_TTL = 300
+# 1h: the key already versions boundary/policy/map revisions, so staleness is
+# controlled by version bumps, not TTL. The old 300s TTL recomputed the
+# Python point-in-polygon street filter (seconds of CPU on 0.1-CPU hosts)
+# 12× more often than needed.
+MAP_CONTEXT_CACHE_TTL = 3600
 
 POI_TYPE_META: list[dict[str, str]] = [
     {"type": "barangay_hall", "label": "Barangay Hall", "sector": "public"},

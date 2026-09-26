@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { useAuthSession } from "@/features/auth/auth-session"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { addBaseTiles } from "@/features/dashboard/components/map/tile-layers"
@@ -1487,6 +1488,7 @@ export function EmergencyTrackingSheet({
     if (!open || !alertId || !alertStatus || !isEmergencyActive(alertStatus))
       return
     const refreshAlert = async () => {
+      if (shouldSkipPoll()) return
       try {
         const nextAlert = await getEmergency(alertId)
         adoptAlert(nextAlert)
@@ -1499,10 +1501,17 @@ export function EmergencyTrackingSheet({
       () => void refreshAlert(),
       connectionState === "live" ? 15000 : 5000
     )
+    const refreshVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void refreshAlert()
+      }
+    }
     window.addEventListener("focus", refreshAlert)
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       window.clearInterval(interval)
       window.removeEventListener("focus", refreshAlert)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [open, alertId, alertStatus, adoptAlert, connectionState])
 

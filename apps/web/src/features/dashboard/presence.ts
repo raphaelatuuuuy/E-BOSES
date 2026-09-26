@@ -14,6 +14,7 @@ function notify() {
 
 async function refresh() {
   if (refreshInFlight || trackedCounts.size === 0) return
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") return
   refreshInFlight = true
   try {
     const ids = Array.from(trackedCounts.keys()).join(",")
@@ -36,16 +37,27 @@ async function refresh() {
   }
 }
 
+function onVisibilityChange() {
+  if (typeof document !== "undefined" && document.visibilityState === "visible") {
+    void refresh()
+  }
+}
+
 function startPolling() {
   if (refreshTimer !== undefined || typeof window === "undefined") return
   void refresh()
-  refreshTimer = window.setInterval(() => void refresh(), 3000)
+  // 12s: presence is a lease read (heartbeat flows over the socket), so this
+  // interval only controls display staleness. Polling every 3s doubled
+  // request volume (plus CORS preflights) for no visible benefit.
+  refreshTimer = window.setInterval(() => void refresh(), 12000)
+  document.addEventListener("visibilitychange", onVisibilityChange)
 }
 
 function stopPolling() {
   if (refreshTimer === undefined || typeof window === "undefined") return
   window.clearInterval(refreshTimer)
   refreshTimer = undefined
+  document.removeEventListener("visibilitychange", onVisibilityChange)
 }
 
 function subscribe(listener: () => void) {

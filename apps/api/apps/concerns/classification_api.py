@@ -822,6 +822,139 @@ def _location_dry_run(request):
     return {"accepted": validated.get("action") == "accept", **validated}
 
 
+def _build_precheck_payload(*, result, config, incident_community, category_ref,
+                            selected_category, title, description,
+                            latitude, longitude, images, image_errors,
+                            prepared_indices, photo_count, data) -> dict:
+    """Shared sync/async tail of the resident precheck.
+
+    Runs everything after the model call: category inference, post-model
+    field guards, duplicate feedback and extras. `data` is a plain mapping
+    (worker path) or a DRF request (sync path); both helpers above accept
+    either. `photo_count` preserves the original "files were attached"
+    semantics even when some photos failed preparation.
+    """
+    details = result.get("details") or {}
+    enabled_categories = config.enabled_categories or list(Concern.Category.values)
+    fallback_category = (
+        Concern.Category.OTHERS
+        if Concern.Category.OTHERS in enabled_categories
+        else str(enabled_categories[0] if enabled_categories else Concern.Category.OTHERS)
+    )
+    inferred_category = str(details.get("primary_category") or selected_category or fallback_category)
+    inferred_category_queryset = ConcernCategory.objects.filter(code=inferred_category, is_active=True)
+    inferred_category_queryset = inferred_category_queryset.filter(
+        Q(community=incident_community) | Q(community__isnull=True)
+    )
+    inferred_category_ref = inferred_category_queryset.select_related("department").first() or category_ref
+    # Category-specific requirements are evaluated after the model has
+    # selected the category. This is what allows the resident form to omit
+    # the category picker while preserving the configured safeguards.
+    inferred_errors = {}
+    if inferred_category_ref and inferred_category_ref.description_required and len(description.strip()) < 20:
+        inferred_errors["description"] = "Describe the issue in at least 20 characters."
+    if inferred_category_ref and inferred_category_ref.photo_required and photo_count == 0:
+        inferred_errors["media"] = "Add at least one clear photo as evidence."
+    if inferred_category_ref and inferred_category_ref.location_required and (
+        latitude is None or longitude is None
+    ):
+        inferred_errors["address"] = "Pin where the issue is located."
+    payload = _resident_feedback(
+        result,
+        image_uploaded=photo_count > 0,
+        photo_count=photo_count,
+        image_errors=image_errors,
+        prepared_indices=prepared_indices,
+        duplicate_feedback=None,
+    )
+    if inferred_errors:
+        payload["field_errors"] = {**payload.get("field_errors", {}), **inferred_errors}
+        payload["can_submit"] = False
+        payload["needs_revision"] = True
+    duplicate_feedback = None
+    if payload["can_submit"]:
+        duplicate_feedback = _report_duplicate_feedback(
+            config,
+            request=data,
+            selected_category=inferred_category,
+            title=title,
+            description=description,
+            images=images,
+        )
+        if duplicate_feedback:
+            payload = _resident_feedback(
+                result,
+                image_uploaded=photo_count > 0,
+                photo_count=photo_count,
+                image_errors=image_errors,
+                prepared_indices=prepared_indices,
+                duplicate_feedback=duplicate_feedback,
+            )
+    payload.update(
+        _precheck_extras(
+            data,
+            result,
+            selected_category=inferred_category,
+            category_ref=inferred_category_ref,
+            config=config,
+            image_uploaded=photo_count > 0,
+            image_errors=image_errors,
+            duplicate_feedback=duplicate_feedback,
+        )
+    )
+    payload["category"] = inferred_category
+    payload["category_label"] = (
+        inferred_category_ref.name
+        if inferred_category_ref
+        else dict(Concern.Category.choices).get(inferred_category, inferred_category.replace("_", " ").title())
+    )
+    payload["public_feed_allowed"] = bool(
+        not inferred_category_ref or inferred_category_ref.public_feed_allowed
+    )
+    return payload
+
+
+def _precheck_intake(request):
+    """Fast synchronous guards for the resident precheck (all cheap DB reads).
+
+    Returns (selected_category, incident_community, category_ref, title,
+    description, uploaded_files) or a 400 Response when intake itself is
+    invalid. Shared by the sync path and the async path (which defers only
+    the model call to a worker).
+    """
+    selected_category = str(request.data.get("category", ""))
+    resident_community = getattr(getattr(request.user, "resident_profile", None), "community", None)
+    incident_community = resident_community
+    location_review = _location_dry_run(request)
+    if location_review and location_review.get("community_id"):
+        from apps.emergencies.models import Community
+
+        incident_community = Community.objects.filter(
+            pk=location_review["community_id"], status=Community.Status.ACTIVE
+        ).first()
+    category_queryset = ConcernCategory.objects.filter(code=selected_category, is_active=True)
+    if incident_community is not None:
+        category_queryset = category_queryset.filter(Q(community=incident_community) | Q(community__isnull=True))
+    category_ref = category_queryset.first()
+    if selected_category and not category_ref and selected_category not in Concern.Category.values:
+        return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
+    title = str(request.data.get("title", ""))[:160]
+    description = str(request.data.get("description", ""))[:5000]
+    if category_ref and category_ref.description_required and len(description.strip()) < 20:
+        return Response({"description": ["Describe the issue before submitting."]}, status=status.HTTP_400_BAD_REQUEST)
+    uploaded_files = request.FILES.getlist("media") or (
+        [request.FILES.get("file")] if request.FILES.get("file") else []
+    )
+    if category_ref and category_ref.photo_required and not uploaded_files:
+        return Response({"media": ["Add at least one clear photo as evidence."]}, status=status.HTTP_400_BAD_REQUEST)
+    if category_ref and category_ref.location_required and (request.data.get("latitude") is None or request.data.get("longitude") is None):
+        return Response({"address": ["Pin where the issue is located."]}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not incident_community:
+        return Response({"location": ["Choose a location inside an active community."]}, status=status.HTTP_400_BAD_REQUEST)
+    return (selected_category, incident_community, category_ref, title, description, uploaded_files)
+
+
 class ResidentConcernPrecheckView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]
@@ -829,36 +962,55 @@ class ResidentConcernPrecheckView(APIView):
     def post(self, request):
         if not user_has_role_permission(request.user, "concerns.create"):
             return Response({"detail": "Only residents can check reports."}, status=status.HTTP_403_FORBIDDEN)
-        selected_category = str(request.data.get("category", ""))
-        resident_community = getattr(getattr(request.user, "resident_profile", None), "community", None)
-        incident_community = resident_community
-        location_review = _location_dry_run(request)
-        if location_review and location_review.get("community_id"):
-            from apps.emergencies.models import Community
+        intake = _precheck_intake(request)
+        if isinstance(intake, Response):
+            return intake
+        (selected_category, incident_community, category_ref,
+         title, description, uploaded_files) = intake
+        # Async opt-in: validate + prepare locally (fast), run the model in a
+        # worker, return 202 immediately. Prepared images are Gemma-sized
+        # (~100-300KB base64) and staged briefly in cache — never raw uploads.
+        wants_async = str(request.query_params.get("async") or request.data.get("async") or "").lower() in {"1", "true"}
+        if wants_async:
+            from .precheck_jobs import create_precheck_job, stage_precheck_images
 
-            incident_community = Community.objects.filter(
-                pk=location_review["community_id"], status=Community.Status.ACTIVE
-            ).first()
-        category_queryset = ConcernCategory.objects.filter(code=selected_category, is_active=True)
-        if incident_community is not None:
-            category_queryset = category_queryset.filter(Q(community=incident_community) | Q(community__isnull=True))
-        category_ref = category_queryset.first()
-        if selected_category and not category_ref and selected_category not in Concern.Category.values:
-            return Response({"category": ["Choose a valid concern category."]}, status=status.HTTP_400_BAD_REQUEST)
-        title = str(request.data.get("title", ""))[:160]
-        description = str(request.data.get("description", ""))[:5000]
-        if category_ref and category_ref.description_required and len(description.strip()) < 20:
-            return Response({"description": ["Describe the issue before submitting."]}, status=status.HTTP_400_BAD_REQUEST)
-        uploaded_files = request.FILES.getlist("media") or (
-            [request.FILES.get("file")] if request.FILES.get("file") else []
-        )
-        if category_ref and category_ref.photo_required and not uploaded_files:
-            return Response({"media": ["Add at least one clear photo as evidence."]}, status=status.HTTP_400_BAD_REQUEST)
-        if category_ref and category_ref.location_required and (request.data.get("latitude") is None or request.data.get("longitude") is None):
-            return Response({"address": ["Pin where the issue is located."]}, status=status.HTTP_400_BAD_REQUEST)
+            latitude = request.data.get("latitude")
+            longitude = request.data.get("longitude")
+            config = ConcernClassificationConfiguration.current(incident_community)
+            images, image_errors, prepared_indices = _prepared_images_from_uploads(uploaded_files)
+            job = create_precheck_job(
+                user_id=request.user.pk,
+                title=title,
+                description=description,
+                category=selected_category,
+                latitude=str(latitude) if latitude is not None else None,
+                longitude=str(longitude) if longitude is not None else None,
+                has_files=bool(uploaded_files),
+                params={
+                    "title": title,
+                    "description": description,
+                    "category": selected_category,
+                    "community_id": incident_community.pk if incident_community else None,
+                    "category_ref_code": category_ref.code if category_ref else None,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "photo_count": len(uploaded_files),
+                    "image_errors": image_errors,
+                    "prepared_indices": prepared_indices,
+                },
+            )
+            stage_precheck_images(job["job_id"], images)
+            try:
+                from .tasks import run_resident_precheck_job
 
-        if not incident_community:
-            return Response({"location": ["Choose a location inside an active community."]}, status=status.HTTP_400_BAD_REQUEST)
+                run_resident_precheck_job.delay(job["job_id"])
+            except Exception:
+                if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                    from .tasks import run_resident_precheck_job
+
+                    run_resident_precheck_job.run(job["job_id"])
+            status_url = f"/api/concerns/classification/precheck/jobs/{job['job_id']}/"
+            return Response({**job, "status_url": status_url}, status=status.HTTP_202_ACCEPTED)
         config = ConcernClassificationConfiguration.current(incident_community)
         images, image_errors, prepared_indices = _prepared_images_from_uploads(uploaded_files)
         result = classification_payload(
@@ -871,83 +1023,38 @@ class ResidentConcernPrecheckView(APIView):
             text_timeout=getattr(settings, "OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", 8),
         )
         details = result.get("details") or {}
-        enabled_categories = config.enabled_categories or list(Concern.Category.values)
-        fallback_category = (
-            Concern.Category.OTHERS
-            if Concern.Category.OTHERS in enabled_categories
-            else str(enabled_categories[0] if enabled_categories else Concern.Category.OTHERS)
-        )
-        inferred_category = str(details.get("primary_category") or selected_category or fallback_category)
-        inferred_category_queryset = ConcernCategory.objects.filter(code=inferred_category, is_active=True)
-        inferred_category_queryset = inferred_category_queryset.filter(
-            Q(community=incident_community) | Q(community__isnull=True)
-        )
-        inferred_category_ref = inferred_category_queryset.select_related("department").first() or category_ref
-        # Category-specific requirements are evaluated after the model has
-        # selected the category. This is what allows the resident form to omit
-        # the category picker while preserving the configured safeguards.
-        inferred_errors = {}
-        if inferred_category_ref and inferred_category_ref.description_required and len(description.strip()) < 20:
-            inferred_errors["description"] = "Describe the issue in at least 20 characters."
-        if inferred_category_ref and inferred_category_ref.photo_required and not uploaded_files:
-            inferred_errors["media"] = "Add at least one clear photo as evidence."
-        if inferred_category_ref and inferred_category_ref.location_required and (
-            request.data.get("latitude") is None or request.data.get("longitude") is None
-        ):
-            inferred_errors["address"] = "Pin where the issue is located."
-        payload = _resident_feedback(
-            result,
-            image_uploaded=bool(uploaded_files),
-            photo_count=len(uploaded_files),
+        _ = details  # consumed inside _build_precheck_payload via result
+        payload = _build_precheck_payload(
+            result=result,
+            config=config,
+            incident_community=incident_community,
+            category_ref=category_ref,
+            selected_category=selected_category,
+            title=title,
+            description=description,
+            latitude=request.data.get("latitude"),
+            longitude=request.data.get("longitude"),
+            images=images or None,
             image_errors=image_errors,
             prepared_indices=prepared_indices,
-            duplicate_feedback=None,
-        )
-        if inferred_errors:
-            payload["field_errors"] = {**payload.get("field_errors", {}), **inferred_errors}
-            payload["can_submit"] = False
-            payload["needs_revision"] = True
-        duplicate_feedback = None
-        if payload["can_submit"]:
-            duplicate_feedback = _report_duplicate_feedback(
-                config,
-                request=request,
-                selected_category=inferred_category,
-                title=title,
-                description=description,
-                images=images,
-            )
-            if duplicate_feedback:
-                payload = _resident_feedback(
-                    result,
-                    image_uploaded=bool(uploaded_files),
-                    photo_count=len(uploaded_files),
-                    image_errors=image_errors,
-                    prepared_indices=prepared_indices,
-                    duplicate_feedback=duplicate_feedback,
-                )
-        payload.update(
-            _precheck_extras(
-                request,
-                result,
-                selected_category=inferred_category,
-                category_ref=inferred_category_ref,
-                config=config,
-                uploaded_files=uploaded_files,
-                image_errors=image_errors,
-                duplicate_feedback=duplicate_feedback,
-            )
-        )
-        payload["category"] = inferred_category
-        payload["category_label"] = (
-            inferred_category_ref.name
-            if inferred_category_ref
-            else dict(Concern.Category.choices).get(inferred_category, inferred_category.replace("_", " ").title())
-        )
-        payload["public_feed_allowed"] = bool(
-            not inferred_category_ref or inferred_category_ref.public_feed_allowed
+            photo_count=len(uploaded_files),
+            data=request,
         )
         return Response(payload)
+
+
+class ResidentPrecheckJobStatusView(APIView):
+    """Poll endpoint for async prechecks (text and image). Ownership enforced."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, job_id):
+        from .precheck_jobs import get_precheck_job
+
+        job = get_precheck_job(str(job_id), user_id=request.user.pk)
+        if job is None:
+            return Response({"detail": "Unknown or expired job."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(job)
 
 
 def _duplicate_preview(config, *, title: str, description: str) -> tuple[bool, float]:
@@ -1113,13 +1220,15 @@ def _rewind(uploaded) -> None:
 def _report_duplicate_feedback(config, *, request, selected_category: str, title: str, description: str, images=None) -> dict:
     if not config.report_duplicate_detection_enabled:
         return {"found": False}
+    # Accept a plain data mapping (worker path) or a DRF request (sync path).
+    data = request.data if hasattr(request, "data") else request
     fingerprints = report_fingerprints(
         barangay=config.community.name,
         category=selected_category,
         title=title,
         description=description,
-        latitude=request.data.get("latitude"),
-        longitude=request.data.get("longitude"),
+        latitude=data.get("latitude"),
+        longitude=data.get("longitude"),
         precision=config.report_duplicate_location_precision,
     )
     candidate = Concern(
@@ -1128,16 +1237,16 @@ def _report_duplicate_feedback(config, *, request, selected_category: str, title
         category=selected_category,
         title=title,
         description=description,
-        latitude=request.data.get("latitude"),
-        longitude=request.data.get("longitude"),
+        latitude=data.get("latitude"),
+        longitude=data.get("longitude"),
         report_fingerprint=fingerprints["report_fingerprint"],
         report_text_fingerprint=fingerprints["report_text_fingerprint"],
         report_location_bucket=fingerprints["report_location_bucket"],
         address=_resolved_address(
-            request.data.get("latitude"),
-            request.data.get("longitude"),
+            data.get("latitude"),
+            data.get("longitude"),
             local_only=True,
-        ).get("address") if request.data.get("latitude") and request.data.get("longitude") else "",
+        ).get("address") if data.get("latitude") and data.get("longitude") else "",
     )
     text_match = None
     duplicate = find_duplicate_concern(
@@ -1509,11 +1618,13 @@ def _assigned_unit_for_category(category_ref: ConcernCategory | None) -> dict | 
     return {"code": department.code, "name": department.name}
 
 
-def _precheck_extras(request, result, *, selected_category, category_ref, config, uploaded_files, image_errors, duplicate_feedback) -> dict:
+def _precheck_extras(request, result, *, selected_category, category_ref, config, image_uploaded, image_errors, duplicate_feedback) -> dict:
     """The fields the frontend reads: inferred routing, duplicate/resolved
     checks, resolved address, privacy preview, assigned unit, and category
     requirements. Each has a safe None/false default so the chain simply skips
     when there is nothing to show."""
+    # Accept a plain data mapping (worker path) or a DRF request (sync path).
+    data = request.data if hasattr(request, "data") else request
     details = result.get("details") or {}
     payload = {
         "description_required": bool(category_ref and category_ref.description_required),
@@ -1540,13 +1651,13 @@ def _precheck_extras(request, result, *, selected_category, category_ref, config
     payload["resolved_match"] = _find_resolved_match(
         config,
         selected_category=selected_category,
-        title=request.data.get("title", ""),
-        description=request.data.get("description", ""),
+        title=data.get("title", ""),
+        description=data.get("description", ""),
     )
 
     payload["resolved_address"] = _resolved_address(
-        request.data.get("latitude"),
-        request.data.get("longitude"),
+        data.get("latitude"),
+        data.get("longitude"),
         local_only=True,
     )
     # The resident precheck never calls SAM3 — the real privacy scan runs in
@@ -1555,7 +1666,7 @@ def _precheck_extras(request, result, *, selected_category, category_ref, config
     from apps.concerns.ai.pipeline import privacy_classes_for
 
     review_ok = result.get("details", {}).get("image_review_succeeded") is True
-    requested = privacy_classes_for(result.get("details") or {}, image_uploaded=bool(uploaded_files), gemma_image_review_succeeded=review_ok)
+    requested = privacy_classes_for(result.get("details") or {}, image_uploaded=bool(image_uploaded), gemma_image_review_succeeded=review_ok)
     payload["privacy_preview"] = {
         "state": "deferred",
         "requested_classes": requested,

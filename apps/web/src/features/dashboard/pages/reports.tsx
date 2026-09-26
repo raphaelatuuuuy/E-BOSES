@@ -21,6 +21,7 @@ import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 import {
   getConcern,
   listAssignedConcerns,
@@ -943,6 +944,7 @@ export default function ReportsPage() {
       setAlerts([])
       return
     }
+    if (shouldSkipPoll()) return
     try {
       if (isResponder) {
         setAlerts(await listAssignedEmergencies())
@@ -958,10 +960,17 @@ export default function ReportsPage() {
     queueMicrotask(() => void loadAlerts())
     const timer = window.setInterval(() => void loadAlerts(), 15_000)
     const handleLocationSynced = () => void loadAlerts()
+    const refreshVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void loadAlerts()
+      }
+    }
     window.addEventListener("eboses:location-synced", handleLocationSynced)
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       window.clearInterval(timer)
       window.removeEventListener("eboses:location-synced", handleLocationSynced)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [loadAlerts])
 
@@ -999,6 +1008,7 @@ export default function ReportsPage() {
   ])
 
   const refreshSelectedReport = useCallback(async () => {
+    if (shouldSkipPoll()) return
     await loadReports()
     if (!selectedReport) return
     try {
@@ -1062,13 +1072,20 @@ export default function ReportsPage() {
   useEffect(() => {
     const first = window.setTimeout(() => void loadReports(), 0)
     const interval = window.setInterval(eventRefresh, 30000)
+    const refreshVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        eventRefresh()
+      }
+    }
     window.addEventListener("eboses:report-created", eventRefresh)
     window.addEventListener("eboses:concern-updated", eventRefresh)
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       window.clearTimeout(first)
       window.clearInterval(interval)
       window.removeEventListener("eboses:report-created", eventRefresh)
       window.removeEventListener("eboses:concern-updated", eventRefresh)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [loadReports, eventRefresh])
 

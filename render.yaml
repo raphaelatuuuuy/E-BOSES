@@ -78,6 +78,8 @@ services:
         sync: false
       - key: OCRSPACE_API_KEY
         sync: false
+      - key: OCR_LOCAL_FALLBACK_ENABLED
+        value: "false"
       - key: ROBOFLOW_API_KEY
         sync: false
       - key: ASSISTANT_ENABLED

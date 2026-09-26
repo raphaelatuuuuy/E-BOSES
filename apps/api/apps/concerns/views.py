@@ -2051,7 +2051,22 @@ class ConcernFeedView(APIView):
         date_to = request.query_params.get("date_to")
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
-        concerns = decorate_concerns(queryset, request.user)
+        # Bound the work: the old code decorated + serialized the whole table,
+        # so scope=all degraded to 4-12s. Order in the DB, cap rows, decorate
+        # only the visible window. Cost is O(page) instead of O(table).
+        # NOTE (index safeguard): no new index is added here. Candidate would
+        # be a partial index on (updated_at DESC) WHERE visibility='community'
+        # AND validation_status='accepted' — but low-cardinality leading
+        # columns may make Postgres prefer a seq scan anyway. Run
+        # EXPLAIN (ANALYZE, BUFFERS) on the prod-shaped query before creating
+        # it. Existing concern_comm_status / concern_status_queue cover the
+        # common paths.
+        # MEASURED 2026-09-26 on dev (255/269 rows matching): planner still
+        # seq-scans + quicksorts in ~0.6ms even WITH the partial index present
+        # — the index is dead weight at this selectivity. The 4-12s feed cost
+        # was Python (decorate + serialize), now bounded by the cap above.
+        # Revisit only if EXPLAIN on prod-shaped volume shows otherwise.
+        from apps.concerns.serializers import ConcernSerializer as _FeedSerializer
 
         # Server-side "nearby" support: the client passes its own position and
         # we attach a coarse distance per concern. The concern's exact
@@ -2062,26 +2077,53 @@ class ConcernFeedView(APIView):
             viewer_lng = float(request.query_params.get("lng", "").strip() or "nan")
         except (TypeError, ValueError):
             viewer_lat = viewer_lng = float("nan")
-        if math.isfinite(viewer_lat) and math.isfinite(viewer_lng):
-            from apps.geo_services import haversine_meters
 
-            for concern in concerns:
-                if concern.latitude is None or concern.longitude is None:
-                    concern.distance_meters = None
-                else:
-                    concern.distance_meters = haversine_meters(
-                        viewer_lat,
-                        viewer_lng,
-                        float(concern.latitude),
-                        float(concern.longitude),
-                    )
+        def _serialize_window(window):
+            if math.isfinite(viewer_lat) and math.isfinite(viewer_lng):
+                from apps.geo_services import haversine_meters
 
-        severity_order = {"low": 0, "moderate": 1, "high": 2, "critical": 3}
-        concerns.sort(
-            key=lambda item: (severity_order.get(item.severity, 0), item.updated_at, item.pk),
-            reverse=True,
+                for concern in window:
+                    if concern.latitude is None or concern.longitude is None:
+                        concern.distance_meters = None
+                    else:
+                        concern.distance_meters = haversine_meters(
+                            viewer_lat,
+                            viewer_lng,
+                            float(concern.latitude),
+                            float(concern.longitude),
+                        )
+            # Band-encoded priority: severity band first, recency/support only
+            # within a band. Pure Python over annotated/prefetched relations.
+            from apps.concerns.severity import priority_score
+
+            ordered = sorted(
+                window,
+                key=lambda item: (priority_score(item), item.updated_at, item.pk),
+                reverse=True,
+            )
+            return _FeedSerializer(ordered, many=True, context={"request": request, "privacy_safe": True}).data
+
+        # Paginated envelope path (opt-in): ?page=&page_size= return
+        # {count, next, previous, results} with the same full rows, so new
+        # clients can page beyond the legacy cap. Severity ordering applies
+        # within the page; global severity ordering needs an annotated
+        # severity column (follow-up) — do not Python-sort the whole table.
+        if "page" in request.query_params or "page_size" in request.query_params:
+            ordered_qs = queryset.order_by("-updated_at", "-id")
+            return paginate_response(
+                request,
+                ordered_qs,
+                lambda page: _serialize_window(decorate_concerns(page, request.user)),
+            )
+        try:
+            limit = int(request.query_params.get("limit", 100))
+        except (TypeError, ValueError):
+            limit = 100
+        limit = min(max(1, limit), 100)
+        concerns = decorate_concerns(
+            queryset.order_by("-updated_at", "-id")[:limit], request.user
         )
-        return Response(ConcernSerializer(concerns, many=True, context={"request": request, "privacy_safe": True}).data)
+        return Response(_serialize_window(concerns))
 
 
 class ConcernVoteView(APIView):
@@ -2336,6 +2378,8 @@ class PublicCommentAttachmentView(APIView):
             return Response({"detail": "Attachment unavailable."}, status=status.HTTP_404_NOT_FOUND)
         response = FileResponse(field.open("rb"), content_type="image/jpeg" if preview else attachment.mime_type)
         response["Content-Disposition"] = f'inline; filename="{attachment.original_filename}"'
+        if preview:
+            response["Cache-Control"] = "public, max-age=86400, immutable"
         return response
 
 
@@ -3774,7 +3818,9 @@ class ConcernResolutionEvidencePreviewView(APIView):
         preview = _ensure_evidence_preview(evidence)
         if not preview:
             return FileResponse(BytesIO(placeholder_preview_jpeg()), content_type="image/jpeg")
-        return FileResponse(preview.open("rb"), content_type="image/jpeg")
+        response = FileResponse(preview.open("rb"), content_type="image/jpeg")
+        response["Cache-Control"] = "public, max-age=86400, immutable"
+        return response
 
 
 class ConcernSummaryView(APIView):
@@ -4093,7 +4139,10 @@ class ConcernMediaPreviewView(APIView):
         if media.preview_file:
             response = FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
             response["X-EBOSES-Preview-Status"] = "ready"
-            response["Cache-Control"] = "no-store"
+            # Ready previews are immutable bytes: browser/CDN may cache for a
+            # day. Pending placeholders below must stay no-store so the client
+            # keeps polling instead of caching the placeholder.
+            response["Cache-Control"] = "public, max-age=86400, immutable"
             return response
 
         # A completed no-scan decision is safe to render immediately. The old
@@ -4114,7 +4163,7 @@ class ConcernMediaPreviewView(APIView):
             else:
                 response = FileResponse(preview.open("rb"), content_type="image/jpeg")
                 response["X-EBOSES-Preview-Status"] = "ready"
-                response["Cache-Control"] = "no-store"
+                response["Cache-Control"] = "public, max-age=86400, immutable"
                 return response
 
         # No preview yet: hand the work to the privacy pipeline instead of

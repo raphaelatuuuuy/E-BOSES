@@ -208,6 +208,46 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(len(classify.call_args.kwargs["images"]), 1)
         self.assertTrue(classify.call_args.kwargs["image_uploaded"])
 
+    @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
+    def test_resident_precheck_async_returns_202_and_completes(self, _validate):
+        from apps.concerns.tasks import run_resident_precheck_job
+
+        self.client.force_authenticate(self.resident)
+        response = self.client.post(
+            "/api/concerns/classification/precheck/?async=1",
+            {
+                "media": png_upload(),
+                "category": "vehicle",
+                "title": "Blocked driveway",
+                "description": "May sasakyang nakaharang sa driveway.",
+                "latitude": "14.6507",
+                "longitude": "121.1029",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        self.assertEqual(response.data["status"], "queued")
+
+        with patch("apps.concerns.ai.classification.classification_payload") as classify:
+            classify.return_value = payload_from_result(
+                gemma_result(
+                    category="vehicle",
+                    evidence_relationship="supports_report",
+                    image_review_succeeded=True,
+                ),
+                selected_category="vehicle",
+            )
+            result = run_resident_precheck_job.run(job_id)
+
+        self.assertEqual(result["status"], "completed")
+        poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        self.assertEqual(poll.data["status"], "completed")
+        self.assertTrue(poll.data["result"]["can_submit"])
+        self.assertEqual(poll.data["result"]["category"], "vehicle")
+
     def test_resident_precheck_blocks_low_information_text(self):
         self.client.force_authenticate(self.resident)
 
@@ -851,8 +891,8 @@ class ConcernAiTextProviderPipelineTests(TestCase):
 
     @override_settings(OLLAMA_API_KEY="test-key")
     @patch("apps.concerns.ai.pipeline.compare_photo_duplicates")
-    @patch("apps.concerns.ai.pipeline.prepare_image_for_gemma")
-    def test_visual_duplicate_candidates_are_limited_to_same_address(self, prepare_image, compare):
+    @patch("apps.concerns.ai.pipeline._prepare_media_image")
+    def test_visual_duplicate_candidates_are_limited_to_same_address(self, prepare_media_image, compare):
         community = active_test_community()
         concern = self._make_concern(
             community=community,
@@ -884,7 +924,7 @@ class ConcernAiTextProviderPipelineTests(TestCase):
                 file_size=media.size,
             )
         prepared = PreparedImage(data="encoded", mime_type="image/png", telemetry={})
-        prepare_image.return_value = prepared
+        prepare_media_image.return_value = prepared
         compare.return_value = [{
             "concern_id": same_address.pk,
             "tracking_id": same_address.tracking_id,

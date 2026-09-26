@@ -720,7 +720,12 @@ class NotificationPreferenceAPITests(APITestCase):
         response = self.client.get("/api/notifications/")
 
         payload = next(item for item in response.data if item["id"] == notification.pk)
-        self.assertEqual(payload["image_url"], "/media/announcements/test-advisory.jpg")
+        # Storage-backend agnostic: local returns /media/..., Cloudinary
+        # returns https://.../media/.... Assert the stable suffix.
+        self.assertTrue(
+            payload["image_url"].endswith("/media/announcements/test-advisory.jpg"),
+            payload["image_url"],
+        )
         self.assertEqual(payload["images"][0]["url"], payload["image_url"])
 
     def test_public_concern_preview_is_in_system_push_payload(self):
@@ -743,7 +748,10 @@ class NotificationPreferenceAPITests(APITestCase):
 
         payload = notification_display_payload(notification)
 
-        self.assertEqual(payload["image"], "/media/previews/concern-media/test-push.jpg")
+        self.assertTrue(
+            payload["image"].endswith("/media/previews/concern-media/test-push.jpg"),
+            payload["image"],
+        )
 
     def test_responder_concern_notification_targets_responder_map(self):
         User = get_user_model()

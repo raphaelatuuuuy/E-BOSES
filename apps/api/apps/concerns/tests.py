@@ -278,7 +278,7 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual([row["index"] for row in response.data["files"]], [0, 1])
         self.assertEqual(response.data["files"][0]["status"], "accepted")
         self.assertEqual(response.data["files"][1]["status"], "rejected")
-        self.assertIn("already uploaded", response.data["files"][1]["message"])
+        self.assertIn("already used in another report", response.data["files"][1]["message"])
 
     def test_resident_can_create_report_with_initial_status_event(self):
         with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
@@ -924,7 +924,7 @@ class ResidentDashboardAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("This photo was already uploaded before", response.data["media"][0])
+        self.assertIn("already used in another report", response.data["media"][0])
         self.assertFalse(Concern.objects.filter(title="Duplicate evidence").exists())
 
     def test_concern_media_hash_is_stored(self):

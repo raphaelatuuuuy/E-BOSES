@@ -26,27 +26,43 @@ ACTIVE_EMERGENCY_STATUSES = {
 def community_ids_for_user(user):
     if not user or not user.is_authenticated:
         return set()
+    # Memoize per user instance: serializers call this once per row, and each
+    # call would otherwise re-query designations (N+1 on every list endpoint).
+    cached = getattr(user, "_cached_community_ids", None)
+    if cached is not None:
+        return cached
     if user.is_superuser:
         from apps.emergencies.models import Community
-        return set(
+        ids = set(
             Community.objects.filter(
                 status="active", code=PRIMARY_COMMUNITY_CODE
             ).values_list("id", flat=True)
         )
+        user._cached_community_ids = ids
+        return ids
     ids = set(user.designations.filter(is_active=True, department__community__status="active").values_list("department__community_id", flat=True))
     profile = getattr(user, "resident_profile", None)
     if getattr(user, "role", None) == "resident" and profile and profile.community_id:
         ids.add(profile.community_id)
-    return {item for item in ids if item}
+    ids = {item for item in ids if item}
+    user._cached_community_ids = ids
+    return ids
 
 
 def department_ids_for_user(user):
     if not user or not user.is_authenticated:
         return set()
+    cached = getattr(user, "_cached_department_ids", None)
+    if cached is not None:
+        return cached
     if user.is_superuser:
         from apps.concerns.models import Department
-        return set(Department.objects.filter(is_active=True).values_list("id", flat=True))
-    return set(user.designations.filter(is_active=True, department__is_active=True).values_list("department_id", flat=True))
+        ids = set(Department.objects.filter(is_active=True).values_list("id", flat=True))
+        user._cached_department_ids = ids
+        return ids
+    ids = set(user.designations.filter(is_active=True, department__is_active=True).values_list("department_id", flat=True))
+    user._cached_department_ids = ids
+    return ids
 
 
 def scope_user_queryset(queryset, user):

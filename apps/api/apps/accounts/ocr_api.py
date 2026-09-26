@@ -1406,8 +1406,14 @@ class OCRDocumentSampleView(APIView):
         sample.save()
         _delete_replaced_file(sample.file.storage, old_sample_name, sample.file.name)
 
-        # Keep legacy sample_file in sync with primary canvas side (front or single)
+        # Keep legacy sample_file in sync with primary canvas side (front or single).
+        # Rewind: sample.save() above already streamed this object once.
         if side in {"front", "single"}:
+            if hasattr(file, "seek"):
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
             document.sample_file = file
             document.sample_original_filename = sample.original_filename[:255]
             document.save(update_fields=["sample_file", "sample_original_filename", "updated_at"])

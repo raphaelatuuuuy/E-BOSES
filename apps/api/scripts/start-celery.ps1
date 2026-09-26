@@ -11,9 +11,11 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 $FastWorkerPid  = Join-Path $LogDir 'celery-worker.pid'
 $HeavyWorkerPid = Join-Path $LogDir 'celery-worker-heavy.pid'
+$EmergencyWorkerPid = Join-Path $LogDir 'celery-worker-emergency.pid'
 $BeatPid   = Join-Path $LogDir 'celery-beat.pid'
 $FastWorkerLog  = Join-Path $LogDir 'celery-worker.log'
 $HeavyWorkerLog = Join-Path $LogDir 'celery-worker-heavy.log'
+$EmergencyWorkerLog = Join-Path $LogDir 'celery-worker-emergency.log'
 $BeatLog   = Join-Path $LogDir 'celery-beat.log'
 
 function Test-CeleryRunning {
@@ -29,7 +31,13 @@ function Test-CeleryRunning {
 
 function Start-CeleryProc {
   param([string]$Name, [string]$Role, [string]$PidFile, [string]$LogFile, [string]$Queue = "", [string]$NodeName = "")
-  $already = Test-CeleryRunning -Role $Role -Match $(if ($Queue) { "-Q $Queue" } else { "" })
+  # Match on hostname/pidfile, not just -Q: prod workers share the same queue
+  # names on a different broker ("prod-eboses@..." contains "-Q eboses" too)
+  # and must not count as this stack running.
+  $matchPat = if ($NodeName) { "--hostname $([regex]::Escape($NodeName))@" }
+              elseif ($Queue) { "-Q $Queue" }
+              else { [regex]::Escape([System.IO.Path]::GetFileName($PidFile)) }
+  $already = Test-CeleryRunning -Role $Role -Match $matchPat
   if ($already) {
     $ids = ($already | ForEach-Object { $_.ProcessId }) -join ', '
     Write-Host "$Name already running (PID $ids) - nothing to do."
@@ -51,8 +59,10 @@ function Start-CeleryProc {
 
 # Two solo workers: the fast queue (OTP/SMS, emergency notifications,
 # dispatch broadcasts) must never queue behind minutes-long vision/AI jobs.
+# emergency has its own worker so dispatch never waits behind AI/media.
 Start-CeleryProc -Name 'Celery worker (fast)'  -Role 'worker'        -Queue 'eboses' -NodeName 'eboses' -PidFile $FastWorkerPid  -LogFile $FastWorkerLog
 Start-CeleryProc -Name 'Celery worker (heavy)' -Role 'worker-heavy'  -Queue 'heavy'  -NodeName 'heavy'  -PidFile $HeavyWorkerPid -LogFile $HeavyWorkerLog
+Start-CeleryProc -Name 'Celery worker (emergency)' -Role 'worker-emergency' -Queue 'emergency' -NodeName 'emergency' -PidFile $EmergencyWorkerPid -LogFile $EmergencyWorkerLog
 Start-CeleryProc -Name 'Celery beat'           -Role 'beat'          -PidFile $BeatPid        -LogFile $BeatLog
 
 Write-Host ''

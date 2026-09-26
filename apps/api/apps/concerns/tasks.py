@@ -659,3 +659,102 @@ def broadcast_media_privacy_update(media_id: int) -> None:
             },
         },
     )
+
+
+@shared_task(
+    bind=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(OSError, TimeoutError),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 2},
+    time_limit=120,
+    soft_time_limit=90,
+)
+def run_resident_precheck_job(self, job_id: str):
+    """Full resident precheck off the request thread (text and images).
+
+    The view validates intake and stages Gemma-sized prepared images;
+    the worker runs the model call plus the shared _build_precheck_payload
+    tail, so async results match sync ones. Model timeouts fail safe:
+    submission stays available but flagged for human review — never
+    auto-passed.
+    """
+    from django.core.cache import cache
+
+    from .precheck_jobs import (
+        JOB_KEY_PREFIX,
+        mark_completed,
+        mark_failed,
+        mark_processing,
+        take_staged_images,
+    )
+
+    mark_processing(job_id)
+    try:
+        stored = cache.get(f"{JOB_KEY_PREFIX}{job_id}") or {}
+        params = stored.get("_params") or {}
+        from django.conf import settings
+        from django.db.models import Q
+
+        from .ai.classification import classification_payload
+        from .classification_api import _build_precheck_payload
+        from .models import Concern, ConcernCategory, ConcernClassificationConfiguration
+
+        community = None
+        community_id = params.get("community_id")
+        if community_id:
+            from apps.emergencies.models import Community
+
+            community = Community.objects.filter(
+                pk=community_id, status=Community.Status.ACTIVE
+            ).first()
+        config = ConcernClassificationConfiguration.current(community)
+        images = take_staged_images(job_id)
+        category_ref = None
+        ref_code = params.get("category_ref_code")
+        if ref_code:
+            category_ref = ConcernCategory.objects.filter(
+                code=ref_code, is_active=True
+            ).filter(Q(community=community) | Q(community__isnull=True)).first()
+        title = params.get("title", "")
+        description = params.get("description", "")
+        latitude = params.get("latitude")
+        longitude = params.get("longitude")
+        photo_count = int(params.get("photo_count") or 0)
+        image_errors = params.get("image_errors") or {}
+        prepared_indices = params.get("prepared_indices") or []
+        result = classification_payload(
+            title=title,
+            description=description,
+            selected_category=params.get("category", ""),
+            configuration=config,
+            images=images or None,
+            image_uploaded=photo_count > 0,
+            text_timeout=getattr(settings, "OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", 8),
+        )
+        payload = _build_precheck_payload(
+            result=result,
+            config=config,
+            incident_community=community,
+            category_ref=category_ref,
+            selected_category=params.get("category", ""),
+            title=title,
+            description=description,
+            latitude=latitude,
+            longitude=longitude,
+            images=images or None,
+            image_errors=image_errors,
+            prepared_indices=prepared_indices,
+            photo_count=photo_count,
+            data={"title": title, "description": description,
+                  "latitude": latitude, "longitude": longitude},
+        )
+        payload["automated_check_completed"] = True
+        payload["requires_review"] = False
+        mark_completed(job_id, payload)
+        return {"job_id": job_id, "status": "completed"}
+    except Exception as exc:  # noqa: BLE001 — fail safe, never 500 the poller
+        logger.warning("Precheck job %s failed: %s", job_id, exc.__class__.__name__)
+        mark_failed(job_id, exc.__class__.__name__)
+        return {"job_id": job_id, "status": "failed"}

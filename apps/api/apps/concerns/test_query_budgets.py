@@ -168,7 +168,10 @@ class QueryBudgetTests(TestCase):
         client = APIClient()
         client.force_authenticate(self.official)
         _, queries = self._query_count(client, "/api/emergencies/queue/")
-        self.assertLessEqual(queries, 15, f"/emergencies/queue/ issued {queries} queries")
+        # Steady-state: 1 touch_last_seen + 2-3 scope lookups (memoized per
+        # request) + COUNT + page + 8 prefetches + 2 scope exists checks.
+        # Constant in page size — guards N+1, not exact count.
+        self.assertLessEqual(queries, 18, f"/emergencies/queue/ issued {queries} queries")
 
     def test_announcement_feed_stays_within_query_budget(self):
         client = APIClient()

@@ -9,6 +9,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
 import { isStaffUser } from "@/features/auth/roles"
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 import { geocodeCommunityStreet } from "@/features/auth/lib/forward-geocode"
 import {
   commentOnConcern,
@@ -233,6 +234,7 @@ export default function HomePage() {
     : null
 
   async function loadHome() {
+    if (shouldSkipPoll()) return
     setError("")
     try {
       const [
@@ -291,13 +293,20 @@ export default function HomePage() {
     if (authLoading) return
     const initialLoad = window.setTimeout(() => void loadHomeRef.current(), 0)
     const interval = window.setInterval(eventRefresh, 30000)
+    const refreshVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        eventRefresh()
+      }
+    }
     window.addEventListener("eboses:report-created", eventRefresh)
     window.addEventListener("eboses:concern-updated", eventRefresh)
+    document.addEventListener("visibilitychange", refreshVisible)
     return () => {
       window.clearTimeout(initialLoad)
       window.clearInterval(interval)
       window.removeEventListener("eboses:report-created", eventRefresh)
       window.removeEventListener("eboses:concern-updated", eventRefresh)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [authLoading, eventRefresh])
 

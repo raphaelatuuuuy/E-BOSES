@@ -6,6 +6,7 @@ import {
   type OfficialOverviewReport,
   type OfficialRoleSummary,
 } from "@/features/dashboard/api"
+import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
 
 /**
  * Pending-work counts for the staff rail, keyed by nav item key.
@@ -61,7 +62,14 @@ export function useOfficialBadges(
     }
 
     function refresh() {
+      if (shouldSkipPoll()) return
       void load()
+    }
+
+    function refreshVisible() {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        refresh()
+      }
     }
 
     void load()
@@ -69,6 +77,7 @@ export function useOfficialBadges(
     window.addEventListener("eboses:report-created", refresh)
     window.addEventListener("eboses:concern-updated", refresh)
     window.addEventListener("eboses:emergency-updated", refresh)
+    document.addEventListener("visibilitychange", refreshVisible)
     const interval = window.setInterval(refresh, 30000)
     return () => {
       cancelled = true
@@ -77,6 +86,7 @@ export function useOfficialBadges(
       window.removeEventListener("eboses:report-created", refresh)
       window.removeEventListener("eboses:concern-updated", refresh)
       window.removeEventListener("eboses:emergency-updated", refresh)
+      document.removeEventListener("visibilitychange", refreshVisible)
     }
   }, [enabled, unitId, role])
 
