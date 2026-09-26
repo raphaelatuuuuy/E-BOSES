@@ -94,7 +94,7 @@ def create_media_check_job(*, owner: str, files: list[dict],
         if active_id:
             active = get_media_check_job(active_id, owner=owner)
             if active and active.get("status") in {"queued", "processing"}:
-                return active, False
+                return active, False, False
     job_id = uuid.uuid4().hex
     job = {
         "job_id": job_id,

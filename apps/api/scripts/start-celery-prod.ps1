@@ -59,6 +59,14 @@ function Start-CeleryProc {
     Write-Host "$Name already running (PID $ids) - nothing to do."
     return
   }
+  # SERVICE_ROLE is what the API/worker logs record with every job dispatch
+  # and completion, so Gemma/street-view work is attributable to prod-heavy.
+  $roleMap = @{ 'prod-heavy' = 'prod-heavy'; 'prod-eboses' = 'prod-fast'; 'prod-emergency' = 'prod-emergency' }
+  if ($NodeName -and $roleMap.ContainsKey($NodeName)) {
+    $env:SERVICE_ROLE = $roleMap[$NodeName]
+  } else {
+    $env:SERVICE_ROLE = 'prod-worker'
+  }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
   $cmd = '-m celery -A config beat -l INFO --schedule "{0}" --logfile "{1}" --pidfile "{2}"' -f (Join-Path $LogDir 'celerybeat-schedule-prod'), $LogFile, $PidFile
   if ($Role -like 'worker*') {

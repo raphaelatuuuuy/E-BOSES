@@ -192,8 +192,16 @@ def _sample_side_label(side: str) -> str:
     return "Single"
 
 
+def _stored_file_available(file_field) -> bool:
+    if not file_field or not getattr(file_field, "name", None):
+        return False
+    try:
+        return bool(file_field.storage.exists(file_field.name))
+    except Exception:
+        return False
+
+
 def _document_samples_payload(document_type):
-    """List per-side samples (front/back/single) for the template builder canvas."""
     samples = []
     seen_sides = set()
     for sample in document_type.samples.filter(is_active=True).order_by("name", "id"):
@@ -202,7 +210,7 @@ def _document_samples_payload(document_type):
             side = "single"
         if side in seen_sides:
             continue
-        if not sample.file:
+        if not _stored_file_available(sample.file):
             continue
         seen_sides.add(side)
         samples.append(
@@ -213,8 +221,7 @@ def _document_samples_payload(document_type):
                 "filename": sample.original_filename or sample.name or "",
             }
         )
-    # Legacy single sample_file as front/single fallback
-    if getattr(document_type, "sample_file", None) and document_type.sample_file:
+    if _stored_file_available(getattr(document_type, "sample_file", None)):
         legacy_side = "front" if "front" in (document_type.allowed_sides or []) else "single"
         if "back" in (document_type.allowed_sides or []) and "front" in (document_type.allowed_sides or []):
             legacy_side = "front"
@@ -237,7 +244,7 @@ def _document_samples_payload(document_type):
 def _document_payload(document_type):
     samples = _document_samples_payload(document_type)
     sample_url = samples[0]["url"] if samples else None
-    if not sample_url and getattr(document_type, "sample_file", None) and document_type.sample_file:
+    if not sample_url and _stored_file_available(getattr(document_type, "sample_file", None)):
         sample_url = f"/api/auth/ocr/document-types/{document_type.code}/sample/"
     sample_filename = ""
     if samples:
@@ -260,11 +267,7 @@ def _document_payload(document_type):
         "provider_names": document_type.provider_names or [],
         "aliases": document_type.aliases or [],
         "display_order": document_type.display_order,
-        # Whether the picture check has a reference to compare submissions
-        # against. Read from the same rows the pipeline reads, so a blank here
-        # means the pipeline really does get nothing — the config screen is
-        # reporting live state, not a label somebody typed.
-        "has_reference_sample": bool(samples) or bool(getattr(document_type, "sample_file", None)),
+        "has_reference_sample": bool(samples),
         "template_name": getattr(document_type, "template_name", None) or document_type.name,
         "template_version": getattr(document_type, "template_version", None) or "v1.0",
         "expected_title": getattr(document_type, "expected_title", None) or "",
@@ -1289,9 +1292,110 @@ def _test_payload(run):
     }
 
 
-class OCRDocumentSampleView(APIView):
-    """Upload or fetch per-side template samples (front / back / single) for the canvas."""
+def _restore_draft_document(config, published_doc):
+    target = OCRDocumentType.objects.create(
+        configuration=config,
+        code=published_doc.code,
+        name=published_doc.name,
+        description=published_doc.description,
+        category=published_doc.category,
+        enabled=published_doc.enabled,
+        requires_front=published_doc.requires_front,
+        requires_back=published_doc.requires_back,
+        allowed_sides=deepcopy(published_doc.allowed_sides or []),
+        accepted_mime_types=deepcopy(published_doc.accepted_mime_types or []),
+        max_files=published_doc.max_files,
+        keywords=deepcopy(published_doc.keywords or []),
+        provider_names=deepcopy(published_doc.provider_names or []),
+        aliases=deepcopy(published_doc.aliases or []),
+        display_order=published_doc.display_order,
+        template_name=getattr(published_doc, "template_name", "") or published_doc.name,
+        template_version=getattr(published_doc, "template_version", None) or "v1.0",
+        expected_title=getattr(published_doc, "expected_title", "") or "",
+        min_ocr_confidence=getattr(published_doc, "min_ocr_confidence", None) or 0.9,
+        accept_rotated=bool(getattr(published_doc, "accept_rotated", True)),
+        accept_scanned_pdf=bool(getattr(published_doc, "accept_scanned_pdf", True)),
+        sample_original_filename=getattr(published_doc, "sample_original_filename", "") or "",
+        template_settings=deepcopy(getattr(published_doc, "template_settings", None) or {}),
+    )
+    if getattr(published_doc, "sample_file", None) and published_doc.sample_file.name:
+        target.sample_file = published_doc.sample_file
+        target.save(update_fields=["sample_file"])
+    field_map = {}
+    for source_field in published_doc.fields.all().order_by("display_order", "id"):
+        target_field = OCRFieldDefinition.objects.create(
+            document_type=target,
+            code=source_field.code,
+            label=source_field.label,
+            data_type=source_field.data_type,
+            required=source_field.required,
+            enabled=source_field.enabled,
+            sides=deepcopy(source_field.sides or []),
+            aliases=deepcopy(source_field.aliases or []),
+            extraction_hints=deepcopy(source_field.extraction_hints or {}),
+            normalization=source_field.normalization,
+            format=source_field.format,
+            min_confidence=source_field.min_confidence,
+            display_order=source_field.display_order,
+        )
+        field_map[source_field.pk] = target_field
+    for source_sample in published_doc.samples.filter(is_active=True).order_by("id"):
+        if not source_sample.file:
+            continue
+        OCRSample.objects.create(
+            document_type=target,
+            name=source_sample.name or "single",
+            file=source_sample.file,
+            original_filename=source_sample.original_filename or "",
+            mime_type=source_sample.mime_type or "",
+            sha256_hash=source_sample.sha256_hash or "",
+            is_synthetic=source_sample.is_synthetic,
+            is_active=True,
+            metadata=deepcopy(source_sample.metadata or {}),
+            created_by=source_sample.created_by,
+        )
+    for source_rule in published_doc.rules.all().order_by("display_order", "id"):
+        OCRRule.objects.create(
+            configuration=config,
+            document_type=target,
+            field=field_map.get(source_rule.field_id),
+            code=source_rule.code,
+            name=source_rule.name,
+            rule_type=source_rule.rule_type,
+            operator=source_rule.operator,
+            value=deepcopy(source_rule.value or {}),
+            threshold=source_rule.threshold,
+            on_failure=source_rule.on_failure,
+            enabled=source_rule.enabled,
+            display_order=source_rule.display_order,
+        )
+    return target
 
+
+def _writable_sample_document(community, code):
+    config = draft_configuration(community=community)
+    if config:
+        document = config.document_types.filter(code=code).first()
+        if document:
+            return config, document
+    published = published_configuration(community=community)
+    published_doc = published.document_types.filter(code=code).first() if published else None
+    if published_doc is None:
+        return config, None
+    if config is None:
+        scoped = OCRConfigurationVersion.objects.filter(community=community, scope="residence_proof")
+        latest_version = scoped.order_by("-version").values_list("version", flat=True).first() or 0
+        config = _clone_configuration(
+            published,
+            version=latest_version + 1,
+            status=OCRConfigurationVersion.Status.DRAFT,
+            based_on=published,
+        )
+        return config, config.document_types.filter(code=code).first()
+    return config, _restore_draft_document(config, published_doc)
+
+
+class OCRDocumentSampleView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
@@ -1313,7 +1417,7 @@ class OCRDocumentSampleView(APIView):
 
     def _open_sample_file(self, document, side: str):
         def available(file_field):
-            return bool(file_field and file_field.name and file_field.storage.exists(file_field.name))
+            return _stored_file_available(file_field)
 
         sample = (
             document.samples.filter(is_active=True, name=side)
@@ -1374,8 +1478,7 @@ class OCRDocumentSampleView(APIView):
     def post(self, request, code):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        config = draft_configuration(community=_official_community(request))
-        document = config.document_types.filter(code=code).first() if config else None
+        _, document = _writable_sample_document(_official_community(request), code)
         if not document:
             return Response(
                 {
@@ -1443,8 +1546,7 @@ class OCRDocumentSampleView(APIView):
     def delete(self, request, code):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        config = draft_configuration(community=_official_community(request))
-        document = config.document_types.filter(code=code).first() if config else None
+        _, document = _writable_sample_document(_official_community(request), code)
         if not document:
             return Response({"detail": "Document type not found."}, status=status.HTTP_404_NOT_FOUND)
         side = self._resolve_side(request, document)

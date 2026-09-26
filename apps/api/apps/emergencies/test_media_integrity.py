@@ -242,9 +242,38 @@ class EmergencyMediaCheckViewTests(TestCase):
             )
 
     def test_clean_photo_is_accepted_with_per_file_verdict(self):
-        response = self._check(self._upload())
-        self.assertEqual(response.status_code, 200)
-        files = response.data["files"]
+        from apps.concerns.tasks import run_media_check_job
+
+        with (
+            patch(CLASSIFY, return_value={"details": {}}),
+            patch(
+                INTEGRITY_PREVIEW,
+                return_value={"status": "checked", "findings": []},
+            ),
+        ):
+            response = self.client.post(
+                "/api/emergencies/media/check/",
+                {"media": self._upload()},
+                format="multipart",
+            )
+        # Worker-only contract: the API enqueues, never runs AI inline.
+        self.assertEqual(response.status_code, 202)
+        job_id = response.data["job_id"]
+        with (
+            patch(CLASSIFY, return_value={"details": {}}),
+            patch(
+                INTEGRITY_PREVIEW,
+                return_value={"status": "checked", "findings": []},
+            ),
+        ):
+            result = run_media_check_job.run(job_id)
+        self.assertEqual(result["status"], "completed")
+        # Verdicts live on the stored job; the worker returns only the status.
+        from apps.concerns.media_check_jobs import get_media_check_job
+
+        stored = get_media_check_job(job_id, owner=f"user:{self.resident.pk}")
+        self.assertIsNotNone(stored)
+        files = stored["result"]["files"]
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0]["status"], "accepted")
         self.assertEqual(files[0]["index"], 0)

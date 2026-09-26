@@ -32,6 +32,15 @@ services:
         value: "true"
       - key: LOG_LEVEL
         value: INFO
+      - key: LOAD_SHEDDING_ENABLED
+        value: "true"
+      - key: LOAD_SHEDDING_RSS_MB
+        value: "450"
+      # Service role recorded in every job dispatch/completion log so heavy
+      # Gemma/street-view work is attributable to the worker, never the API.
+      # API deployments use "api"; heavy workers run with "prod-heavy".
+      - key: SERVICE_ROLE
+        value: api
       # Secrets are dashboard-managed (sync: false) — never commit values.
       # Fill them in Render → eboses-api → Environment before first deploy.
       - key: DJANGO_SECRET_KEY
@@ -101,18 +110,28 @@ services:
 
   # Paid path (free tier runs workers on your laptop instead — see Phase 5).
   # Uncomment when off free tier: one service per role, same envVars as above.
+  # The heavy worker MUST listen to the exact "heavy" queue, run the same
+  # deployed commit as the API, and be restarted after every deployment —
+  # otherwise precheck/street-view/media-check jobs sit queued forever while
+  # the API keeps returning 202.
   # - type: worker
   #   name: eboses-worker-fast
   #   runtime: python
   #   rootDir: apps/api
   #   buildCommand: pip install -r requirements.txt
   #   startCommand: python -m celery -A config worker -l INFO -Q eboses --concurrency 2
+  #   envVars:
+  #     - key: SERVICE_ROLE
+  #       value: prod-fast
   # - type: worker
   #   name: eboses-worker-heavy
   #   runtime: python
   #   rootDir: apps/api
   #   buildCommand: pip install -r requirements.txt
-  #   startCommand: python -m celery -A config worker -l INFO -Q heavy --concurrency 1
+  #   startCommand: python -m celery -A config worker -l INFO -Q heavy --concurrency 1 --hostname prod-heavy@%h --max-tasks-per-child=20 --max-memory-per-child=400000
+  #   envVars:
+  #     - key: SERVICE_ROLE
+  #       value: prod-heavy
   # - type: worker
   #   name: eboses-beat
   #   runtime: python

@@ -185,8 +185,24 @@ class PublicStreetViewImageTests(APITestCase):
         cache.clear()
 
     @patch("apps.emergencies.public_api.fetch_latest_street_imagery")
-    def test_returns_a_real_panorama_image(self, fetch_imagery):
+    def test_cold_miss_enqueues_worker_and_returns_pending(self, fetch_imagery):
+        # Tile work never runs in Daphne: a cold miss enqueues the heavy
+        # worker and returns 202 pending; the client polls the same URL.
+        with patch("apps.emergencies.tasks.generate_street_view_task") as _task:
+            response = self.client.get(
+                reverse("public-street-view-image"),
+                {"latitude": "14.6506382", "longitude": "121.1205678"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["status"], "pending")
+        self.assertIn("status_url", response.data)
+        fetch_imagery.assert_not_called()
+
+    @patch("apps.emergencies.public_api.fetch_latest_street_imagery")
+    def test_worker_fill_makes_the_next_poll_available(self, fetch_imagery):
         from apps.concerns.ai.street_imagery import StreetImagery
+        from apps.emergencies.tasks import generate_street_view_task
 
         fetch_imagery.return_value = StreetImagery(
             pano_id="test-pano",
@@ -197,6 +213,9 @@ class PublicStreetViewImageTests(APITestCase):
             image_b64="cGhvdG8=",
         )
 
+        result = generate_street_view_task.run(14.65064, 121.12057)
+        self.assertEqual(result["status"], "available")
+
         response = self.client.get(
             reverse("public-street-view-image"),
             {"latitude": "14.6506382", "longitude": "121.1205678"},
@@ -206,25 +225,19 @@ class PublicStreetViewImageTests(APITestCase):
         self.assertEqual(response.data["status"], "available")
         self.assertEqual(response.data["image"], "data:image/jpeg;base64,cGhvdG8=")
         self.assertEqual(response.data["latitude"], 14.650559)
-        fetch_imagery.assert_called_once_with(
-            latitude=14.65064,
-            longitude=121.12057,
-            radius_meters=100,
-        )
 
     @patch("apps.emergencies.public_api.fetch_latest_street_imagery")
     def test_async_miss_returns_pending_without_fetching(self, fetch_imagery):
         from django.core.cache import cache as _cache
 
-        # Simulate a worker already generating: lock held → pending, and the
-        # fetch must not run inside Daphne.
-        _cache.set("public:street-view-image:v5:14.6506:121.1206:lock", True, 60)
+        # A queued generation collapses polls into pending without fetching.
+        _cache.set("public:street-view-image:v5:14.6506:121.1206:queued", True, 60)
         response = self.client.get(
             reverse("public-street-view-image"),
             {"latitude": "14.6506382", "longitude": "121.1205678", "async": "1"},
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         self.assertEqual(response.data["status"], "pending")
         self.assertIn("status_url", response.data)
         fetch_imagery.assert_not_called()

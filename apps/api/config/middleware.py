@@ -87,6 +87,17 @@ class LoadSheddingMiddleware:
         "/api/concerns/media/check/",
         "/api/concerns/classification/precheck/",
         "/api/public/concerns/guest/media-check/",
+        "/api/concerns/classification/test-submission/",
+    )
+
+    # Prefix matches for parameterized heavy POSTs (e.g. per-log retries).
+    SHED_PREFIXES = (
+        "/api/concerns/classification/log/",
+    )
+
+    SHED_GET_PREFIXES = (
+        "/api/dashboard/official/summary/",
+        "/api/dashboard/official/analytics/",
     )
 
     def __init__(self, get_response):
@@ -95,7 +106,11 @@ class LoadSheddingMiddleware:
     def __call__(self, request):
         if getattr(settings, "LOAD_SHEDDING_ENABLED", False):
             limit = float(getattr(settings, "LOAD_SHEDDING_RSS_MB", 450))
-            if request.method == "POST" and request.path in self.SHED_PATHS:
+            shed_post = request.method == "POST" and (
+                request.path in self.SHED_PATHS or request.path.startswith(self.SHED_PREFIXES)
+            )
+            shed_get = request.method == "GET" and request.path.startswith(self.SHED_GET_PREFIXES)
+            if shed_post or shed_get:
                 rss = _rss_mb()
                 if rss is not None and rss >= limit:
                     logger.warning(

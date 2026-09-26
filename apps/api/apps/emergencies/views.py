@@ -1305,14 +1305,15 @@ class EmergencyResolutionEvidencePreviewView(APIView):
             return Response({"detail": "You do not have permission to access this resolution evidence."}, status=status.HTTP_403_FORBIDDEN)
         if _preview_is_ready(evidence.preview_file):
             return FileResponse(evidence.preview_file.open("rb"), content_type="image/jpeg")
+        # Worker-only preview: SAM3 + OpenCV never run in this GET. Enqueue
+        # the heavy worker and serve the placeholder until it lands; the
+        # recovery sweep guarantees it even if nobody views again.
         try:
-            from .media_services import ensure_emergency_media_preview
+            from .tasks import enqueue_emergency_media_preview
 
-            ensure_emergency_media_preview(evidence)
-            if evidence.preview_file:
-                return FileResponse(evidence.preview_file.open("rb"), content_type="image/jpeg")
+            enqueue_emergency_media_preview("resolution_evidence", evidence.pk)
         except Exception:
-            logger.info("Resolution evidence preview unavailable for %s", evidence.pk, exc_info=True)
+            logger.info("Resolution evidence preview enqueue failed for %s", evidence.pk, exc_info=True)
         return FileResponse(BytesIO(placeholder_preview_jpeg()), content_type="image/jpeg")
 
 
@@ -1374,11 +1375,6 @@ class EmergencyMediaCheckView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
-        from apps.concerns.views import (
-            _attachment_authenticity_results,
-            _media_check_configuration,
-        )
-
         media_files = request.FILES.getlist("media")
         if not media_files:
             return Response({"media": ["Choose a photo to check."]}, status=status.HTTP_400_BAD_REQUEST)
@@ -1414,13 +1410,31 @@ class EmergencyMediaCheckView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             current_hashes.add(media_hash)
+        # Worker-only AI: the Gemma/forensics verdicts run in
+        # run_media_check_job on the "heavy" queue — never in Daphne. The
+        # byte-validation/duplicate gates above stay inline (cheap DB reads).
+        # Results are polled via the shared media-check job endpoint.
+        from apps.concerns.views import _enqueue_media_check_job
+
+        job = _enqueue_media_check_job(
+            owner=f"user:{request.user.pk}",
+            media_files=media_files,
+            forensics_only=False,
+            community_id=request.data.get("community_id"),
+            rate_limit=5,
+        )
+        if job is None:
+            return Response(
+                {"detail": "Too many checks. Please wait a bit before trying again."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         return Response(
             {
-                "files": _attachment_authenticity_results(
-                    media_files,
-                    config=_media_check_configuration(request),
-                )
-            }
+                "job_id": job["job_id"],
+                "status": job.get("status", "queued"),
+                "status_url": f"/api/concerns/media/check/jobs/{job['job_id']}/",
+            },
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
@@ -3940,11 +3954,11 @@ class AssignmentActionMixin:
                     note=note[:255],
                 )
                 try:
-                    from .media_services import ensure_emergency_media_preview
+                    from .tasks import enqueue_emergency_media_preview
 
-                    ensure_emergency_media_preview(evidence)
+                    enqueue_emergency_media_preview("resolution_evidence", evidence.pk)
                 except Exception:
-                    logger.info("Resolution evidence preview unavailable for %s", evidence.pk, exc_info=True)
+                    logger.info("Resolution evidence preview enqueue failed for %s", evidence.pk, exc_info=True)
         else:
             alert.save(update_fields=["status", "status_version", "updated_at"])
         create_status_event(alert, self.target_status, request.user, note)

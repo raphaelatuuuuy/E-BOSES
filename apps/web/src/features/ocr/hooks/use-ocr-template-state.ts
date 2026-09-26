@@ -428,6 +428,7 @@ export function useOcrTemplateState() {
             ]
           : []
 
+      if (sampleList.length === 0) return
       const next: Partial<Record<ProofSide, string>> = {}
       for (const sample of sampleList) {
         try {
@@ -437,14 +438,13 @@ export function useOcrTemplateState() {
           created.push(url)
           next[sample.side as ProofSide] = url
         } catch {
-          // side missing
+          continue
         }
       }
       if (cancelled) {
         created.forEach((u) => URL.revokeObjectURL(u))
         return
       }
-      // Alias single ↔ front so swapping photo requirement keeps the sample visible.
       if (!next.front && next.single && canvasSides.includes("front")) {
         next.front = next.single
       }
@@ -459,11 +459,15 @@ export function useOcrTemplateState() {
       ) {
         next.single = next.back
       }
+      if (Object.keys(next).length === 0) return
       setSamplePreviewBySide((prev) => {
-        Object.values(prev).forEach((u) => {
-          if (u) URL.revokeObjectURL(u)
-        })
-        return next
+        const merged: Partial<Record<ProofSide, string>> = { ...prev }
+        for (const [side, url] of Object.entries(next)) {
+          const old = prev[side as ProofSide]
+          if (old && old !== url) URL.revokeObjectURL(old)
+          merged[side as ProofSide] = url
+        }
+        return merged
       })
     }
 

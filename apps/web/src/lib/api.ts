@@ -372,7 +372,7 @@ async function requestWithRefresh<T>(path: string, init: RequestInit, options: A
   const release = await burstAcquire(path)
   try {
     try {
-      return await request<T>(path, init, options)
+      return await requestWithBackoff<T>(path, init, options)
     } catch (error) {
       if (error instanceof ApiError && error.status === 401 && options.auth !== false && options.refreshOnUnauthorized !== false) {
         const refreshed = await refreshSession()
@@ -383,5 +383,27 @@ async function requestWithRefresh<T>(path: string, init: RequestInit, options: A
     }
   } finally {
     release()
+  }
+}
+
+function retryDelayMs(attempt: number, retryAfterMs: number | null): number {
+  const backoff = Math.min(8000, 500 * 2 ** attempt)
+  const jitter = Math.random() * 500
+  if (retryAfterMs != null) return Math.min(30000, retryAfterMs + jitter)
+  return backoff + jitter
+}
+
+function isRetryable(error: unknown): error is ApiError {
+  return error instanceof ApiError && (error.status === 0 || error.status === 502 || error.status === 503 || error.status === 504)
+}
+
+async function requestWithBackoff<T>(path: string, init: RequestInit, options: ApiRequestOptions, attempt = 0): Promise<T> {
+  try {
+    return await request<T>(path, init, options)
+  } catch (error) {
+    const method = (init.method ?? "GET").toUpperCase()
+    if (method !== "GET" || attempt >= 2 || !isRetryable(error)) throw error
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt, error.retryAfterMs)))
+    return requestWithBackoff<T>(path, init, options, attempt + 1)
   }
 }

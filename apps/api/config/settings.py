@@ -30,6 +30,12 @@ environ.Env.read_env(BASE_DIR.parent.parent / ".env")
 ENVIRONMENT = env("DJANGO_ENV", default="production")
 IS_LOCAL_DEVELOPMENT = ENVIRONMENT == "local"
 
+# Service role distinguishes the web API from background workers in logs.
+# API deployments keep SERVICE_ROLE=api; Celery heavy workers run with
+# SERVICE_ROLE=prod-heavy. Both sides log it with every job dispatch/completion
+# so Gemma/street-view work can be attributed to the worker, never the API.
+SERVICE_ROLE = env("SERVICE_ROLE", default="api")
+
 # Fail closed: never sign JWTs, refresh tokens, password-reset links or
 # WebSocket tickets with the published dev placeholder outside local dev.
 SECRET_KEY = env("DJANGO_SECRET_KEY", default="")
@@ -262,10 +268,10 @@ else:
             # redis-py's ConnectionPool.from_url(), so connection-level kwargs
             # live at the top level here (no CONNECTION_POOL_KWARGS nesting).
             "OPTIONS": {
-                # Fail fast when the hosted Redis is unreachable instead of
-                # hanging every request for the OS connect timeout.
                 "socket_connect_timeout": 3,
                 "socket_timeout": 5,
+                "socket_keepalive": True,
+                "health_check_interval": 30,
             },
         },
         "throttling": {
@@ -288,6 +294,9 @@ CELERY_TASK_ROUTES = {
     "apps.concerns.tasks.process_concern_media_privacy_task": {"queue": "heavy"},
     "apps.concerns.tasks.run_content_moderation_ai_task": {"queue": "heavy"},
     "apps.concerns.tasks.run_resident_precheck_job": {"queue": "heavy"},
+    "apps.concerns.tasks.process_classification_job": {"queue": "heavy"},
+    "apps.concerns.tasks.run_comment_street_check_job": {"queue": "heavy"},
+    "apps.concerns.tasks.run_street_imagery_retry_job": {"queue": "heavy"},
     "apps.concerns.tasks.run_media_check_job": {"queue": "heavy"},
     "apps.emergencies.tasks.generate_street_view_task": {"queue": "heavy"},
     "apps.emergencies.tasks.generate_emergency_media_preview_task": {"queue": "heavy"},
@@ -338,6 +347,14 @@ CELERY_BEAT_SCHEDULE = {
     # request thread, so this sweep is what guarantees the work still happens.
     "retry-pending-concern-jobs": {
         "task": "apps.concerns.tasks.retry_pending_concern_jobs_task",
+        "schedule": 300.0,
+        "options": {"queue": "eboses"},
+    },
+    # Same guarantee for the persistent precheck rows and pending
+    # comment-street comparisons: the API never runs them inline, so without
+    # this sweep a broker gap would leave them queued forever.
+    "retry-pending-precheck-jobs": {
+        "task": "apps.concerns.tasks.retry_pending_precheck_jobs_task",
         "schedule": 300.0,
         "options": {"queue": "eboses"},
     },

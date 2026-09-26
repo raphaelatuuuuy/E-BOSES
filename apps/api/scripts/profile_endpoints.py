@@ -160,7 +160,16 @@ def run(out):
 
     _cache.delete(f"public:street-view-image:v5:{float(lat):.4f}:{float(lng):.4f}")
     _cache.delete(f"public:street-view-coverage:v2:{float(lat):.4f}:{float(lng):.4f}")
-    _measure(rc, "GET", f"/api/public/street-view/image/?latitude={lat}&longitude={lng}", "street-view cold", results, reps=1)
+    _cache.delete(f"public:street-view-image:v5:{float(lat):.4f}:{float(lng):.4f}:queued")
+    # Worker-only contract: a cold miss enqueues + 202 pending (no tiles in
+    # the request). Run the heavy worker inline so "warm" measures a cache hit.
+    _measure(rc, "GET", f"/api/public/street-view/image/?latitude={lat}&longitude={lng}", "street-view cold (202 pending)", results, reps=1)
+    try:
+        from apps.emergencies.tasks import generate_street_view_task
+
+        generate_street_view_task.run(float(lat), float(lng))
+    except Exception:
+        pass
     _measure(rc, "GET", f"/api/public/street-view/image/?latitude={lat}&longitude={lng}", "street-view warm", results)
     _measure(rc, "GET", f"/api/public/street-view/coverage/?latitude={lat}&longitude={lng}", "coverage cold", results, reps=1)
     _measure(rc, "GET", f"/api/public/street-view/coverage/?latitude={lat}&longitude={lng}", "coverage warm", results)

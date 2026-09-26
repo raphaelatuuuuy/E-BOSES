@@ -177,18 +177,11 @@ class ConcernClassificationApiTests(APITestCase):
         # The tester still hands the normalised photo set straight to the analyzer.
         self.assertEqual(classify.call_args.kwargs["images"][0].mime_type, "image/jpeg")
 
-    @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
-    @patch("apps.concerns.classification_api.classification_payload")
-    def test_resident_precheck_passes_the_prepared_image_to_the_analyzer(self, classify, _validate):
+    @patch("apps.accounts.services.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
+    def test_resident_precheck_passes_the_prepared_image_to_the_analyzer(self, _validate):
+        from apps.concerns.tasks import process_classification_job
+
         self.client.force_authenticate(self.resident)
-        classify.return_value = payload_from_result(
-            gemma_result(
-                category="vehicle",
-                evidence_relationship="supports_report",
-                image_review_succeeded=True,
-            ),
-            selected_category="vehicle",
-        )
 
         response = self.client.post(
             "/api/concerns/classification/precheck/",
@@ -203,14 +196,30 @@ class ConcernClassificationApiTests(APITestCase):
             format="multipart",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertTrue(response.data["can_submit"])
+        # Worker-only contract: the API stores + enqueues, never analyzes.
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        with patch("apps.concerns.ai.classification.classification_payload") as classify:
+            classify.return_value = payload_from_result(
+                gemma_result(
+                    category="vehicle",
+                    evidence_relationship="supports_report",
+                    image_review_succeeded=True,
+                ),
+                selected_category="vehicle",
+            )
+            result = process_classification_job.run(job_id)
+
+        self.assertEqual(result["status"], "completed")
+        poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        self.assertEqual(poll.data["status"], "completed")
+        self.assertTrue(poll.data["result"]["can_submit"])
         self.assertEqual(len(classify.call_args.kwargs["images"]), 1)
         self.assertTrue(classify.call_args.kwargs["image_uploaded"])
 
-    @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
-    def test_resident_precheck_async_returns_202_and_completes(self, _validate):
-        from apps.concerns.tasks import run_resident_precheck_job
+    def test_resident_precheck_async_returns_202_and_completes(self):
+        from apps.concerns.tasks import process_classification_job
 
         self.client.force_authenticate(self.resident)
         response = self.client.post(
@@ -239,7 +248,7 @@ class ConcernClassificationApiTests(APITestCase):
                 ),
                 selected_category="vehicle",
             )
-            result = run_resident_precheck_job.run(job_id)
+            result = process_classification_job.run(job_id)
 
         self.assertEqual(result["status"], "completed")
         poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
@@ -249,6 +258,8 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(poll.data["result"]["category"], "vehicle")
 
     def test_resident_precheck_blocks_low_information_text(self):
+        from apps.concerns.tasks import process_classification_job
+
         self.client.force_authenticate(self.resident)
 
         response = self.client.post(
@@ -261,10 +272,15 @@ class ConcernClassificationApiTests(APITestCase):
             },
             format="multipart",
         )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertFalse(response.data["can_submit"])
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        result = process_classification_job.run(job_id)
+        self.assertEqual(result["status"], "completed")
+        poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        self.assertFalse(poll.data["result"]["can_submit"])
         self.assertEqual(
-            response.data["field_errors"]["description"],
+            poll.data["result"]["field_errors"]["description"],
             "Please include only relevant details about the issue.",
         )
 
@@ -273,6 +289,8 @@ class ConcernClassificationApiTests(APITestCase):
     def test_resident_precheck_model_failure_does_not_block(self, analyzer_cls):
         """When Gemma itself fails, the resident is not told to "add a clearer
         description" — nothing was reviewed, so the report goes to an official."""
+        from apps.concerns.tasks import process_classification_job
+
         analyzer_cls.return_value.analyze.side_effect = RuntimeError("provider down")
         self.client.force_authenticate(self.resident)
 
@@ -287,26 +305,20 @@ class ConcernClassificationApiTests(APITestCase):
             format="multipart",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertTrue(response.data["can_submit"])
-        self.assertEqual(response.data["category"], "others")
-        self.assertIn("could not run", response.data["message"])
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        result = process_classification_job.run(job_id)
+        self.assertEqual(result["status"], "completed")
+        poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        self.assertTrue(poll.data["result"]["can_submit"])
+        self.assertEqual(poll.data["result"]["category"], "others")
+        self.assertIn("could not run", poll.data["result"]["message"])
 
-    @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
-    @patch("apps.concerns.classification_api.classification_payload")
-    def test_resident_precheck_sends_all_photos_and_returns_verdicts(self, classify, _validate):
-        classify.return_value = payload_from_result(
-            gemma_result(
-                category="vehicle",
-                evidence_relationship="supports_report",
-                image_review_succeeded=True,
-                photo_verdicts=[
-                    {"index": 0, "relevance": "supports_report", "note": "Shows the blocked driveway."},
-                    {"index": 1, "relevance": "contradicts_report", "note": "Shows a parked motorcycle only."},
-                ],
-            ),
-            selected_category="vehicle",
-        )
+    @patch("apps.accounts.services.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
+    def test_resident_precheck_sends_all_photos_and_returns_verdicts(self, _validate):
+        from apps.concerns.tasks import process_classification_job
+
         self.client.force_authenticate(self.resident)
 
         response = self.client.post(
@@ -322,15 +334,35 @@ class ConcernClassificationApiTests(APITestCase):
             format="multipart",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertFalse(response.data["can_submit"])
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        with patch("apps.concerns.ai.classification.classification_payload") as classify:
+            classify.return_value = payload_from_result(
+                gemma_result(
+                    category="vehicle",
+                    evidence_relationship="supports_report",
+                    image_review_succeeded=True,
+                    photo_verdicts=[
+                        {"index": 0, "relevance": "supports_report", "note": "Shows the blocked driveway."},
+                        {"index": 1, "relevance": "contradicts_report", "note": "Shows a parked motorcycle only."},
+                    ],
+                ),
+                selected_category="vehicle",
+            )
+            result = process_classification_job.run(job_id)
+
+        self.assertEqual(result["status"], "completed")
+        poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        payload = poll.data["result"]
+        self.assertFalse(payload["can_submit"])
         self.assertEqual(
-            response.data["field_errors"]["media"],
+            payload["field_errors"]["media"],
             "The photo contradicts the issue described. Upload a matching photo.",
         )
         self.assertEqual(len(classify.call_args.kwargs["images"]), 2)
         self.assertTrue(classify.call_args.kwargs["image_uploaded"])
-        verdicts = response.data["photo_verdicts"]
+        verdicts = payload["photo_verdicts"]
         self.assertEqual([item["state"] for item in verdicts], ["relevant", "unrelated"])
         self.assertEqual(verdicts[0]["message"], "")
 
@@ -385,21 +417,10 @@ class ConcernClassificationApiTests(APITestCase):
             {"code": department.code, "name": department.name},
         )
 
-    @patch("apps.concerns.classification_api.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
-    @patch("apps.concerns.classification_api.classification_payload")
-    def test_resident_precheck_keeps_urgent_report_in_the_concern_flow(self, classify, _validate):
-        classify.return_value = payload_from_result(
-            gemma_result(
-                category="environment",
-                evidence_relationship="supports_report",
-                image_review_succeeded=True,
-                urgent_attention=True,
-                recommended_action="escalate_as_emergency",
-                matched_emergency_type="fire",
-                incident_timing="ongoing",
-            ),
-            selected_category="vehicle",
-        )
+    @patch("apps.accounts.services.validate_concern_media_file", side_effect=lambda uploaded: uploaded)
+    def test_resident_precheck_keeps_urgent_report_in_the_concern_flow(self, _validate):
+        from apps.concerns.tasks import process_classification_job
+
         self.client.force_authenticate(self.resident)
 
         response = self.client.post(
@@ -414,31 +435,40 @@ class ConcernClassificationApiTests(APITestCase):
             format="multipart",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["category"], "environment")
-        self.assertFalse(response.data["category_confirm_required"])
-        self.assertEqual(response.data["category_label"], "Environment")
-        self.assertNotIn("auto_escalate", response.data)
-        self.assertNotIn("emergency_type", response.data)
-        self.assertNotIn("emergency_triage", response.data)
-        self.assertIsNotNone(response.data["resolved_address"])
-        self.assertIsNone(response.data["active_duplicate"])
-        self.assertIsNone(response.data["resolved_match"])
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        with patch("apps.concerns.ai.classification.classification_payload") as classify:
+            classify.return_value = payload_from_result(
+                gemma_result(
+                    category="environment",
+                    evidence_relationship="supports_report",
+                    image_review_succeeded=True,
+                    urgent_attention=True,
+                    recommended_action="escalate_as_emergency",
+                    matched_emergency_type="fire",
+                    incident_timing="ongoing",
+                ),
+                selected_category="vehicle",
+            )
+            result = process_classification_job.run(job_id)
 
-    @patch("apps.concerns.classification_api.classification_payload")
-    def test_resident_precheck_does_not_offer_dispatch_for_an_ended_incident(self, classify):
-        classify.return_value = payload_from_result(
-            gemma_result(
-                category="public_safety",
-                urgent_attention=False,
-                matched_emergency_type="",
-                recommended_action="accept",
-                incident_timing="ended",
-                incident_timing_reason="The report says the fire was extinguished.",
-                current_danger=False,
-            ),
-            selected_category="public_safety",
-        )
+        self.assertEqual(result["status"], "completed")
+        poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        payload = poll.data
+        self.assertEqual(poll.data["result"]["category"], "environment")
+        self.assertFalse(poll.data["result"]["category_confirm_required"])
+        self.assertEqual(poll.data["result"]["category_label"], "Environment")
+        self.assertNotIn("auto_escalate", payload["result"])
+        self.assertNotIn("emergency_type", payload["result"])
+        self.assertNotIn("emergency_triage", payload["result"])
+        self.assertIsNotNone(payload["result"]["resolved_address"])
+        self.assertIsNone(payload["result"]["active_duplicate"])
+        self.assertIsNone(payload["result"]["resolved_match"])
+
+    def test_resident_precheck_does_not_offer_dispatch_for_an_ended_incident(self):
+        from apps.concerns.tasks import process_classification_job
+
         self.client.force_authenticate(self.resident)
 
         response = self.client.post(
@@ -453,15 +483,30 @@ class ConcernClassificationApiTests(APITestCase):
             format="multipart",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertNotIn("emergency_triage", response.data)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        with patch("apps.concerns.ai.classification.classification_payload") as classify:
+            classify.return_value = payload_from_result(
+                gemma_result(
+                    category="public_safety",
+                    urgent_attention=False,
+                    matched_emergency_type="",
+                    recommended_action="accept",
+                    incident_timing="ended",
+                    incident_timing_reason="The report says the fire was extinguished.",
+                    current_danger=False,
+                ),
+                selected_category="public_safety",
+            )
+            result = process_classification_job.run(job_id)
 
-    @patch("apps.concerns.classification_api.classification_payload")
-    def test_resident_precheck_suggests_an_active_duplicate(self, classify):
-        classify.return_value = payload_from_result(
-            gemma_result(category="vehicle", evidence_relationship="supports_report", image_review_succeeded=True),
-            selected_category="vehicle",
-        )
+        self.assertEqual(result["status"], "completed")
+        poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        self.assertNotIn("emergency_triage", poll.data["result"])
+
+    def test_resident_precheck_suggests_an_active_duplicate(self):
+        from apps.concerns.tasks import process_classification_job
         fingerprints = report_fingerprints(
             barangay="Marikina Heights",
             category="vehicle",
@@ -494,8 +539,19 @@ class ConcernClassificationApiTests(APITestCase):
             format="multipart",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        duplicate = response.data["active_duplicate"]
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        with patch("apps.concerns.ai.classification.classification_payload") as classify:
+            classify.return_value = payload_from_result(
+                gemma_result(category="vehicle", evidence_relationship="supports_report", image_review_succeeded=True),
+                selected_category="vehicle",
+            )
+            result = process_classification_job.run(job_id)
+
+        self.assertEqual(result["status"], "completed")
+        poll = self.client.get(f"/api/concerns/classification/precheck/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        duplicate = poll.data["result"]["active_duplicate"]
         self.assertIsNotNone(duplicate)
         self.assertEqual(duplicate["concern_id"], existing.pk)
         self.assertEqual(duplicate["tracking_id"], existing.tracking_id)
@@ -680,6 +736,8 @@ class ConcernClassificationApiTests(APITestCase):
     @patch("apps.concerns.classification_api._street_imagery_preview")
     def test_street_imagery_retry_uses_the_concern_community(self, street_preview):
         """A retry is a new request and must resolve its own incident community."""
+        from apps.concerns.tasks import run_street_imagery_retry_job
+
         community = self.resident.resident_profile.community
         concern = Concern.objects.create(
             reporter=self.resident,
@@ -702,13 +760,20 @@ class ConcernClassificationApiTests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["status"], "checked")
+        # Worker-only: the API enqueues, the worker runs the preview.
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data["status"], "queued")
+        result = run_street_imagery_retry_job.run(row.pk)
+        self.assertEqual(result["status"], "checked")
         street_preview.assert_called_once()
+        row.refresh_from_db()
+        self.assertEqual(row.output_snapshot["street_imagery"]["status"], "checked")
 
     @patch("apps.concerns.classification_api._street_imagery_preview")
     def test_street_imagery_retry_falls_back_to_an_allowed_community(self, street_preview):
         """Legacy rows without a community use an active scoped community."""
+        from apps.concerns.tasks import run_street_imagery_retry_job
+
         community = self.resident.resident_profile.community
         concern = Concern.objects.create(
             reporter=self.official,
@@ -731,9 +796,15 @@ class ConcernClassificationApiTests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        # Legacy row without community: the worker resolves the fallback
+        # community itself and runs the preview off the request thread.
+        self.assertEqual(response.data["status"], "queued")
+        result = run_street_imagery_retry_job.run(row.pk)
+        self.assertEqual(result["status"], "disabled")
         street_preview.assert_called_once()
-        self.assertEqual(street_preview.call_args.args[0].community_id, community.pk)
+        row.refresh_from_db()
+        self.assertEqual(row.output_snapshot["street_imagery"]["status"], "disabled")
 
 
 class ClassificationServiceStatusTests(APITestCase):

@@ -960,6 +960,11 @@ class ResidentConcernPrecheckView(APIView):
     parser_classes = [MultiPartParser]
 
     def post(self, request):
+        # Worker-only contract: this view NEVER runs Gemma/OCR/PIL/duplicate/
+        # street/forensics work. It validates intake (cheap DB reads), stores
+        # the raw uploads, creates a persistent PrecheckJob row, dispatches
+        # process_classification_job to the "heavy" queue, and returns 202.
+        # No AsyncResult.get(), no wait, no synchronous model fallback.
         if not user_has_role_permission(request.user, "concerns.create"):
             return Response({"detail": "Only residents can check reports."}, status=status.HTTP_403_FORBIDDEN)
         intake = _precheck_intake(request)
@@ -967,80 +972,125 @@ class ResidentConcernPrecheckView(APIView):
             return intake
         (selected_category, incident_community, category_ref,
          title, description, uploaded_files) = intake
-        # Async opt-in: validate + prepare locally (fast), run the model in a
-        # worker, return 202 immediately. Prepared images are Gemma-sized
-        # (~100-300KB base64) and staged briefly in cache — never raw uploads.
-        wants_async = str(request.query_params.get("async") or request.data.get("async") or "").lower() in {"1", "true"}
-        if wants_async:
-            from .precheck_jobs import create_precheck_job, stage_precheck_images
+        from django.utils import timezone as _tz
 
-            latitude = request.data.get("latitude")
-            longitude = request.data.get("longitude")
-            config = ConcernClassificationConfiguration.current(incident_community)
-            images, image_errors, prepared_indices = _prepared_images_from_uploads(uploaded_files)
-            job = create_precheck_job(
-                user_id=request.user.pk,
-                title=title,
-                description=description,
-                category=selected_category,
-                latitude=str(latitude) if latitude is not None else None,
-                longitude=str(longitude) if longitude is not None else None,
-                has_files=bool(uploaded_files),
-                params={
-                    "title": title,
-                    "description": description,
-                    "category": selected_category,
-                    "community_id": incident_community.pk if incident_community else None,
-                    "category_ref_code": category_ref.code if category_ref else None,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "photo_count": len(uploaded_files),
-                    "image_errors": image_errors,
-                    "prepared_indices": prepared_indices,
-                },
+        from .models import PrecheckJob, PrecheckJobAttachment
+
+        latitude = request.data.get("latitude")
+        longitude = request.data.get("longitude")
+        # Light request-thread gates only (no decode, no PIL, no model):
+        # bound count + per-file bytes so one multipart cannot exhaust memory.
+        if len(uploaded_files) > 3:
+            return Response({"media": ["You can attach up to 3 photos."]}, status=status.HTTP_400_BAD_REQUEST)
+        for uploaded in uploaded_files:
+            if (getattr(uploaded, "size", 0) or 0) <= 0:
+                return Response({"media": ["Attach a non-empty file."]}, status=status.HTTP_400_BAD_REQUEST)
+            if (getattr(uploaded, "size", 0) or 0) > 10 * 1024 * 1024:
+                return Response({"media": ["Photos must be 10MB or smaller."]}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+
+        import hashlib as _hashlib
+        import uuid as _uuid
+
+        dedup_raw = "|".join([
+            str(request.user.pk),
+            (title or "").strip().lower(),
+            (description or "").strip().lower(),
+            (selected_category or "").strip().lower(),
+            str(latitude or ""),
+            str(longitude or ""),
+            "1" if uploaded_files else "0",
+        ])
+        dedup_hash = _hashlib.sha256(dedup_raw.encode()).hexdigest()[:32]
+        existing = PrecheckJob.objects.filter(
+            owner=request.user, dedup_hash=dedup_hash,
+            status__in=[PrecheckJob.Status.QUEUED, PrecheckJob.Status.PROCESSING],
+        ).order_by("-created_at").first()
+        if existing is not None:
+            status_url = f"/api/concerns/classification/precheck/jobs/{existing.pk}/"
+            logger.info(
+                "precheck dispatch job_id=%s queue=heavy reused service_role=%s status=202",
+                existing.pk, getattr(settings, "SERVICE_ROLE", "api"),
             )
-            stage_precheck_images(job["job_id"], images)
+            return Response(
+                {"job_id": existing.pk, "status": existing.status, "status_url": status_url},
+                status=status.HTTP_202_ACCEPTED,
+            )
+        job_id = _uuid.uuid4().hex
+        try:
+            expires_at = _tz.now() + timedelta(hours=1)
+        except Exception:
+            expires_at = None
+        job = PrecheckJob.objects.create(
+            job_id=job_id,
+            owner=request.user,
+            status=PrecheckJob.Status.QUEUED,
+            dedup_hash=dedup_hash,
+            params={
+                "title": title,
+                "description": description,
+                "category": selected_category,
+                "community_id": incident_community.pk if incident_community else None,
+                "category_ref_code": category_ref.code if category_ref else None,
+                "latitude": latitude,
+                "longitude": longitude,
+                "photo_count": len(uploaded_files),
+            },
+            expires_at=expires_at,
+        )
+        # Store the raw upload as-is for the worker. One file at a time,
+        # never decoded/normalized here — the worker validates + PIL-resizes.
+        for uploaded in uploaded_files:
             try:
-                from .tasks import run_resident_precheck_job
-
-                run_resident_precheck_job.delay(job["job_id"])
+                uploaded.seek(0)
             except Exception:
-                if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
-                    from .tasks import run_resident_precheck_job
+                pass
+            try:
+                PrecheckJobAttachment.objects.create(
+                    job=job,
+                    file=uploaded,
+                    original_filename=getattr(uploaded, "name", "") or "",
+                    mime_type=getattr(uploaded, "content_type", "") or "",
+                    file_size=getattr(uploaded, "size", 0) or 0,
+                )
+            except Exception:
+                job.status = PrecheckJob.Status.FAILED
+                job.error_code = "stage_failed"
+                try:
+                    job.save(update_fields=["status", "error_code", "updated_at"])
+                except Exception:
+                    pass
+                return Response(
+                    {"detail": "Could not store the photos. Please try again."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+        dispatched = False
+        try:
+            from .tasks import process_classification_job
 
-                    run_resident_precheck_job.run(job["job_id"])
-            status_url = f"/api/concerns/classification/precheck/jobs/{job['job_id']}/"
-            return Response({**job, "status_url": status_url}, status=status.HTTP_202_ACCEPTED)
-        config = ConcernClassificationConfiguration.current(incident_community)
-        images, image_errors, prepared_indices = _prepared_images_from_uploads(uploaded_files)
-        result = classification_payload(
-            title=title,
-            description=description,
-            selected_category=selected_category,
-            configuration=config,
-            images=images or None,
-            image_uploaded=bool(uploaded_files),
-            text_timeout=getattr(settings, "OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", 8),
+            process_classification_job.apply_async(args=[job.pk], queue="heavy")
+            dispatched = True
+        except Exception as exc:
+            # Production: leave the row QUEUED for the recovery sweep; never
+            # run Gemma inline in Daphne. Local dev (no worker) runs inline.
+            if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                from .tasks import process_classification_job as _inline
+
+                _inline.run(job.pk)
+                dispatched = True
+            else:
+                logger.error(
+                    "precheck dispatch failed job_id=%s queue=heavy error=%s service_role=%s",
+                    job.pk, exc.__class__.__name__, getattr(settings, "SERVICE_ROLE", "api"),
+                )
+        logger.info(
+            "precheck dispatch job_id=%s queue=heavy dispatched=%s service_role=%s status=202",
+            job.pk, dispatched, getattr(settings, "SERVICE_ROLE", "api"),
         )
-        details = result.get("details") or {}
-        _ = details  # consumed inside _build_precheck_payload via result
-        payload = _build_precheck_payload(
-            result=result,
-            config=config,
-            incident_community=incident_community,
-            category_ref=category_ref,
-            selected_category=selected_category,
-            title=title,
-            description=description,
-            latitude=request.data.get("latitude"),
-            longitude=request.data.get("longitude"),
-            images=images or None,
-            image_errors=image_errors,
-            prepared_indices=prepared_indices,
-            photo_count=len(uploaded_files),
-            data=request,
+        status_url = f"/api/concerns/classification/precheck/jobs/{job.pk}/"
+        return Response(
+            {"job_id": job.pk, "status": job.status, "status_url": status_url},
+            status=status.HTTP_202_ACCEPTED,
         )
-        return Response(payload)
 
 
 class ResidentPrecheckJobStatusView(APIView):
@@ -1049,8 +1099,24 @@ class ResidentPrecheckJobStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, job_id):
+        from .models import PrecheckJob
         from .precheck_jobs import get_precheck_job
 
+        # Persistent rows first (new contract); cache fallback for legacy jobs.
+        try:
+            row = PrecheckJob.objects.filter(pk=str(job_id), owner=request.user).first()
+        except Exception:
+            row = None
+        if row is not None:
+            payload = {
+                "job_id": row.pk,
+                "status": row.status,
+                "result": row.result,
+                "error_code": row.error_code or None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            }
+            return Response(payload)
         job = get_precheck_job(str(job_id), user_id=request.user.pk)
         if job is None:
             return Response({"detail": "Unknown or expired job."}, status=status.HTTP_404_NOT_FOUND)
@@ -2166,29 +2232,36 @@ class LlmDecisionLogStreetImageryView(APIView):
                 {"detail": "This concern is not assigned to a community."},
                 status=status.HTTP_409_CONFLICT,
             )
-        media = [item for item in concern.media.all() if item.mime_type.startswith("image/")]
-        prepared_images = []
-        for item in media:
-            try:
-                with item.file.open("rb") as handle:
-                    raw = handle.read()
-            except (OSError, ValueError, NotImplementedError):
-                continue
-            prepared = prepare_image_for_gemma(raw, filename=item.original_filename, mime_type=item.mime_type)
-            if prepared is not None:
-                prepared_images.append(prepared)
+        # Worker-only: Google tiles + vision run in run_street_imagery_retry_job
+        # on the "heavy" queue. The API only validates, dispatches, and returns
+        # 202 — the worker merges the outcome into output_snapshot, which the
+        # official re-reads via the log detail endpoint. No media reads, no
+        # PIL, no model calls here.
+        try:
+            from .tasks import run_street_imagery_retry_job
 
-        config = ConcernClassificationConfiguration.current(incident_community)
-        result = _street_imagery_preview(
-            config,
-            category=concern.category,
-            latitude=concern.latitude,
-            longitude=concern.longitude,
-            images=prepared_images,
+            run_street_imagery_retry_job.apply_async(args=[row.pk], queue="heavy")
+            dispatched = True
+        except Exception as exc:
+            if getattr(settings, "IS_LOCAL_DEVELOPMENT", False):
+                from .tasks import run_street_imagery_retry_job as _inline
+
+                _inline.run(row.pk)
+                dispatched = True
+            else:
+                logger.error(
+                    "street-retry dispatch failed log_id=%s error=%s service_role=%s",
+                    row.pk, exc.__class__.__name__, getattr(settings, "SERVICE_ROLE", "api"),
+                )
+                dispatched = False
+        logger.info(
+            "street-retry dispatch log_id=%s queue=heavy dispatched=%s service_role=%s status=202",
+            row.pk, dispatched, getattr(settings, "SERVICE_ROLE", "api"),
         )
-        if result is None:
-            result = {"status": "disabled", "reason": "street_imagery_not_configured"}
-        return Response(result)
+        return Response(
+            {"log_id": row.pk, "status": "queued", "detail": "Street-view retry queued. Re-read this log entry for the result."},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class CommunityModerationSimulationView(APIView):

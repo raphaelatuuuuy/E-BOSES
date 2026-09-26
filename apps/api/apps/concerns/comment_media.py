@@ -55,8 +55,12 @@ def _representative_video_frame(raw: bytes, filename: str) -> bytes | None:
                 pass
 
 
-def compare_comment_image_to_concern_pin(*, concern, raw: bytes, filename: str, mime_type: str) -> dict:
-    """Compare a sent comment image with the concern pin; absence never blocks posting."""
+def _comment_street_fast_status(*, concern) -> dict | None:
+    """Pure-config gates for the comment street check (no I/O, no model).
+
+    Returns a terminal status when the check can never apply, else None
+    meaning "needs the worker" (PIL + Google tiles + vision).
+    """
     config = ConcernClassificationConfiguration.current(concern.community)
     if not config.street_imagery_enabled:
         return {"status": "disabled"}
@@ -64,6 +68,19 @@ def compare_comment_image_to_concern_pin(*, concern, raw: bytes, filename: str, 
         return {"status": "not_applicable", "reason": "category_not_enabled"}
     if concern.latitude is None or concern.longitude is None:
         return {"status": "skipped", "reason": "concern_has_no_pin"}
+    return None
+
+
+def compare_comment_image_to_concern_pin(*, concern, raw: bytes, filename: str, mime_type: str) -> dict:
+    """Compare a sent comment image with the concern pin; absence never blocks posting.
+
+    NOTE: worker-only. The request thread must not call this (Google tiles +
+    vision); it stores ``pending`` and dispatches ``run_comment_street_check_job``.
+    Kept for the worker and for tests.
+    """
+    fast = _comment_street_fast_status(concern=concern)
+    if fast is not None:
+        return fast
     prepared = prepare_image_for_gemma(raw, filename=filename, mime_type=mime_type)
     if prepared is None:
         return {"status": "skipped", "reason": "image_unreadable"}
@@ -98,24 +115,23 @@ def compare_comment_image_to_concern_pin(*, concern, raw: bytes, filename: str, 
 def create_public_comment_attachment(*, uploaded_file, parent_field: str, parent, concern=None):
     validated, mime_type, kind, authenticity, detail = validate_concern_chat_attachment(uploaded_file)
     raw = _read_file(validated)
+    # Worker-only street check: fast config gates stay inline (no I/O), but
+    # Google tiles + vision never run in the comment POST. Applicable cases
+    # store "pending" and the heavy worker fills in the verdict.
     street_imagery = {}
+    needs_street_worker = False
     if concern is not None:
-        comparison_raw = raw
-        comparison_name = getattr(uploaded_file, "name", "attachment")
-        comparison_mime = mime_type
-        if kind == PublicCommentAttachment.Kind.VIDEO:
-            comparison_raw = _representative_video_frame(raw, comparison_name)
-            comparison_name = f"{Path(comparison_name).stem}-frame.jpg"
-            comparison_mime = "image/jpeg"
-        if comparison_raw:
-            street_imagery = compare_comment_image_to_concern_pin(
-                concern=concern,
-                raw=comparison_raw,
-                filename=comparison_name,
-                mime_type=comparison_mime,
-            )
+        fast = _comment_street_fast_status(concern=concern)
+        if fast is not None:
+            street_imagery = fast
+        elif kind == PublicCommentAttachment.Kind.VIDEO:
+            # Video frame extraction (cv2) is also CPU work for the worker;
+            # mark pending and let it extract + compare from stored bytes.
+            street_imagery = {"status": "pending"}
+            needs_street_worker = True
         else:
-            street_imagery = {"status": "skipped", "reason": "video_frame_unavailable"}
+            street_imagery = {"status": "pending"}
+            needs_street_worker = True
 
     status = {
         "clear": PublicCommentAttachment.AnalysisStatus.COMPLETE,
@@ -136,6 +152,30 @@ def create_public_comment_attachment(*, uploaded_file, parent_field: str, parent
     preview = build_redacted_preview_bytes(ContentFile(raw), mime_type)
     suffix = Path(attachment.original_filename).stem[:80] or "attachment"
     attachment.preview_file.save(f"{suffix}-protected.jpg", ContentFile(preview), save=True)
+    if needs_street_worker and concern is not None:
+        try:
+            from django.conf import settings as _settings
+
+            from .tasks import run_comment_street_check_job
+
+            run_comment_street_check_job.apply_async(
+                args=[attachment.pk, concern.pk], queue="heavy"
+            )
+            import logging as _logging
+
+            _logging.getLogger(__name__).info(
+                "comment-street dispatch attachment_id=%s concern_id=%s queue=heavy service_role=%s",
+                attachment.pk, concern.pk, getattr(_settings, "SERVICE_ROLE", "api"),
+            )
+        except Exception:
+            from django.conf import settings as _settings
+
+            if getattr(_settings, "IS_LOCAL_DEVELOPMENT", False):
+                from .tasks import run_comment_street_check_job
+
+                run_comment_street_check_job.run(attachment.pk, concern.pk)
+            # Production: stays "pending" for the recovery sweep; never fetch
+            # tiles/vision inline in the comment POST.
     return attachment
 
 

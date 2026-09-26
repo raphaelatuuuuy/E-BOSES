@@ -1357,3 +1357,61 @@ class SystemBanner(models.Model):
             if banner.is_live(now):
                 return banner
         return None
+
+
+class PrecheckJob(models.Model):
+    """Persistent async job for the resident classification precheck.
+
+    The API request only validates intake, stores the raw uploads below,
+    creates this row, and dispatches ``process_classification_job`` to the
+    ``heavy`` queue. All Gemma/OCR/PIL/duplicate/street work happens in the
+    worker, so the web process never grows from model payloads.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    job_id = models.CharField(max_length=32, primary_key=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="precheck_jobs"
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
+    # Hash of user+title+description+category+lat+lng+has_files for idempotent
+    # re-taps: repeats while queued/processing return the same job.
+    dedup_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    params = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(null=True, blank=True)
+    error_code = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["owner", "status"], name="precheck_job_owner")]
+
+    def __str__(self):
+        return f"precheck {self.job_id} ({self.status})"
+
+
+class PrecheckJobAttachment(models.Model):
+    """Raw (un-normalized) upload staged for a PrecheckJob worker run.
+
+    Stored via PrivateMediaStorage (Cloudinary ``authenticated`` in
+    production, local disk otherwise) so uploads survive web restarts —
+    unlike the previous cache-staged prepared images. The worker reads,
+    validates, and PIL-normalizes these; the API never decodes them.
+    """
+
+    job = models.ForeignKey(PrecheckJob, on_delete=models.CASCADE, related_name="attachments")
+    file = models.FileField(storage=PrivateMediaStorage(), upload_to="raw/precheck-staging/%Y/%m/")
+    original_filename = models.CharField(max_length=255, blank=True)
+    mime_type = models.CharField(max_length=120, blank=True)
+    file_size = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]

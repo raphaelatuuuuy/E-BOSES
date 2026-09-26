@@ -146,6 +146,7 @@ class BeatScheduleTests(TestCase):
         "service-health-worker-heartbeat",
         "complete-unblocked-deletions",
         "retry-pending-concern-jobs",
+        "retry-pending-precheck-jobs",
         "enforce-retention-limits",
     }
 

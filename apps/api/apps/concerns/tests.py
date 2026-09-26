@@ -465,7 +465,7 @@ class ResidentDashboardAPITests(APITestCase):
             department=receiving_department,
         )
 
-        with patch("apps.concerns.classification_api.classification_payload") as classify:
+        with patch("apps.concerns.ai.classification.classification_payload") as classify:
             classify.return_value = payload_from_result(
                 gemma_result(category="infrastructure"),
                 selected_category="infrastructure",
@@ -480,10 +480,18 @@ class ResidentDashboardAPITests(APITestCase):
                 },
                 format="multipart",
             )
+            self.assertEqual(precheck.status_code, status.HTTP_202_ACCEPTED)
+            from apps.concerns.tasks import process_classification_job
 
-        self.assertEqual(precheck.status_code, status.HTTP_200_OK)
-        self.assertTrue(precheck.data["can_submit"])
-        self.assertEqual(precheck.data["category"], "infrastructure")
+            result = process_classification_job.run(precheck.data["job_id"])
+            self.assertEqual(result["status"], "completed")
+            poll = self.client.get(
+                f"/api/concerns/classification/precheck/jobs/{precheck.data['job_id']}/"
+            )
+
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        self.assertTrue(poll.data["result"]["can_submit"])
+        self.assertEqual(poll.data["result"]["category"], "infrastructure")
 
         with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
             response = self.client.post(
@@ -1229,9 +1237,19 @@ class ResidentDashboardAPITests(APITestCase):
 
     @patch("apps.concerns.comment_media.compare_comment_image_to_concern_pin")
     def test_comment_media_is_checked_only_when_comment_is_sent(self, compare_pin):
+        from apps.concerns.models import ConcernClassificationConfiguration
+        from apps.concerns.tasks import run_comment_street_check_job
+        from apps.emergencies.models import Community
+
         compare_pin.return_value = {"status": "checked", "verdict": "same_area"}
+        community = Community.objects.filter(status=Community.Status.ACTIVE).order_by("pk").first()
+        config = ConcernClassificationConfiguration.current(community)
+        config.street_imagery_enabled = True
+        config.street_imagery_categories = [Concern.Category.OTHERS]
+        config.save(update_fields=["street_imagery_enabled", "street_imagery_categories"])
         concern = Concern.objects.create(
             reporter=self.other,
+            community=community,
             title="Community concern with added evidence",
             visibility=Concern.Visibility.COMMUNITY,
             validation_status=Concern.ValidationStatus.ACCEPTED,
@@ -1245,8 +1263,14 @@ class ResidentDashboardAPITests(APITestCase):
             format="multipart",
         )
 
+        # Worker-only street check: the POST stores pending, never fetches.
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         attachment = PublicCommentAttachment.objects.get(concern_comment_id=response.data["id"])
+        self.assertEqual(attachment.street_imagery["status"], "pending")
+        compare_pin.assert_not_called()
+        result = run_comment_street_check_job.run(attachment.pk, concern.pk)
+        self.assertEqual(result["status"], "checked")
+        attachment.refresh_from_db()
         self.assertEqual(attachment.street_imagery["verdict"], "same_area")
         self.assertTrue(response.data["attachment"]["preview_url"].endswith("/preview/"))
         compare_pin.assert_called_once()

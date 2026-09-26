@@ -1445,11 +1445,14 @@ def queue_user_verification(user, *, trigger=VerificationCheck.Trigger.REGISTRAT
     case_id = case.pk
 
     def kick_off():
-        # Registration must not leave residents stuck on "queued" when no Celery
-        # worker is running (common in local/dev). Process inline first; fall
-        # back to the broker only if inline processing cannot start.
-        if trigger == VerificationCheck.Trigger.REGISTRATION or getattr(
-            settings, "CELERY_TASK_ALWAYS_EAGER", False
+        # Worker-only: the full verification pipeline (vision integrity
+        # gate, OpenCV deskew/enhance, OCR.space, EasyOCR fallback) never
+        # runs on the request thread. Enqueue first; inline only where no
+        # worker exists (local dev/tests — Celery eager executes inline
+        # automatically there). On broker failure enqueue_case marks the
+        # case manual-review + retry-eligible instead of hanging signup.
+        if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(
+            settings, "IS_LOCAL_DEVELOPMENT", False
         ):
             try:
                 process_verification_case(case_id, trigger=trigger)
@@ -1460,17 +1463,24 @@ def queue_user_verification(user, *, trigger=VerificationCheck.Trigger.REGISTRAT
                     case_id,
                     exc.__class__.__name__,
                 )
-        enqueue_case(case_id, trigger=trigger)
+        queued = enqueue_case(case_id, trigger=trigger)
+        logger.info(
+            "OCR dispatch case_id=%s queue=heavy trigger=%s dispatched=%s service_role=%s",
+            case_id, trigger, queued is not None,
+            getattr(settings, "SERVICE_ROLE", "api"),
+        )
 
     transaction.on_commit(kick_off)
     return case
 
 
 def process_stuck_user_case(user):
-    """If a resident is stuck in queued/processing, run OCR once (self-heal).
+    """If a resident is stuck in queued/processing, re-enqueue OCR (self-heal).
 
     Used by the account-pending poll endpoint so cases do not wait forever when
-    the worker never picked up the task.
+    the worker never picked up the task. Worker-only: the full OCR pipeline
+    never runs in the poll request — the case is requeued and the client keeps
+    polling; the heavy worker plus the stuck-case rescue sweep complete it.
     """
     case = (
         ResidenceVerificationCase.objects.filter(user=user)
@@ -1491,7 +1501,17 @@ def process_stuck_user_case(user):
         if case.processing_started_at > timezone.now() - timedelta(minutes=2):
             return case
     try:
-        return process_verification_case(case.pk, trigger=VerificationCheck.Trigger.REGISTRATION)
+        if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(
+            settings, "IS_LOCAL_DEVELOPMENT", False
+        ):
+            return process_verification_case(case.pk, trigger=VerificationCheck.Trigger.REGISTRATION)
+        queued = enqueue_case(case.pk, trigger=VerificationCheck.Trigger.REGISTRATION)
+        logger.info(
+            "OCR stuck-case requeue case_id=%s queue=heavy dispatched=%s service_role=%s",
+            case.pk, queued is not None,
+            getattr(settings, "SERVICE_ROLE", "api"),
+        )
+        return case
     except Exception as exc:
         logger.warning(
             "Stuck-case recovery failed for case_id=%s: %s",

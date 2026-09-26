@@ -639,6 +639,62 @@ def retry_pending_concern_jobs_task():
     return requeued
 
 
+@shared_task(time_limit=120, soft_time_limit=90)
+def retry_pending_precheck_jobs_task():
+    """Requeue persistent precheck/comment-street work orphaned mid-flight.
+
+    The API never runs these inline, so a broker gap or dead worker would
+    otherwise leave rows QUEUED/PROCESSING (or attachments "pending")
+    forever. Idempotent: the tasks skip completed work, so a race with a
+    live worker collapses into a no-op.
+    """
+    from .models import PrecheckJob, PublicCommentAttachment
+
+    stale_before = timezone.now() - RECOVERY_STALE_AFTER
+    requeued = {"prechecks": 0, "comment_street": 0}
+
+    stale_jobs = list(
+        PrecheckJob.objects.filter(
+            status__in=[PrecheckJob.Status.QUEUED, PrecheckJob.Status.PROCESSING],
+            updated_at__lt=stale_before,
+        ).values_list("pk", flat=True)[:50]
+    )
+    for job_id in stale_jobs:
+        try:
+            process_classification_job.delay(job_id)
+            requeued["prechecks"] += 1
+        except Exception:
+            break
+
+    stale_attachments = list(
+        PublicCommentAttachment.objects.filter(
+            street_imagery__status="pending",
+            concern_comment__isnull=False,
+        ).values_list("pk", "concern_comment__concern_id")[:50]
+    )
+    for attachment_id, _concern_id in stale_attachments:
+        try:
+            attachment = PublicCommentAttachment.objects.select_related(
+                "concern_comment__concern",
+                "emergency_comment",
+            ).filter(pk=attachment_id).first()
+            if attachment is None:
+                continue
+            concern_id = None
+            if attachment.concern_comment_id and attachment.concern_comment.concern_id:
+                concern_id = attachment.concern_comment.concern_id
+            if concern_id is None:
+                continue
+            run_comment_street_check_job.delay(attachment_id, concern_id)
+            requeued["comment_street"] += 1
+        except Exception:
+            break
+
+    if any(requeued.values()):
+        logger.info("Recovery sweep requeued precheck jobs: %s", requeued)
+    return requeued
+
+
 @shared_task(
     bind=True,
     acks_late=True,
@@ -829,3 +885,388 @@ def run_resident_precheck_job(self, job_id: str):
         logger.warning("Precheck job %s failed: %s", job_id, exc.__class__.__name__)
         mark_failed(job_id, exc.__class__.__name__)
         return {"job_id": job_id, "status": "failed"}
+
+
+def _worker_identity() -> tuple[str, str]:
+    """(hostname, service_role) for worker logs, never raises."""
+    import socket
+
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = "unknown"
+    try:
+        role = getattr(settings, "SERVICE_ROLE", "prod-heavy")
+    except Exception:
+        role = "prod-heavy"
+    return hostname, role
+
+
+@shared_task(
+    bind=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(OSError, TimeoutError),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 2},
+    time_limit=240,
+    soft_time_limit=180,
+)
+def run_comment_street_check_job(self, attachment_id: int, concern_id: int):
+    """Comment-image street comparison worker — tiles + vision off the POST.
+
+    Comment uploads store ``street_imagery={"status": "pending"}`` and this
+    task fills in the verdict from stored bytes, so Google tile downloads,
+    cv2 frame extraction, PIL prep and the vision call never run in Daphne.
+    """
+    import time
+
+    hostname, service_role = _worker_identity()
+    started = time.monotonic()
+    logger.info(
+        "Comment-street worker start attachment_id=%s concern_id=%s hostname=%s service_role=%s",
+        attachment_id, concern_id, hostname, service_role,
+    )
+    try:
+        from .comment_media import _representative_video_frame, compare_comment_image_to_concern_pin
+        from .models import Concern, PublicCommentAttachment
+
+        attachment = PublicCommentAttachment.objects.filter(pk=attachment_id).first()
+        concern = Concern.objects.filter(pk=concern_id).first()
+        if attachment is None or concern is None:
+            logger.warning(
+                "Comment-street worker missing attachment_id=%s concern_id=%s hostname=%s service_role=%s",
+                attachment_id, concern_id, hostname, service_role,
+            )
+            return {"attachment_id": attachment_id, "status": "failed", "error": "not_found"}
+        if (attachment.street_imagery or {}).get("status") != "pending":
+            return {"attachment_id": attachment_id, "status": (attachment.street_imagery or {}).get("status", "unknown")}
+        try:
+            with attachment.file.open("rb") as handle:
+                raw = handle.read()
+        except Exception:
+            attachment.street_imagery = {"status": "skipped", "reason": "stored_file_unreadable"}
+            attachment.save(update_fields=["street_imagery"])
+            return {"attachment_id": attachment_id, "status": "skipped"}
+        name = attachment.original_filename or "attachment"
+        mime = attachment.mime_type or "application/octet-stream"
+        if attachment.kind == PublicCommentAttachment.Kind.VIDEO:
+            frame = _representative_video_frame(raw, name)
+            if not frame:
+                attachment.street_imagery = {"status": "skipped", "reason": "video_frame_unavailable"}
+                attachment.save(update_fields=["street_imagery"])
+                return {"attachment_id": attachment_id, "status": "skipped"}
+            raw, name, mime = frame, f"{name}-frame.jpg", "image/jpeg"
+        result = compare_comment_image_to_concern_pin(
+            concern=concern, raw=raw, filename=name, mime_type=mime
+        )
+        attachment.street_imagery = result
+        attachment.save(update_fields=["street_imagery"])
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.info(
+            "Comment-street worker done attachment_id=%s status=%s duration_ms=%d hostname=%s service_role=%s",
+            attachment_id, result.get("status"), duration_ms, hostname, service_role,
+        )
+        return {"attachment_id": attachment_id, "status": result.get("status", "unknown")}
+    except Exception as exc:  # noqa: BLE001
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.warning(
+            "Comment-street worker failed attachment_id=%s error=%s duration_ms=%d hostname=%s service_role=%s",
+            attachment_id, exc.__class__.__name__, duration_ms, hostname, service_role,
+        )
+        return {"attachment_id": attachment_id, "status": "failed"}
+
+
+@shared_task(
+    bind=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(OSError, TimeoutError),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 2},
+    time_limit=120,
+    soft_time_limit=90,
+)
+def process_classification_job(self, job_id: str):
+    """Persistent resident precheck worker — the ONLY place precheck AI runs.
+
+    The API only stores raw uploads + creates the ``PrecheckJob`` row, then
+    calls ``process_classification_job.apply_async(args=[job_id],
+    queue="heavy")``. This task does every heavy step: PIL normalization,
+    ``classification_payload`` (Gemma/Ollama), duplicate feedback, street
+    imagery, resolved-match — then persists the payload on the row.
+
+    Never called from a view synchronously; never blocks Daphne.
+    """
+    import time
+
+    hostname, service_role = _worker_identity()
+    started = time.monotonic()
+    logger.info(
+        "Precheck worker start job_id=%s hostname=%s service_role=%s",
+        job_id, hostname, service_role,
+    )
+    from django.db.models import Q
+
+    from .models import ConcernCategory, ConcernClassificationConfiguration, PrecheckJob
+
+    try:
+        job = PrecheckJob.objects.prefetch_related("attachments").filter(pk=job_id).first()
+    except Exception:
+        job = None
+    if job is None:
+        logger.warning(
+            "Precheck worker unknown job_id=%s hostname=%s service_role=%s",
+            job_id, hostname, service_role,
+        )
+        return {"job_id": job_id, "status": "failed", "error": "unknown_job"}
+    if job.status == PrecheckJob.Status.COMPLETED:
+        logger.info(
+            "Precheck worker already done job_id=%s hostname=%s service_role=%s",
+            job_id, hostname, service_role,
+        )
+        return {"job_id": job_id, "status": "completed"}
+    job.status = PrecheckJob.Status.PROCESSING
+    try:
+        job.save(update_fields=["status", "updated_at"])
+    except Exception:
+        pass
+    try:
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from .ai.classification import classification_payload
+        from .classification_api import _build_precheck_payload
+
+        params = job.params or {}
+        community = None
+        community_id = params.get("community_id")
+        if community_id:
+            from apps.emergencies.models import Community
+
+            community = Community.objects.filter(
+                pk=community_id, status=Community.Status.ACTIVE
+            ).first()
+        config = ConcernClassificationConfiguration.current(community)
+        category_ref = None
+        ref_code = params.get("category_ref_code")
+        if ref_code:
+            category_ref = ConcernCategory.objects.filter(
+                code=ref_code, is_active=True
+            ).filter(Q(community=community) | Q(community__isnull=True)).first()
+        title = params.get("title", "")
+        description = params.get("description", "")
+        latitude = params.get("latitude")
+        longitude = params.get("longitude")
+        photo_count = int(params.get("photo_count") or 0)
+
+        # Heavy image work lives HERE, never in the API: read raw staged
+        # files from storage, validate, PIL-normalize for Gemma.
+        from apps.accounts.services import validate_concern_media_file
+        from apps.concerns.ai.image_prep import prepare_image_for_gemma
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        images, image_errors, prepared_indices = [], {}, []
+        attachments = list(job.attachments.all().order_by("id"))
+        for index, attachment in enumerate(attachments):
+            try:
+                with attachment.file.open("rb") as handle:
+                    raw = handle.read()
+            except Exception:
+                image_errors[index] = "unreadable"
+                continue
+            rebuilt = SimpleUploadedFile(
+                attachment.original_filename or "upload",
+                raw,
+                content_type=attachment.mime_type or "application/octet-stream",
+            )
+            try:
+                validate_concern_media_file(rebuilt)
+            except DjangoValidationError:
+                image_errors[index] = "rejected"
+                continue
+            except Exception:
+                image_errors[index] = "unreadable"
+                continue
+            try:
+                rebuilt.seek(0)
+            except Exception:
+                pass
+            prepared = prepare_image_for_gemma(
+                raw,
+                filename=attachment.original_filename or "",
+                mime_type=attachment.mime_type or "",
+            )
+            if prepared is not None:
+                images.append(prepared)
+                prepared_indices.append(index)
+            else:
+                image_errors[index] = "unreadable"
+
+        result = classification_payload(
+            title=title,
+            description=description,
+            selected_category=params.get("category", ""),
+            configuration=config,
+            images=images or None,
+            image_uploaded=photo_count > 0,
+            text_timeout=getattr(settings, "OLLAMA_PRECHECK_TEXT_TIMEOUT_SECONDS", 8),
+        )
+        payload = _build_precheck_payload(
+            result=result,
+            config=config,
+            incident_community=community,
+            category_ref=category_ref,
+            selected_category=params.get("category", ""),
+            title=title,
+            description=description,
+            latitude=latitude,
+            longitude=longitude,
+            images=images or None,
+            image_errors=image_errors,
+            prepared_indices=prepared_indices,
+            photo_count=photo_count,
+            data={"title": title, "description": description,
+                  "latitude": latitude, "longitude": longitude},
+        )
+        payload["automated_check_completed"] = True
+        payload["requires_review"] = False
+        job.status = PrecheckJob.Status.COMPLETED
+        job.result = payload
+        job.error_code = ""
+        try:
+            job.save(update_fields=["status", "result", "error_code", "updated_at"])
+        except Exception:
+            pass
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.info(
+            "Precheck worker done job_id=%s status=completed duration_ms=%d hostname=%s service_role=%s",
+            job_id, duration_ms, hostname, service_role,
+        )
+        return {"job_id": job_id, "status": "completed"}
+    except Exception as exc:  # noqa: BLE001 — fail safe, never 500 the poller
+        try:
+            job.status = PrecheckJob.Status.FAILED
+            job.result = {
+                "can_submit": True,
+                "automated_check_completed": False,
+                "requires_review": True,
+            }
+            job.error_code = exc.__class__.__name__
+            job.save(update_fields=["status", "result", "error_code", "updated_at"])
+        except Exception:
+            pass
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.warning(
+            "Precheck worker done job_id=%s status=failed error=%s duration_ms=%d hostname=%s service_role=%s",
+            job_id, exc.__class__.__name__, duration_ms, hostname, service_role,
+        )
+        return {"job_id": job_id, "status": "failed"}
+
+
+@shared_task(
+    bind=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(OSError, TimeoutError),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 2},
+    time_limit=240,
+    soft_time_limit=180,
+)
+def run_street_imagery_retry_job(self, log_id: int):
+    """Street-view retry worker — Google tiles + vision never run in Daphne.
+
+    Reads stored concern media from object storage, runs
+    ``_street_imagery_preview`` (fetch + ``verify_street_context``), and merges
+    the outcome into ``LlmDecisionLog.output_snapshot["street_imagery"]`` so
+    officials can poll the log row instead of holding a request open.
+    """
+    import time
+
+    hostname, service_role = _worker_identity()
+    started = time.monotonic()
+    logger.info(
+        "Street retry worker start log_id=%s hostname=%s service_role=%s",
+        log_id, hostname, service_role,
+    )
+    try:
+        from .classification_api import _street_imagery_preview
+        from .ai.image_prep import prepare_image_for_gemma
+        from .models import ConcernClassificationConfiguration, LlmDecisionLog
+
+        row = (
+            LlmDecisionLog.objects.select_related("concern", "concern__community")
+            .prefetch_related("concern__media")
+            .filter(pk=log_id)
+            .first()
+        )
+        if row is None or not row.concern_id or not row.concern:
+            logger.warning(
+                "Street retry worker unknown log_id=%s hostname=%s service_role=%s",
+                log_id, hostname, service_role,
+            )
+            return {"log_id": log_id, "status": "failed", "error": "unknown_log"}
+        concern = row.concern
+        incident_community = concern.community
+        if incident_community is None:
+            # Legacy audit rows can predate community assignment. Resolve
+            # data-driven (barangay match, then first active) — mirrors the
+            # old inline fallback, but inside the worker, never in Daphne.
+            from apps.emergencies.models import Community as _Community
+
+            active = _Community.objects.filter(status=_Community.Status.ACTIVE)
+            barangay = (getattr(concern, "barangay", "") or "").strip()
+            if barangay:
+                incident_community = active.filter(name__iexact=barangay).first()
+            if incident_community is None:
+                incident_community = active.order_by("name").first()
+        if incident_community is None:
+            logger.warning(
+                "Street retry worker no community log_id=%s hostname=%s service_role=%s",
+                log_id, hostname, service_role,
+            )
+            return {"log_id": log_id, "status": "failed", "error": "no_community"}
+        prepared_images = []
+        for item in concern.media.all():
+            if not (item.mime_type or "").startswith("image/"):
+                continue
+            try:
+                with item.file.open("rb") as handle:
+                    raw = handle.read()
+            except Exception:
+                continue
+            prepared = prepare_image_for_gemma(
+                raw, filename=item.original_filename, mime_type=item.mime_type
+            )
+            if prepared is not None:
+                prepared_images.append(prepared)
+        config = ConcernClassificationConfiguration.current(incident_community)
+        result = _street_imagery_preview(
+            config,
+            category=concern.category,
+            latitude=concern.latitude,
+            longitude=concern.longitude,
+            images=prepared_images,
+        )
+        if result is None:
+            result = {"status": "disabled", "reason": "street_imagery_not_configured"}
+        snapshot = dict(row.output_snapshot or {})
+        snapshot["street_imagery"] = result
+        row.output_snapshot = snapshot
+        try:
+            row.save(update_fields=["output_snapshot"])
+        except Exception:
+            pass
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.info(
+            "Street retry worker done log_id=%s status=%s duration_ms=%d hostname=%s service_role=%s",
+            log_id, result.get("status"), duration_ms, hostname, service_role,
+        )
+        return {"log_id": log_id, "status": result.get("status", "unknown")}
+    except Exception as exc:  # noqa: BLE001
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.warning(
+            "Street retry worker failed log_id=%s error=%s duration_ms=%d hostname=%s service_role=%s",
+            log_id, exc.__class__.__name__, duration_ms, hostname, service_role,
+        )
+        return {"log_id": log_id, "status": "failed"}

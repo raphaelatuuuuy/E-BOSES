@@ -1105,9 +1105,17 @@ def _enqueue_media_check_job(*, owner, media_files, forensics_only, community_id
     if throttled or job is None:
         return None
     try:
+        from django.conf import settings as _settings
+
         from .tasks import run_media_check_job
 
-        run_media_check_job.delay(job["job_id"])
+        run_media_check_job.apply_async(args=[job["job_id"]], queue="heavy")
+        import logging as _logging
+
+        _logging.getLogger(__name__).info(
+            "media-check dispatch job_id=%s queue=heavy service_role=%s status=202",
+            job["job_id"], getattr(_settings, "SERVICE_ROLE", "api"),
+        )
     except Exception:
         from django.conf import settings as _settings
 
@@ -1115,6 +1123,8 @@ def _enqueue_media_check_job(*, owner, media_files, forensics_only, community_id
             from .tasks import run_media_check_job
 
             run_media_check_job.run(job["job_id"])
+        # Production: leave the row QUEUED for the worker; never run
+        # Gemma/forensics inline in Daphne.
     return job
 
 
@@ -1138,7 +1148,10 @@ class ConcernMediaCheckView(APIView):
         size_gate = _media_check_size_gate(media_files)
         if size_gate is not None:
             return size_gate
-        if _wants_async_check(request):
+        # Worker-only AI: any check that needs the model is enqueued and
+        # answered 202 — Gemma/forensics/vision never run in Daphne. The
+        # cheap forensics-only path (no model) may still answer inline.
+        if not _is_forensics_only(request) or _wants_async_check(request):
             owner = f"user:{request.user.pk}"
             job = _enqueue_media_check_job(
                 owner=owner,
@@ -1209,7 +1222,9 @@ class GuestConcernMediaCheckView(APIView):
         size_gate = _media_check_size_gate(media_files)
         if size_gate is not None:
             return size_gate
-        if _wants_async_check(request):
+        # Same worker-only rule as the resident check: model work is
+        # enqueued; only the cheap forensics-only probe answers inline.
+        if not _is_forensics_only(request) or _wants_async_check(request):
             owner = _guest_check_owner(request)
             job = _enqueue_media_check_job(
                 owner=owner,

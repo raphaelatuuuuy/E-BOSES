@@ -7,6 +7,8 @@ and the geography a stranger on the landing page is allowed to see.
 import html
 import logging
 import math
+import threading
+import time
 from datetime import timedelta
 
 import httpx
@@ -37,6 +39,11 @@ COMMUNITY_REQUEST_RECIPIENT = "eboses@gmail.com"
 NETWORK_FALLBACK_CENTER = {"latitude": 14.5995, "longitude": 120.9842, "zoom": 12}
 SOS_SMS_NUMBER = "09640746068"
 OFFLINE_SOS_CONFIG_VERSION = 3
+_OFFLINE_SOS_CACHE_KEY = "public:offline-sos-config:v3"
+_OFFLINE_SOS_CACHE_SECONDS = 300
+_OFFLINE_SOS_LOCAL_SECONDS = 60
+_offline_sos_local = {"payload": None, "expires": 0.0}
+_offline_sos_lock = threading.Lock()
 
 CLOSED_EMERGENCY_STATUSES = (
     EmergencyAlert.Status.RESOLVED,
@@ -455,21 +462,14 @@ class PublicStreetViewCoverageView(APIView):
         if cached is not None:
             return Response(cached)
 
-        # Distributed generation lock: concurrent misses for the same grid
-        # cell share one upstream panorama search instead of stampeding the
-        # provider (mirrors the image endpoint below).
-        import time as _time
-
+        # No sleep-spin: a contended lock returns a cheap unknown instead of
+        # holding the Daphne thread up to 8s. The client retries; the holder
+        # fills the cache. Tile downloads never happen on this path (search
+        # only), keeping the request bounded.
         lock_key = f"{cache_key}:lock"
         locked = cache.add(lock_key, True, 60)
         if not locked:
-            deadline = _time.perf_counter() + 8.0
-            while _time.perf_counter() < deadline:
-                _time.sleep(0.2)
-                cached = cache.get(cache_key)
-                if cached is not None:
-                    return Response(cached)
-            locked = cache.add(lock_key, True, 60)
+            return Response({"status": "unknown", "retry": True})
         try:
             panorama = nearest_street_panorama(
                 latitude=latitude,
@@ -622,29 +622,36 @@ class PublicStreetViewImageView(APIView):
                 {"detail": "A valid latitude and longitude are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        wants_async = str(
-            request.query_params.get("async") or ""
-        ).lower() in {"1", "true"}
-        if wants_async:
-            # Never download tiles on the request thread: serve cache, else
-            # enqueue one generation and answer pending. The client polls this
-            # same URL; the queued marker keeps polls from stampeding tasks.
-            cache_key = f"public:street-view-image:v5:{latitude:.4f}:{longitude:.4f}"
-            cached = cache.get(cache_key)
-            if cached is not None:
-                return Response(cached)
-            if cache.add(f"{cache_key}:queued", True, 180):
-                try:
-                    from .tasks import generate_street_view_task
+        # Worker-only tile work: serve cache, else enqueue one generation and
+        # answer pending. Tile downloads, PIL stitching, base64 and Cloudinary
+        # upload NEVER run on the request thread — the client polls this same
+        # URL (status_url); the queued marker keeps polls from stampeding tasks.
+        # The legacy ?async=1 flag is accepted but no longer required: every
+        # miss behaves async.
+        cache_key = f"public:street-view-image:v5:{latitude:.4f}:{longitude:.4f}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+        if cache.add(f"{cache_key}:queued", True, 180):
+            try:
+                from .tasks import generate_street_view_task
 
-                    generate_street_view_task.delay(float(latitude), float(longitude))
-                except Exception:
-                    cache.delete(f"{cache_key}:queued")
-            payload = get_or_fetch_street_view_image(latitude, longitude, exclusive=True)
-            if payload.get("status") == "pending":
-                payload = {**payload, "status_url": request.build_absolute_uri(request.get_full_path())}
-            return Response(payload)
-        return Response(get_or_fetch_street_view_image(latitude, longitude))
+                generate_street_view_task.apply_async(
+                    args=[float(latitude), float(longitude)], queue="heavy"
+                )
+                logger.info(
+                    "street-view dispatch lat=%.5f lng=%.5f queue=heavy service_role=%s status=202",
+                    latitude, longitude, getattr(settings, "SERVICE_ROLE", "api"),
+                )
+            except Exception as exc:
+                cache.delete(f"{cache_key}:queued")
+                logger.warning(
+                    "street-view dispatch failed lat=%.5f lng=%.5f error=%s service_role=%s",
+                    latitude, longitude, exc.__class__.__name__,
+                    getattr(settings, "SERVICE_ROLE", "api"),
+                )
+        payload = {"status": "pending", "status_url": request.build_absolute_uri(request.get_full_path())}
+        return Response(payload, status=status.HTTP_202_ACCEPTED)
 
 
 def _offline_path(geometry, bounds):
@@ -772,10 +779,18 @@ class PublicOfflineSosConfigView(APIView):
     authentication_classes = []
 
     def get(self, request):
-        payload = cache.get("public:offline-sos-config:v3")
-        if payload is None:
-            payload = build_offline_sos_config()
-            cache.set("public:offline-sos-config:v3", payload, 300)
+        now = time.monotonic()
+        payload = _offline_sos_local["payload"]
+        if payload is None or now >= _offline_sos_local["expires"]:
+            with _offline_sos_lock:
+                payload = _offline_sos_local["payload"]
+                if payload is None or time.monotonic() >= _offline_sos_local["expires"]:
+                    payload = cache.get(_OFFLINE_SOS_CACHE_KEY)
+                    if payload is None:
+                        payload = build_offline_sos_config()
+                        cache.set(_OFFLINE_SOS_CACHE_KEY, payload, _OFFLINE_SOS_CACHE_SECONDS)
+                    _offline_sos_local["payload"] = payload
+                    _offline_sos_local["expires"] = time.monotonic() + _OFFLINE_SOS_LOCAL_SECONDS
         return Response(payload)
 
 # PSA geography, not a business rule: these seventeen local government units

@@ -166,6 +166,12 @@ def generate_emergency_media_preview_task(kind: str, media_id: int):
         media = EmergencyChatAttachment.objects.filter(pk=media_id).first()
         if not media or media.media_type != "image":
             return {"media_id": media_id, "skipped": True}
+    elif kind == "resolution_evidence":
+        from .models import EmergencyResolutionEvidence
+
+        media = EmergencyResolutionEvidence.objects.filter(pk=media_id).first()
+        if not media:
+            return {"media_id": media_id, "skipped": True}
     else:
         from .models import EmergencyMedia
 
@@ -348,30 +354,49 @@ def refresh_map_service_pois_task():
 
 @shared_task(time_limit=300, soft_time_limit=240)
 def generate_street_view_task(latitude: float, longitude: float):
-    """Generate one street-view payload off the request thread.
+    """Generate one street-view payload in the worker, never in Daphne.
 
-    Waits briefly for a concurrent generation first (warmer/thundering
-    polls), then fetches through the shared helper so tiles, stitching and
-    base64 never happen inside Daphne. Idempotent: pure cache fill.
+    Tiles, PIL stitching, base64 and Cloudinary upload run here on the
+    ``heavy`` queue. Idempotent: pure cache fill. The API only enqueues and
+    returns pending; the client polls the same URL until the cache appears.
     """
     import logging
+    import socket
     import time
 
+    from django.conf import settings as _settings
     from django.core.cache import cache
 
     from .public_api import get_or_fetch_street_view_image
 
     logger = logging.getLogger(__name__)
+    try:
+        _hostname = socket.gethostname()
+    except Exception:
+        _hostname = "unknown"
+    try:
+        _role = getattr(_settings, "SERVICE_ROLE", "prod-heavy")
+    except Exception:
+        _role = "prod-heavy"
+    started = time.monotonic()
+    logger.info(
+        "Street-view worker start lat=%.5f lng=%.5f hostname=%s service_role=%s",
+        float(latitude), float(longitude), _hostname, _role,
+    )
     cache_key = f"public:street-view-image:v5:{float(latitude):.4f}:{float(longitude):.4f}"
-    for _ in range(45):
-        try:
-            if cache.get(cache_key) is not None:
-                return {"status": "already_cached"}
-        except Exception:
-            break
-        time.sleep(1.0)
+    try:
+        if cache.get(cache_key) is not None:
+            return {"status": "already_cached"}
+    except Exception:
+        pass
     try:
         payload = get_or_fetch_street_view_image(float(latitude), float(longitude))
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.info(
+            "Street-view worker done lat=%.5f lng=%.5f status=%s duration_ms=%d hostname=%s service_role=%s",
+            float(latitude), float(longitude), payload.get("status", "unknown"),
+            duration_ms, _hostname, _role,
+        )
         return {"status": payload.get("status", "unknown")}
     except Exception as exc:
         logger.warning("Street-view generation failed: %s", exc.__class__.__name__)
