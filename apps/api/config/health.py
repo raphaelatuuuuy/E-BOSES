@@ -36,6 +36,43 @@ DEEP_PROBE_TIMEOUT_SECONDS = 2.5
     },
     tags=["system"],
 )
+@extend_schema(summary="Liveness probe", auth=[], request=None, tags=["system"])
+def health_live(request):
+    """Render liveness endpoint: Django is alive. No external calls.
+
+    Render restarts the service on non-2xx, so this must never touch the
+    database, Redis or providers — a transient blip must not look like a
+    dead process (a restart during a blip just adds a cold-start herd).
+    """
+    return JsonResponse({"status": "ok"})
+
+
+@extend_schema(summary="Readiness probe", auth=[], request=None, tags=["system"])
+def health_ready(request):
+    """Minimal readiness: one DB probe with a single retry.
+
+    Reports state in the body instead of flapping 503s: a lone failed probe
+    is retried once before calling the service unready.
+    """
+    database = "ok"
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except Exception:
+        try:
+            from django.db import close_old_connections
+
+            close_old_connections()
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+        except Exception:
+            database = "error"
+    payload = {"status": "ok" if database == "ok" else "degraded", "database": database}
+    return JsonResponse(payload, status=200 if database == "ok" else 503)
+
+
 def health_check(request):
     database = "ok"
     try:

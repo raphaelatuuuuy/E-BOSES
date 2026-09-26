@@ -341,6 +341,43 @@ def refresh_map_service_pois_task():
     return {"osm": len(osm), "merged": len(merged)}
 
 
+@shared_task(time_limit=300, soft_time_limit=240)
+def generate_street_view_task(latitude: float, longitude: float):
+    """Generate one street-view payload off the request thread.
+
+    Waits briefly for a concurrent generation first (warmer/thundering
+    polls), then fetches through the shared helper so tiles, stitching and
+    base64 never happen inside Daphne. Idempotent: pure cache fill.
+    """
+    import logging
+    import time
+
+    from django.core.cache import cache
+
+    from .public_api import get_or_fetch_street_view_image
+
+    logger = logging.getLogger(__name__)
+    cache_key = f"public:street-view-image:v5:{float(latitude):.4f}:{float(longitude):.4f}"
+    for _ in range(45):
+        try:
+            if cache.get(cache_key) is not None:
+                return {"status": "already_cached"}
+        except Exception:
+            break
+        time.sleep(1.0)
+    try:
+        payload = get_or_fetch_street_view_image(float(latitude), float(longitude))
+        return {"status": payload.get("status", "unknown")}
+    except Exception as exc:
+        logger.warning("Street-view generation failed: %s", exc.__class__.__name__)
+        return {"status": "failed"}
+    finally:
+        try:
+            cache.delete(f"{cache_key}:queued")
+        except Exception:
+            pass
+
+
 @shared_task(time_limit=600, soft_time_limit=540)
 def warm_map_cache_task(batch_size=15):
     """Hourly: pre-warm map-context + street-view caches for active areas.

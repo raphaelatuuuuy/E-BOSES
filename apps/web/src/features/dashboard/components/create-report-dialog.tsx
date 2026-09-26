@@ -13,6 +13,7 @@ import { toast } from "sonner"
 import {
   CameraIcon,
   CircleXIcon,
+  FileIcon,
   ImageIcon,
   InfoIcon,
   LoaderCircleIcon,
@@ -49,6 +50,7 @@ import {
   DUPLICATE_PHOTO_FEEDBACK,
   isPhotoVerdictRejected,
   photoVerdictsWithWarningFallback,
+  previewKindFor,
 } from "@/features/dashboard/components/create-report-dialog-photo"
 import { ApiError, apiOrigin } from "@/lib/api"
 import { resolveMediaUrl } from "@/lib/media-url"
@@ -527,6 +529,7 @@ export function CreateReportDialog({
       return created
     })
   }, [mediaFiles])
+  /** Render kind for an upload thumbnail (pure helper in -photo module). */
   const displayName = guest
     ? "Community reporter"
     : user
@@ -1719,6 +1722,7 @@ export function CreateReportDialog({
                               (item) => item.index === index
                             )
                             const rejected = isPhotoVerdictRejected(verdict)
+                            const kind = previewKindFor(file)
                             return (
                               <div
                                 key={`${file.name}-${file.lastModified}`}
@@ -1729,17 +1733,43 @@ export function CreateReportDialog({
                                     : "ring-1 ring-black/5"
                                 )}
                               >
-                                <button
-                                  type="button"
-                                  className="block h-full w-full"
-                                  onClick={() => setPreviewUrl(url)}
-                                >
-                                  <img
+                                {url == null ? (
+                                  <span className="flex h-full w-full items-center justify-center">
+                                    <LoaderCircleIcon className="size-6 animate-spin text-neutral-400" />
+                                  </span>
+                                ) : kind === "image" ? (
+                                  <button
+                                    type="button"
+                                    className="block h-full w-full"
+                                    onClick={() => setPreviewUrl(url)}
+                                  >
+                                    <img
+                                      src={url}
+                                      alt=""
+                                      className="h-full w-full object-cover"
+                                    />
+                                  </button>
+                                ) : kind === "video" ? (
+                                  <video
                                     src={url}
-                                    alt=""
                                     className="h-full w-full object-cover"
+                                    playsInline
+                                    muted
+                                    preload="metadata"
                                   />
-                                </button>
+                                ) : (
+                                  <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 px-2 text-center">
+                                    <FileIcon
+                                      className="size-7 text-neutral-400"
+                                      aria-hidden="true"
+                                    />
+                                    <p className="text-[11px] leading-tight font-medium text-neutral-600">
+                                      {kind === "heic"
+                                        ? "HEIC photos can't be previewed — please choose JPEG or PNG"
+                                        : file.name}
+                                    </p>
+                                  </div>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => {

@@ -2070,7 +2070,7 @@ export function getStreetViewCoverage(
 }
 
 export interface StreetViewImageResult {
-  status: "available" | "no_coverage"
+  status: "available" | "no_coverage" | "pending"
   latitude?: number
   longitude?: number
   distance_meters?: number
@@ -2079,12 +2079,14 @@ export interface StreetViewImageResult {
 
 export function getStreetViewImage(
   coord: { lat: number; lng: number },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  useAsync = true
 ) {
   const query = new URLSearchParams({
     latitude: coord.lat.toFixed(5),
     longitude: coord.lng.toFixed(5),
   })
+  if (useAsync) query.set("async", "1")
   return apiRequest<StreetViewImageResult>(
     `/public/street-view/image/?${query.toString()}`,
     { signal },

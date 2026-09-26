@@ -212,6 +212,23 @@ class PublicStreetViewImageTests(APITestCase):
             radius_meters=100,
         )
 
+    @patch("apps.emergencies.public_api.fetch_latest_street_imagery")
+    def test_async_miss_returns_pending_without_fetching(self, fetch_imagery):
+        from django.core.cache import cache as _cache
+
+        # Simulate a worker already generating: lock held → pending, and the
+        # fetch must not run inside Daphne.
+        _cache.set("public:street-view-image:v5:14.6506:121.1206:lock", True, 60)
+        response = self.client.get(
+            reverse("public-street-view-image"),
+            {"latitude": "14.6506382", "longitude": "121.1205678", "async": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "pending")
+        self.assertIn("status_url", response.data)
+        fetch_imagery.assert_not_called()
+
 
 class PublicCommunityRequestTests(APITestCase):
     def setUp(self):

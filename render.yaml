@@ -6,7 +6,7 @@ services:
     rootDir: apps/api
     buildCommand: bash build.sh
     startCommand: python -m daphne -b 0.0.0.0 -p $PORT config.asgi:application
-    healthCheckPath: /api/health/
+    healthCheckPath: /api/health/live/live/
     envVars:
       - key: DJANGO_ENV
         value: production

@@ -138,7 +138,10 @@ export function IncidentMap({
   } | null>(null)
   const assignment = alert.current_assignment
   const settled = !isActiveEmergency(alert)
-  const resolved = alert.status === "resolved"
+  // Glyph follows the same settled rule as every other map (resolved,
+  // closed, cancelled, false alarm, invalid) — a settled pin must never
+  // keep the triangle alert glyph.
+  const resolved = settled
   const responderAssignments = useMemo(
     () => emergencyResponderAssignments(alert),
     [alert]

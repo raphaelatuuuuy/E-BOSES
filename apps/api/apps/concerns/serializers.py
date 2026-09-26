@@ -1751,6 +1751,35 @@ class DepartmentMiniSerializer(serializers.ModelSerializer):
         fields = ("id", "name", "code", "short_name", "description")
 
 
+class ConcernFeedSerializer(ConcernSerializer):
+    """Slim rows for the community feed (memory-bounded list endpoint).
+
+    Drops the heavy nested collections (comments + replies, timeline, chat
+    conversation, clarifications, appeals, official remarks, form values,
+    viewers, assignments) which are only read on the detail view. Keeps
+    everything feed cards render: media previews, AI status, reporter,
+    routing, votes, severity/priority and resolution attribution.
+    """
+
+    class Meta(ConcernSerializer.Meta):
+        fields = tuple(
+            name
+            for name in ConcernSerializer.Meta.fields
+            if name
+            not in {
+                "comments",
+                "timeline",
+                "conversation",
+                "clarifications",
+                "appeals",
+                "official_remarks",
+                "form_values",
+                "viewers",
+                "assignments",
+            }
+        )
+
+
 class ConcernListSerializer(serializers.ModelSerializer):
     """Slim row payload for list endpoints.
 

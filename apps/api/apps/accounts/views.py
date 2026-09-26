@@ -301,11 +301,14 @@ class RegistrationPinAddressView(APIView):
             return Response({"detail": "lat and lng are required."}, status=400)
         if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
             return Response({"detail": "That point is not on the earth."}, status=400)
-        cache_key = f"registration-pin-address:v2:{latitude:.5f}:{longitude:.5f}"
+        # Rounded to ~11m: dragging the pin a metre no longer mints a fresh
+        # cache key per position (each miss could reach Nominatim, which now
+        # throttles this deployment with 429s). Street names change slowly.
+        cache_key = f"registration-pin-address:v3:{latitude:.4f}:{longitude:.4f}"
         payload = cache.get(cache_key)
         if payload is None:
             payload = address_for_pin(latitude, longitude)
-            cache.set(cache_key, payload, 600)
+            cache.set(cache_key, payload, 3600)
         return Response(payload)
 
 

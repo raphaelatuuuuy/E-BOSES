@@ -280,6 +280,40 @@ class ResidentDashboardAPITests(APITestCase):
         self.assertEqual(response.data["files"][1]["status"], "rejected")
         self.assertIn("already used in another report", response.data["files"][1]["message"])
 
+    def test_storage_failure_rolls_back_the_whole_report(self):
+        """A storage upload error must never leave a media-less concern row.
+
+        The submit view runs inside transaction.atomic: if ConcernMedia file
+        storage raises (e.g. object-store BadRequest), the concern, timeline
+        and assessment rows roll back together and the user gets an error —
+        never a report whose photo silently never existed.
+        """
+        with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
+            with patch(
+                "apps.accounts.storage.FileSystemStorage.save",
+                side_effect=OSError("storage unavailable"),
+            ):
+                with self.captureOnCommitCallbacks(execute=True):
+                    with self.assertRaises(OSError):
+                        self.client.post(
+                            "/api/concerns/",
+                            {
+                                "title": "Rollback probe report",
+                                "description": "Madilim sa kanto at delikado para sa mga dumadaan.",
+                                "category": "infrastructure",
+                                "visibility": "community",
+                                "address": "Bayan-Bayanan St.",
+                                "latitude": "14.6515000",
+                                "longitude": "121.1207000",
+                                "location_source": "manual_pin",
+                                "location_accuracy": 12.5,
+                                "media": png_upload("streetlight.png"),
+                            },
+                            format="multipart",
+                        )
+
+        self.assertFalse(Concern.objects.filter(title="Rollback probe report").exists())
+
     def test_resident_can_create_report_with_initial_status_event(self):
         with patch("apps.concerns.views._validate_concern_before_commit", return_value=None):
             with self.captureOnCommitCallbacks(execute=True):

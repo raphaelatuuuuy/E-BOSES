@@ -7,6 +7,7 @@ import {
   duplicatePhotoReportIssueLocation,
   isPhotoVerdictRejected,
   photoVerdictsWithWarningFallback,
+  previewKindFor,
 } from "./create-report-dialog-photo.ts"
 
 test("a photo without a verdict is not marked rejected by a shared media error", () => {
@@ -97,4 +98,36 @@ test("duplicate photo feedback links guests to the matching pin on report-issue"
     search: "?highlightConcernId=42",
     state: { highlightConcernId: 42 },
   })
+})
+
+test("preview kind is image for JPEG, PNG, WEBP, and empty-type gallery picks", () => {
+  for (const file of [
+    { name: "a.jpg", type: "image/jpeg" },
+    { name: "a.png", type: "image/png" },
+    { name: "a.webp", type: "image/webp" },
+    { name: "gallery-pick", type: "" },
+  ]) {
+    assert.equal(previewKindFor(file), "image")
+  }
+})
+
+test("preview kind is heic for HEIC extension or MIME, never an <img>", () => {
+  for (const file of [
+    { name: "IMG_001.heic", type: "image/heic" },
+    { name: "IMG_001.HEIC", type: "" },
+    { name: "photo.heif", type: "image/heif" },
+  ]) {
+    assert.equal(previewKindFor(file), "heic")
+  }
+})
+
+test("preview kind is video for video files, other for the rest", () => {
+  assert.equal(
+    previewKindFor({ name: "clip.mp4", type: "video/mp4" }),
+    "video"
+  )
+  assert.equal(
+    previewKindFor({ name: "doc.pdf", type: "application/pdf" }),
+    "other"
+  )
 })

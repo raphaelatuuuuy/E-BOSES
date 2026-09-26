@@ -950,6 +950,74 @@ def decorate_concerns(queryset, user):
         concern.severity_assessed = severity_level(concern)[1]
     return concerns
 
+
+def decorate_concerns_for_feed(queryset, user):
+    """Lightweight feed decoration: slim rows only.
+
+    Mirrors decorate_concerns() but prefetches just what ConcernFeedSerializer
+    reads. The dropped collections (comments, timeline, chat, clarifications,
+    appeals, official remarks, form values, viewers) load on the detail view.
+    """
+    concerns = list(
+        queryset
+        .select_related(
+            "reporter",
+            "reporter__resident_profile",
+            "community",
+            "reporter_community",
+            "duplicate_of",
+            "duplicate_of__reporter",
+            "duplicate_of__reporter__resident_profile",
+            "recurrence_of",
+            "category_ref",
+            "category_ref__department",
+            "assigned_department",
+        )
+        .prefetch_related(
+            "media",
+            "duplicates",
+            "votes",
+            "votes__user",
+            "votes__user__resident_profile",
+            "ai_assessment",
+            "status_events",
+            "status_events__actor",
+            "status_events__actor__resident_profile",
+            "status_events__actor__designations__position",
+            "status_events__actor__designations__department",
+            "resolution_evidence",
+            "resolution_evidence__uploaded_by",
+            "resolution_evidence__uploaded_by__resident_profile",
+            "assignments",
+            "assignments__assignee",
+            "assignments__assignee__resident_profile",
+            "assignments__assigned_by",
+            "assignments__assigned_by__resident_profile",
+            "category_ref__form_fields",
+            "category_ref__department__designations",
+            "assigned_department__designations",
+            "duplicate_of__media",
+            "duplicates__reporter",
+            "duplicates__reporter__resident_profile",
+            "duplicates__media",
+        )
+        .annotate(
+            vote_count=Count("votes", distinct=True),
+            comment_count=Count("comments", distinct=True),
+        )
+    )
+    if user and user.is_authenticated:
+        voted_ids = set(
+            ConcernVote.objects.filter(user=user, concern__in=concerns).values_list("concern_id", flat=True)
+        )
+    else:
+        voted_ids = set()
+    for concern in concerns:
+        concern.user_vote = 1 if concern.pk in voted_ids else 0
+        concern.severity = severity_label(concern)
+        concern.severity_assessed = severity_level(concern)[1]
+    return concerns
+
 def create_concern_notification(concern, *, recipient, type, title, body):
     return create_user_notification(
         recipient=recipient,
@@ -958,6 +1026,100 @@ def create_concern_notification(concern, *, recipient, type, title, body):
         title=title,
         body=body,
     )
+
+
+MEDIA_CHECK_MAX_BYTES = 3 * 1024 * 1024
+
+
+def _media_check_size_gate(media_files):
+    """Reject empty/oversized files before any bytes are decoded.
+
+    Returns a 4xx Response when rejecting, else None. The 3MB ceiling keeps
+    staged async payloads bounded; dimension/pixel guards run later in
+    image_prep (20MP) and the upload profiles.
+    """
+    for uploaded in media_files:
+        if (getattr(uploaded, "size", 0) or 0) <= 0:
+            return Response({"media": ["Attach a non-empty file."]}, status=status.HTTP_400_BAD_REQUEST)
+        if uploaded.size > MEDIA_CHECK_MAX_BYTES:
+            return Response(
+                {"media": ["Photos must be 3MB or smaller."]},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+    return None
+
+
+def _wants_async_check(request):
+    return str(
+        request.query_params.get("async") or request.data.get("async") or ""
+    ).lower() in {"1", "true"}
+
+
+def _is_forensics_only(request):
+    return str(request.data.get("forensics_only", "")).lower() in {"1", "true", "yes"}
+
+
+def _guest_check_owner(request):
+    """Stable per-guest owner for job ownership + rate limits."""
+    try:
+        key = request.session.session_key
+        if not key:
+            request.session.save()
+            key = request.session.session_key
+        if key:
+            return f"guest:{key}"
+    except Exception:
+        pass
+    return "guest:anonymous"
+
+
+def _enqueue_media_check_job(*, owner, media_files, forensics_only, community_id, rate_limit):
+    from .media_check_jobs import create_media_check_job
+
+    # Bytes are read once here (already size-gated above); the worker
+    # rebuilds upload objects from the staged copy. Originals are rewound
+    # so the sync fallback path (if enqueue fails) still works.
+    staged = []
+    for uploaded in media_files:
+        try:
+            content = uploaded.read()
+        except Exception:
+            content = b""
+        try:
+            uploaded.seek(0)
+        except Exception:
+            pass
+        staged.append({
+            "name": getattr(uploaded, "name", "upload"),
+            "content_type": getattr(uploaded, "content_type", "") or "",
+            "size": getattr(uploaded, "size", 0) or 0,
+            "content": content,
+        })
+    job, _created, throttled = create_media_check_job(
+        owner=owner,
+        files=staged,
+        forensics_only=forensics_only,
+        community_id=community_id,
+        rate_limit=rate_limit,
+    )
+    if throttled or job is None:
+        return None
+    try:
+        from .tasks import run_media_check_job
+
+        run_media_check_job.delay(job["job_id"])
+    except Exception:
+        from django.conf import settings as _settings
+
+        if getattr(_settings, "IS_LOCAL_DEVELOPMENT", False):
+            from .tasks import run_media_check_job
+
+            run_media_check_job.run(job["job_id"])
+    return job
+
+
+def _public_media_check_job(job):
+    return {k: v for k, v in job.items() if k in {"job_id", "status", "result", "error_code", "expires_at"}}
 
 
 class ConcernMediaCheckView(APIView):
@@ -973,13 +1135,35 @@ class ConcernMediaCheckView(APIView):
                 {"media": [f"You can attach up to {MAX_CONCERN_MEDIA_FILES} photos."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        size_gate = _media_check_size_gate(media_files)
+        if size_gate is not None:
+            return size_gate
+        if _wants_async_check(request):
+            owner = f"user:{request.user.pk}"
+            job = _enqueue_media_check_job(
+                owner=owner,
+                media_files=media_files,
+                forensics_only=_is_forensics_only(request),
+                community_id=request.data.get("community_id"),
+                rate_limit=5,
+            )
+            if job is None:
+                return Response(
+                    {"detail": "Too many checks. Please wait a bit before trying again."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            return Response(
+                {**_public_media_check_job(job),
+                 "status_url": f"/api/concerns/media/check/jobs/{job['job_id']}/"},
+                status=status.HTTP_202_ACCEPTED,
+            )
 
         return Response(
             {
                 "files": _concern_media_check_results(
                     media_files,
                     config=_media_check_configuration(request),
-                    run_ai=str(request.data.get("forensics_only", "")).lower() not in {"1", "true", "yes"},
+                    run_ai=not _is_forensics_only(request),
                 )
             }
         )
@@ -1022,16 +1206,68 @@ class GuestConcernMediaCheckView(APIView):
                 {"media": [f"You can attach up to {MAX_CONCERN_MEDIA_FILES} photos."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        size_gate = _media_check_size_gate(media_files)
+        if size_gate is not None:
+            return size_gate
+        if _wants_async_check(request):
+            owner = _guest_check_owner(request)
+            job = _enqueue_media_check_job(
+                owner=owner,
+                media_files=media_files,
+                forensics_only=_is_forensics_only(request),
+                community_id=request.data.get("community_id"),
+                rate_limit=2,
+            )
+            if job is None:
+                return Response(
+                    {"detail": "Too many checks. Please wait a bit before trying again."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            return Response(
+                {**_public_media_check_job(job),
+                 "status_url": f"/api/public/concerns/guest/media-check/jobs/{job['job_id']}/"},
+                status=status.HTTP_202_ACCEPTED,
+            )
 
         return Response(
             {
                 "files": _concern_media_check_results(
                     media_files,
                     config=_media_check_configuration(request),
-                    run_ai=str(request.data.get("forensics_only", "")).lower() not in {"1", "true", "yes"},
+                    run_ai=not _is_forensics_only(request),
                 )
             }
         )
+
+
+class ConcernMediaCheckJobStatusView(APIView):
+    """Poll endpoint for async resident media checks. Ownership enforced."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, job_id):
+        from .media_check_jobs import get_media_check_job
+
+        job = get_media_check_job(str(job_id), owner=f"user:{request.user.pk}")
+        if job is None:
+            return Response({"detail": "Unknown or expired job."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(job)
+
+
+class GuestConcernMediaCheckJobStatusView(APIView):
+    """Poll endpoint for async guest media checks (session-scoped)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestConcernMediaCheckThrottle]
+
+    def get(self, request, job_id):
+        from .media_check_jobs import get_media_check_job
+
+        job = get_media_check_job(str(job_id), owner=_guest_check_owner(request))
+        if job is None:
+            return Response({"detail": "Unknown or expired job."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(job)
 
 
 def _notify_anonymous_concern_staff(concern):
@@ -2066,7 +2302,7 @@ class ConcernFeedView(APIView):
         # — the index is dead weight at this selectivity. The 4-12s feed cost
         # was Python (decorate + serialize), now bounded by the cap above.
         # Revisit only if EXPLAIN on prod-shaped volume shows otherwise.
-        from apps.concerns.serializers import ConcernSerializer as _FeedSerializer
+        from apps.concerns.serializers import ConcernFeedSerializer as _FeedSerializer
 
         # Server-side "nearby" support: the client passes its own position and
         # we attach a coarse distance per concern. The concern's exact
@@ -2104,8 +2340,8 @@ class ConcernFeedView(APIView):
             return _FeedSerializer(ordered, many=True, context={"request": request, "privacy_safe": True}).data
 
         # Paginated envelope path (opt-in): ?page=&page_size= return
-        # {count, next, previous, results} with the same full rows, so new
-        # clients can page beyond the legacy cap. Severity ordering applies
+        # {count, next, previous, results} with slim rows, so new clients page
+        # 3-by-3 (default) up to 20 per page. Severity ordering applies
         # within the page; global severity ordering needs an annotated
         # severity column (follow-up) — do not Python-sort the whole table.
         if "page" in request.query_params or "page_size" in request.query_params:
@@ -2113,14 +2349,16 @@ class ConcernFeedView(APIView):
             return paginate_response(
                 request,
                 ordered_qs,
-                lambda page: _serialize_window(decorate_concerns(page, request.user)),
+                lambda page: _serialize_window(decorate_concerns_for_feed(page, request.user)),
+                default_size=3,
+                max_size=20,
             )
         try:
-            limit = int(request.query_params.get("limit", 100))
+            limit = int(request.query_params.get("limit", 20))
         except (TypeError, ValueError):
-            limit = 100
-        limit = min(max(1, limit), 100)
-        concerns = decorate_concerns(
+            limit = 20
+        limit = min(max(1, limit), 20)
+        concerns = decorate_concerns_for_feed(
             queryset.order_by("-updated_at", "-id")[:limit], request.user
         )
         return Response(_serialize_window(concerns))
@@ -4137,6 +4375,12 @@ class ConcernMediaPreviewView(APIView):
         if not is_publicly_displayable and not user_can_access_concern_media_raw(request.user, media):
             return Response({"detail": "You do not have permission to access this media."}, status=status.HTTP_403_FORBIDDEN)
         if media.preview_file:
+            if request.query_params.get("link") in {"1", "true", "yes"}:
+                from apps.accounts.storage import preview_link_response
+
+                link = preview_link_response(media.preview_file)
+                if link is not None:
+                    return link
             response = FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
             response["X-EBOSES-Preview-Status"] = "ready"
             # Ready previews are immutable bytes: browser/CDN may cache for a
@@ -4161,6 +4405,12 @@ class ConcernMediaPreviewView(APIView):
             except Exception:
                 logger.warning("Could not render missing preview for media=%s", media.pk, exc_info=True)
             else:
+                if request.query_params.get("link") in {"1", "true", "yes"}:
+                    from apps.accounts.storage import preview_link_response
+
+                    link = preview_link_response(preview)
+                    if link is not None:
+                        return link
                 response = FileResponse(preview.open("rb"), content_type="image/jpeg")
                 response["X-EBOSES-Preview-Status"] = "ready"
                 response["Cache-Control"] = "public, max-age=86400, immutable"

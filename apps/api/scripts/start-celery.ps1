@@ -47,6 +47,9 @@ function Start-CeleryProc {
   $cmd = '-m celery -A config {0} -l INFO --logfile "{1}" --pidfile "{2}"' -f $Role, $LogFile, $PidFile
   if ($Role -like 'worker*') {
     $cmd = '-m celery -A config worker -l INFO -Q {0} --pool=solo --hostname {1}@%h --logfile "{2}" --pidfile "{3}"' -f $Queue, $NodeName, $LogFile, $PidFile
+    if ($Queue -eq 'heavy') {
+      $cmd += ' --max-tasks-per-child=20 --max-memory-per-child=400000'
+    }
   }
   $p = Start-Process -FilePath 'python' -ArgumentList $cmd -WorkingDirectory $ApiDir -WindowStyle Hidden -PassThru
   Start-Sleep -Seconds 6

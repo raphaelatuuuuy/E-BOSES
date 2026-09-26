@@ -336,15 +336,52 @@ export function unwrapList<T>(payload: T[] | ListEnvelope<T>): T[] {
   return Array.isArray(payload) ? payload : payload.results
 }
 
+/** Cap ordinary in-flight requests so a login burst cannot hold dozens of
+ * slow responses (and their memory) simultaneously on a small server.
+ * Emergency paths bypass the queue entirely — dispatch must never wait
+ * behind dashboard and feed loading. */
+const BURST_CONCURRENCY = 3
+let burstActive = 0
+const burstQueue: Array<() => void> = []
+
+function isPriorityPath(path: string): boolean {
+  return path.startsWith("/emergencies/")
+}
+
+function burstAcquire(path: string): Promise<() => void> {
+  if (isPriorityPath(path) || burstActive < BURST_CONCURRENCY) {
+    if (!isPriorityPath(path)) burstActive += 1
+    return Promise.resolve(() => burstRelease(path))
+  }
+  return new Promise<() => void>((resolve) => {
+    burstQueue.push(() => {
+      burstActive += 1
+      resolve(() => burstRelease(path))
+    })
+  })
+}
+
+function burstRelease(path: string): void {
+  if (isPriorityPath(path)) return
+  burstActive = Math.max(0, burstActive - 1)
+  const next = burstQueue.shift()
+  if (next) next()
+}
+
 async function requestWithRefresh<T>(path: string, init: RequestInit, options: ApiRequestOptions) {
+  const release = await burstAcquire(path)
   try {
-    return await request<T>(path, init, options)
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 401 && options.auth !== false && options.refreshOnUnauthorized !== false) {
-      const refreshed = await refreshSession()
-      if (!refreshed) throw new ApiError("Your session has expired.", 401, null)
-      return request<T>(path, init, { ...options, refreshOnUnauthorized: false })
+    try {
+      return await request<T>(path, init, options)
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401 && options.auth !== false && options.refreshOnUnauthorized !== false) {
+        const refreshed = await refreshSession()
+        if (!refreshed) throw new ApiError("Your session has expired.", 401, null)
+        return request<T>(path, init, { ...options, refreshOnUnauthorized: false })
+      }
+      throw error
     }
-    throw error
+  } finally {
+    release()
   }
 }

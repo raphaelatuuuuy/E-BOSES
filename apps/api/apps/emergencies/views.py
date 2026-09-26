@@ -1245,6 +1245,12 @@ class EmergencyMediaPreviewView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         if _preview_is_ready(media.preview_file):
+            if request.query_params.get("link") in {"1", "true", "yes"}:
+                from apps.accounts.storage import preview_link_response
+
+                link = preview_link_response(media.preview_file)
+                if link is not None:
+                    return link
             response = FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
             # Authenticated preview, immutable bytes: private browser cache is
             # safe (per-media permission already checked above). Pending

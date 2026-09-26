@@ -89,6 +89,70 @@ class MediaPrivacyRedactionTests(TestCase):
         self.assertNotEqual(redacted.tobytes(), image.tobytes())
 
 
+class UploadValidationEdgeTests(TestCase):
+    """Empty / HEIC / valid uploads through the shared validator."""
+
+    def _jpeg_upload(self, name="photo.jpg"):
+        output = BytesIO()
+        Image.new("RGB", (64, 48), (90, 110, 130)).save(output, "JPEG", quality=88)
+        return SimpleUploadedFile(name, output.getvalue(), content_type="image/jpeg")
+
+    def test_empty_file_is_rejected_before_storage(self):
+        from django.core.exceptions import ValidationError
+
+        from apps.accounts.services import (
+            CONCERN_MEDIA_UPLOAD_PROFILE,
+            validate_uploaded_media_file,
+        )
+
+        empty = SimpleUploadedFile("empty.jpg", b"", content_type="image/jpeg")
+        with self.assertRaisesMessage(ValidationError, "non-empty"):
+            validate_uploaded_media_file(
+                empty,
+                profile=CONCERN_MEDIA_UPLOAD_PROFILE,
+                authenticity=False,
+                quality="none",
+                normalize=False,
+            )
+
+    def test_heic_file_is_rejected_with_actionable_message(self):
+        from django.core.exceptions import ValidationError
+
+        from apps.accounts.services import (
+            CONCERN_MEDIA_UPLOAD_PROFILE,
+            validate_uploaded_media_file,
+        )
+
+        heic = SimpleUploadedFile(
+            "photo.heic",
+            b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00" + b"\x00" * 64,
+            content_type="image/heic",
+        )
+        with self.assertRaisesMessage(ValidationError, "HEIC"):
+            validate_uploaded_media_file(
+                heic,
+                profile=CONCERN_MEDIA_UPLOAD_PROFILE,
+                authenticity=False,
+                quality="none",
+                normalize=False,
+            )
+
+    def test_valid_jpeg_passes_without_decoding_side_effects(self):
+        from apps.accounts.services import (
+            CONCERN_MEDIA_UPLOAD_PROFILE,
+            validate_uploaded_media_file,
+        )
+
+        result = validate_uploaded_media_file(
+            self._jpeg_upload(),
+            profile=CONCERN_MEDIA_UPLOAD_PROFILE,
+            authenticity=False,
+            quality="none",
+            normalize=False,
+        )
+        self.assertIsNotNone(result)
+
+
 class _FakeVideoCapture:
     def __init__(
         self,

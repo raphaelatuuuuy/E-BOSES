@@ -79,14 +79,10 @@ function useAuthenticatedBlob(src: string) {
         return
       }
       setFailed(false)
-      try {
-        const response = await fetch(target, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          cache: "no-store",
-        })
-        if (!response.ok) throw new Error("Media request failed")
-        const blob = await response.blob()
-        if (response.headers.get("X-EBOSES-Preview-Status") === "pending") {
+      const authHeaders = token ? { Authorization: `Bearer ${token}` } : undefined
+      async function useBlob(source: Response) {
+        const blob = await source.blob()
+        if (source.headers.get("X-EBOSES-Preview-Status") === "pending") {
           // Never cache the server's placeholder JPEG. Keep polling until the
           // worker has written the real preview.
           if (!cancelled)
@@ -96,6 +92,44 @@ function useAuthenticatedBlob(src: string) {
         const url = URL.createObjectURL(blob)
         cachePut(target, url)
         if (!cancelled) setObjectUrl(url)
+      }
+      const separator = target.includes("?") ? "&" : "?"
+      try {
+        const probe = await fetch(`${target}${separator}link=1`, {
+          headers: authHeaders,
+          cache: "no-store",
+        })
+        if (probe.ok && !cancelled) {
+          const data = await probe
+            .clone()
+            .json()
+            .catch(() => null)
+          const direct =
+            data && typeof data.url === "string" ? (data.url as string) : ""
+          if (direct) {
+            const directResponse = await fetch(direct)
+            if (!directResponse.ok) throw new Error("Media request failed")
+            await useBlob(directResponse)
+            return
+          }
+          if (
+            (data && data.status === "pending") ||
+            probe.headers.get("X-EBOSES-Preview-Status") === "pending"
+          ) {
+            retryTimer = window.setTimeout(() => void load(), 1500)
+            return
+          }
+        }
+      } catch {
+        // Fall through to the proxied bytes below.
+      }
+      try {
+        const response = await fetch(target, {
+          headers: authHeaders,
+          cache: "no-store",
+        })
+        if (!response.ok) throw new Error("Media request failed")
+        await useBlob(response)
       } catch {
         if (!cancelled) setFailed(true)
       }

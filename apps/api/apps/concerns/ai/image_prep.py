@@ -31,6 +31,11 @@ from PIL import Image, ImageOps
 
 logger = logging.getLogger(__name__)
 
+# Decompression-bomb guard: Pillow only warns past ~178MP by default. Cap at
+# 20MP so a crafted image fails fast into a "could not prepare" verdict
+# (handled above) instead of exploding into hundreds of MB of pixels.
+Image.MAX_IMAGE_PIXELS = 20_000_000
+
 # Gemma gains nothing from more pixels than this for civic photos, and the
 # payload cost is quadratic. The floor exists so a misconfigured env cannot
 # shrink evidence into uselessness.

@@ -7,6 +7,10 @@ import {
   type OfficialRoleSummary,
 } from "@/features/dashboard/api"
 import { shouldSkipPoll } from "@/features/dashboard/lib/visible-poll"
+import {
+  cancelDeferredStartup,
+  deferUntilInteractive,
+} from "@/features/dashboard/lib/startup-defer"
 
 /**
  * Pending-work counts for the staff rail, keyed by nav item key.
@@ -72,7 +76,7 @@ export function useOfficialBadges(
       }
     }
 
-    void load()
+    const deferred = deferUntilInteractive(() => void load(), 2000)
     window.addEventListener("eboses:notification-created", refresh)
     window.addEventListener("eboses:report-created", refresh)
     window.addEventListener("eboses:concern-updated", refresh)
@@ -81,6 +85,7 @@ export function useOfficialBadges(
     const interval = window.setInterval(refresh, 30000)
     return () => {
       cancelled = true
+      cancelDeferredStartup(deferred)
       window.clearInterval(interval)
       window.removeEventListener("eboses:notification-created", refresh)
       window.removeEventListener("eboses:report-created", refresh)

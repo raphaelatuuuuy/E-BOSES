@@ -5,7 +5,7 @@ URL configuration for the E-Boses API backend.
 from django.contrib import admin
 from django.urls import include, path
 from config.docs_portal import SwaggerFallbackView, docs_portal
-from config.health import health_check
+from config.health import health_check, health_live, health_ready
 from drf_spectacular.views import SpectacularAPIView
 from apps.concerns.community_api import (
     AnnouncementAreaContextView,
@@ -24,6 +24,7 @@ from apps.concerns.views import (
     BarangayEventTodayView,
     GuestConcernCreateView,
     GuestConcernMediaCheckView,
+    GuestConcernMediaCheckJobStatusView,
 )
 from apps.config_summary import ConfigurationSummaryView
 from apps.concerns.system_api import (
@@ -62,6 +63,8 @@ from apps.live_map import (
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/health/", health_check, name="health-check"),
+    path("api/health/live/", health_live, name="health-live"),
+    path("api/health/ready/", health_ready, name="health-ready"),
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
     path("api/docs/", docs_portal, name="api-docs"),
     path("api/swagger/", SwaggerFallbackView.as_view(), name="api-swagger"),
@@ -132,5 +135,6 @@ urlpatterns = [
     path("api/public/street-view/coverage/", PublicStreetViewCoverageView.as_view(), name="public-street-view-coverage"),
     path("api/public/street-view/image/", PublicStreetViewImageView.as_view(), name="public-street-view-image"),
     path("api/public/concerns/guest/media-check/", GuestConcernMediaCheckView.as_view(), name="public-guest-concern-media-check"),
+    path("api/public/concerns/guest/media-check/jobs/<str:job_id>/", GuestConcernMediaCheckJobStatusView.as_view(), name="public-guest-concern-media-check-job"),
     path("api/public/concerns/guest/", GuestConcernCreateView.as_view(), name="public-guest-concern"),
 ]

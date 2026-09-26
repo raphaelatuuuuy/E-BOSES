@@ -1265,6 +1265,10 @@ NOMINATIM_LOOKUP_URL = "https://nominatim.openstreetmap.org/lookup"
 NOMINATIM_MIN_INTERVAL_SECONDS = 1.1
 NOMINATIM_PACE_KEY = "nominatim-last-call"
 NOMINATIM_PACE_LOCK_KEY = "nominatim-pace-lock"
+# Set when upstream answers 429: no outbound calls until it lapses, serve
+# stale cache or degrade instead of hammering a throttled provider.
+NOMINATIM_COOLDOWN_KEY = "nominatim-cooldown"
+NOMINATIM_COOLDOWN_TTL = 300
 NOMINATIM_RAW_CACHE_TTL = 60 * 60 * 24 * 30
 NOMINATIM_FAIL_CACHE_TTL = 120
 NOMINATIM_STALE_CACHE_TTL = 60 * 60 * 24 * 90
@@ -1301,6 +1305,12 @@ def _nominatim_get(url: str, params: dict, cache_key: str):
             return None
         return cached
 
+    try:
+        if cache.get(NOMINATIM_COOLDOWN_KEY):
+            return cache.get(f"{cache_key}:stale")
+    except Exception:
+        pass
+
     lock_key = f"{cache_key}:lock"
     if not cache.add(lock_key, True, NOMINATIM_LOCK_TTL):
         # Let the request holding the lock publish a result. Do not let a
@@ -1331,6 +1341,25 @@ def _nominatim_get(url: str, params: dict, cache_key: str):
         payload = response.json()
     except Exception as exc:
         logger.warning("Nominatim request failed: %s", type(exc).__name__)
+        import httpx as _httpx
+
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 429 or isinstance(exc, _httpx.HTTPStatusError) and "429" in str(exc):
+            # Upstream is throttling this deployment: back off globally for a
+            # while instead of retrying into the throttle.
+            try:
+                retry_after = 0
+                headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+                try:
+                    retry_after = int(str(headers.get("retry-after", "")).strip() or 0)
+                except (TypeError, ValueError):
+                    retry_after = 0
+                cache.set(
+                    NOMINATIM_COOLDOWN_KEY, True,
+                    min(max(retry_after, 60), NOMINATIM_COOLDOWN_TTL),
+                )
+            except Exception:
+                pass
         cache.set(cache_key, {"_nominatim_failed": True}, NOMINATIM_FAIL_CACHE_TTL)
         return cache.get(f"{cache_key}:stale")
     else:

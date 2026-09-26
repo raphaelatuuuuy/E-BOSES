@@ -53,6 +53,27 @@ export function isPhotoVerdictRejected(
   return Boolean(verdict && verdict.state !== "relevant")
 }
 
+export type PreviewKind = "image" | "video" | "heic" | "other"
+
+/** Render kind for an upload thumbnail. Browsers cannot decode HEIC/HEIF
+ * (iPhone photos) in <img>, so those get an explicit unsupported state
+ * instead of an empty box; videos get a player. Never render <img> for a
+ * kind the browser cannot decode. Pure function — unit tested. */
+export function previewKindFor(file: { name: string; type: string }): PreviewKind {
+  const ext = (file.name.split(".").pop() ?? "").toLowerCase()
+  if (
+    ext === "heic" ||
+    ext === "heif" ||
+    file.type === "image/heic" ||
+    file.type === "image/heif"
+  ) {
+    return "heic"
+  }
+  if (file.type.startsWith("video/")) return "video"
+  if (file.type === "" || file.type.startsWith("image/")) return "image"
+  return "other"
+}
+
 export function photoVerdictsWithWarningFallback(
   verdicts: ConcernPhotoVerdict[],
   messages: string[],

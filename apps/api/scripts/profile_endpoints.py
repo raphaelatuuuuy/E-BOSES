@@ -158,9 +158,12 @@ def run(out):
     lat, lng = "14.65005", "121.11950"
     from django.core.cache import cache as _cache
 
-    _cache.delete(f"public:street-view-image:v4:{float(lat):.5f}:{float(lng):.5f}")
+    _cache.delete(f"public:street-view-image:v5:{float(lat):.4f}:{float(lng):.4f}")
+    _cache.delete(f"public:street-view-coverage:v2:{float(lat):.4f}:{float(lng):.4f}")
     _measure(rc, "GET", f"/api/public/street-view/image/?latitude={lat}&longitude={lng}", "street-view cold", results, reps=1)
     _measure(rc, "GET", f"/api/public/street-view/image/?latitude={lat}&longitude={lng}", "street-view warm", results)
+    _measure(rc, "GET", f"/api/public/street-view/coverage/?latitude={lat}&longitude={lng}", "coverage cold", results, reps=1)
+    _measure(rc, "GET", f"/api/public/street-view/coverage/?latitude={lat}&longitude={lng}", "coverage warm", results)
 
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

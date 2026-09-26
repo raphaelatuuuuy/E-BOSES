@@ -501,6 +501,61 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(duplicate["tracking_id"], existing.tracking_id)
         self.assertEqual(duplicate["reporter_count"], 1)
 
+    def test_media_check_async_returns_202_and_completes(self):
+        from apps.concerns.tasks import run_media_check_job
+
+        self.client.force_authenticate(self.resident)
+        response = self.client.post(
+            "/api/concerns/media/check/?async=1",
+            {"forensics_only": "true", "media": png_upload("async.png")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.data["job_id"]
+        self.assertEqual(response.data["status"], "queued")
+
+        result = run_media_check_job.run(job_id)
+        self.assertEqual(result["status"], "completed")
+
+        poll = self.client.get(f"/api/concerns/media/check/jobs/{job_id}/")
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        self.assertEqual(poll.data["status"], "completed")
+        self.assertEqual(len(poll.data["result"]["files"]), 1)
+
+    def test_media_check_async_duplicate_tap_returns_same_job(self):
+        self.client.force_authenticate(self.resident)
+        first = self.client.post(
+            "/api/concerns/media/check/?async=1",
+            {"forensics_only": "true", "media": png_upload("dup.png")},
+            format="multipart",
+        )
+        second = self.client.post(
+            "/api/concerns/media/check/?async=1",
+            {"forensics_only": "true", "media": png_upload("dup.png")},
+            format="multipart",
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(second.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(first.data["job_id"], second.data["job_id"])
+
+    def test_media_check_rejects_oversize_before_decoding(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.client.force_authenticate(self.resident)
+        big = SimpleUploadedFile(
+            "big.jpg", b"\xff\xd8" + b"\x00" * (3 * 1024 * 1024 + 1),
+            content_type="image/jpeg",
+        )
+        response = self.client.post(
+            "/api/concerns/media/check/",
+            {"media": big},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 413)
+
     def test_media_duplicate_feedback_includes_the_existing_concern(self):
         community = active_test_community()
         existing = Concern.objects.create(

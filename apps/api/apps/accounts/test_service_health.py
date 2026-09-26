@@ -209,3 +209,17 @@ class SmsHealthTests(TestCase):
         get.return_value = Mock(raise_for_status=Mock(), json=Mock(return_value=[]))
         status_value, _detail = _sms()
         self.assertEqual(status_value, NOT_CONFIGURED)
+
+
+class HealthSplitTests(TestCase):
+    """live/ready split: liveness never touches external services."""
+
+    def test_live_returns_ok(self):
+        response = self.client.get("/api/health/live/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
+    def test_ready_reports_database(self):
+        response = self.client.get("/api/health/ready/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["database"], "ok")

@@ -33,7 +33,25 @@ def are_users_online(user_ids: list[int]) -> dict[int, bool]:
     keys = [presence_key(uid) for uid in deduped]
     key_to_uid = dict(zip(keys, deduped))
     try:
-        values = cache.get_many(keys) or {}
+        values = _get_many_fast(keys) or {}
     except Exception:
         return {uid: False for uid in deduped}
     return {uid: bool(values.get(key)) for key, uid in key_to_uid.items()}
+
+
+# Presence is non-critical: a single Upstash round-trip has measured 1-2.8s
+# from small hosts. Bound the whole lookup well under a second and fail to
+# unknown instead of holding a worker slot for seconds.
+PRESENCE_LOOKUP_TIMEOUT_SECONDS = 0.8
+
+
+def _get_many_fast(keys: list[str]) -> dict:
+    """cache.get_many with a hard deadline. Raises on timeout."""
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(cache.get_many, keys)
+        try:
+            return future.result(timeout=PRESENCE_LOOKUP_TIMEOUT_SECONDS) or {}
+        finally:
+            future.cancel()

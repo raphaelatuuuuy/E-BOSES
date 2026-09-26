@@ -639,6 +639,77 @@ def retry_pending_concern_jobs_task():
     return requeued
 
 
+@shared_task(
+    bind=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(OSError, TimeoutError),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 2},
+    time_limit=240,
+    soft_time_limit=180,
+)
+def run_media_check_job(self, job_id: str):
+    """Media authenticity check off the request thread.
+
+    Staged raw bytes (3MB/file cap, 3 files max) are rebuilt into upload
+    objects and run through the same _concern_media_check_results the sync
+    path uses, so async and sync verdicts match. Fail-safe with
+    requires_review — never auto-passed.
+    """
+    from django.core.cache import cache
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    from .media_check_jobs import (
+        JOB_KEY_PREFIX,
+        mark_completed,
+        mark_failed,
+        mark_processing,
+        take_staged_files,
+    )
+
+    mark_processing(job_id)
+    try:
+        stored = cache.get(f"{JOB_KEY_PREFIX}{job_id}") or {}
+        params = stored.get("_params") or {}
+        staged = take_staged_files(job_id)
+        rebuilt = [
+            SimpleUploadedFile(
+                item.get("name") or "upload",
+                item.get("content") or b"",
+                content_type=item.get("content_type") or "application/octet-stream",
+            )
+            for item in staged
+        ]
+        community = None
+        community_id = params.get("community_id")
+        if community_id:
+            from apps.emergencies.models import Community
+
+            community = Community.objects.filter(
+                pk=community_id, status=Community.Status.ACTIVE
+            ).first()
+        from .models import ConcernClassificationConfiguration
+        from .views import _concern_media_check_results
+
+        config = ConcernClassificationConfiguration.current(community)
+        files = _concern_media_check_results(
+            rebuilt,
+            config=config,
+            run_ai=not params.get("forensics_only", False),
+        )
+        mark_completed(job_id, {
+            "files": files,
+            "automated_check_completed": True,
+            "requires_review": False,
+        })
+        return {"job_id": job_id, "status": "completed"}
+    except Exception as exc:  # noqa: BLE001 — fail safe, never 500 the poller
+        logger.warning("Media check job %s failed: %s", job_id, exc.__class__.__name__)
+        mark_failed(job_id, exc.__class__.__name__)
+        return {"job_id": job_id, "status": "failed"}
+
+
 def broadcast_media_privacy_update(media_id: int) -> None:
     """Tell an open Details pane that a photo's privacy state moved."""
     from apps.notifications.services import broadcast_live_map_event

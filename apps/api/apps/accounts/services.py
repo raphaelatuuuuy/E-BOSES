@@ -333,6 +333,14 @@ def _extension(uploaded_file):
     return Path(getattr(uploaded_file, "name", "") or "").suffix.lower()
 
 
+def _looks_like_heic(content: bytes) -> bool:
+    """Detect HEIC/HEIF by ISO-BMFF ftyp brand (no decoder needed)."""
+    if len(content) < 12 or not content[4:8] == b"ftyp":
+        return False
+    brand = content[8:12]
+    return brand in {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"}
+
+
 def _scanner_callable():
     scanner_path = getattr(settings, "FILE_UPLOAD_SCANNER", "")
     if not scanner_path:
@@ -457,6 +465,19 @@ def validate_uploaded_media_file(
     if quality is None:
         quality = "strict" if strict else "soft"
 
+    # Rule: never process or store an empty upload. Without this, an empty
+    # stream reaches object storage (Cloudinary "Empty file" BadRequest) after
+    # the parent record already exists.
+    if not uploaded_file or (uploaded_file.size or 0) <= 0:
+        raise ValidationError("Attach a non-empty file.")
+    if _looks_like_heic(_read_upload(uploaded_file)):
+        # Distinct marker ("HEIC") so clients can render an unsupported-format
+        # state instead of a generic failure. Server-side HEIC→JPEG conversion
+        # needs a HEIF decoder (not installed); until then, reject clearly.
+        raise ValidationError(
+            "This photo is in HEIC format, which can't be previewed. "
+            "Please upload a JPEG or PNG instead."
+        )
     if uploaded_file.size > profile.max_size:
         raise ValidationError(
             f"{profile.label} files must be {profile.max_size // (1024 * 1024)}MB or smaller."

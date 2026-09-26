@@ -480,35 +480,52 @@ export function StreetViewModal({
 
   useEffect(() => {
     const controller = new AbortController()
-    void getStreetViewImage(
-      { lat: coord.lat, lng: coord.lng },
-      controller.signal
-    )
-      .then((result) => {
-        if (result.status === "available" && result.image) {
-          if (
-            Number.isFinite(result.latitude) &&
-            Number.isFinite(result.longitude)
-          ) {
-            onResolvedRef.current?.({
-              lat: result.latitude as number,
-              lng: result.longitude as number,
-            })
+    let attempts = 0
+    // A "pending" answer means a worker is generating the panorama: poll the
+    // same URL until it resolves instead of blocking Daphne on tile downloads.
+    const load = (): void => {
+      void getStreetViewImage(
+        { lat: coord.lat, lng: coord.lng },
+        controller.signal
+      )
+        .then((result) => {
+          if (result.status === "pending") {
+            attempts += 1
+            if (attempts < 12 && !controller.signal.aborted) {
+              window.setTimeout(() => {
+                if (!controller.signal.aborted) load()
+              }, 2000)
+              return
+            }
+            setStreetCoverage({ key: coordKey, status: "no_coverage" })
+            return
           }
-          setStreetCoverage({
-            key: coordKey,
-            status: "available",
-            image: result.image,
-          })
-        } else {
-          setStreetCoverage({ key: coordKey, status: "no_coverage" })
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setStreetCoverage({ key: coordKey, status: "error" })
-        }
-      })
+          if (result.status === "available" && result.image) {
+            if (
+              Number.isFinite(result.latitude) &&
+              Number.isFinite(result.longitude)
+            ) {
+              onResolvedRef.current?.({
+                lat: result.latitude as number,
+                lng: result.longitude as number,
+              })
+            }
+            setStreetCoverage({
+              key: coordKey,
+              status: "available",
+              image: result.image,
+            })
+          } else {
+            setStreetCoverage({ key: coordKey, status: "no_coverage" })
+          }
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setStreetCoverage({ key: coordKey, status: "error" })
+          }
+        })
+    }
+    load()
     return () => controller.abort()
   }, [coordKey, coord.lat, coord.lng])
 

@@ -455,11 +455,30 @@ class PublicStreetViewCoverageView(APIView):
         if cached is not None:
             return Response(cached)
 
-        panorama = nearest_street_panorama(
-            latitude=latitude,
-            longitude=longitude,
-            radius_meters=100,
-        )
+        # Distributed generation lock: concurrent misses for the same grid
+        # cell share one upstream panorama search instead of stampeding the
+        # provider (mirrors the image endpoint below).
+        import time as _time
+
+        lock_key = f"{cache_key}:lock"
+        locked = cache.add(lock_key, True, 60)
+        if not locked:
+            deadline = _time.perf_counter() + 8.0
+            while _time.perf_counter() < deadline:
+                _time.sleep(0.2)
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    return Response(cached)
+            locked = cache.add(lock_key, True, 60)
+        try:
+            panorama = nearest_street_panorama(
+                latitude=latitude,
+                longitude=longitude,
+                radius_meters=100,
+            )
+        finally:
+            if locked:
+                cache.delete(lock_key)
         payload = (
             {
                 "status": "available",
@@ -515,12 +534,14 @@ def _upload_street_imagery_to_storage(imagery) -> str | None:
         return None
 
 
-def get_or_fetch_street_view_image(latitude: float, longitude: float) -> dict:
-    """Shared fetch used by the public endpoint and the cache warmer.
+def get_or_fetch_street_view_image(latitude: float, longitude: float, *, exclusive: bool = False) -> dict:
+    """Shared fetch used by the public endpoint, warmer and worker.
 
     Returns the response payload (cached, fetched, or no_coverage). Nearby
     pins share 4dp cache entries; the payload records the true panorama
-    coordinates so consumers see the real distance.
+    coordinates so consumers see the real distance. With exclusive=True a
+    contended lock returns {"status": "pending"} immediately instead of
+    duplicating the upstream fetch — the async endpoint path.
     """
     cache_key = f"public:street-view-image:v5:{latitude:.4f}:{longitude:.4f}"
     cached = cache.get(cache_key)
@@ -533,6 +554,8 @@ def get_or_fetch_street_view_image(latitude: float, longitude: float) -> dict:
 
     lock_key = f"{cache_key}:lock"
     locked = cache.add(lock_key, True, 60)
+    if exclusive and not locked:
+        return {"status": "pending"}
     started = _time.perf_counter()
     try:
         imagery = fetch_latest_street_imagery(
@@ -599,6 +622,28 @@ class PublicStreetViewImageView(APIView):
                 {"detail": "A valid latitude and longitude are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        wants_async = str(
+            request.query_params.get("async") or ""
+        ).lower() in {"1", "true"}
+        if wants_async:
+            # Never download tiles on the request thread: serve cache, else
+            # enqueue one generation and answer pending. The client polls this
+            # same URL; the queued marker keeps polls from stampeding tasks.
+            cache_key = f"public:street-view-image:v5:{latitude:.4f}:{longitude:.4f}"
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return Response(cached)
+            if cache.add(f"{cache_key}:queued", True, 180):
+                try:
+                    from .tasks import generate_street_view_task
+
+                    generate_street_view_task.delay(float(latitude), float(longitude))
+                except Exception:
+                    cache.delete(f"{cache_key}:queued")
+            payload = get_or_fetch_street_view_image(latitude, longitude, exclusive=True)
+            if payload.get("status") == "pending":
+                payload = {**payload, "status_url": request.build_absolute_uri(request.get_full_path())}
+            return Response(payload)
         return Response(get_or_fetch_street_view_image(latitude, longitude))
 
 

@@ -14,16 +14,16 @@ DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
 
 
-def _page_params(request):
+def _page_params(request, default_size=DEFAULT_PAGE_SIZE, max_size=MAX_PAGE_SIZE):
     try:
         page = max(1, int(request.query_params.get("page", 1)))
     except (TypeError, ValueError):
         page = 1
     try:
-        size = int(request.query_params.get("page_size", DEFAULT_PAGE_SIZE))
+        size = int(request.query_params.get("page_size", default_size))
     except (TypeError, ValueError):
-        size = DEFAULT_PAGE_SIZE
-    return page, min(max(1, size), MAX_PAGE_SIZE)
+        size = default_size
+    return page, min(max(1, size), max_size)
 
 
 def _page_url(request, page, size):
@@ -34,13 +34,13 @@ def _page_url(request, page, size):
     return f"{base}?{urlencode(params)}"
 
 
-def paginate_response(request, queryset, serialize_page):
+def paginate_response(request, queryset, serialize_page, default_size=DEFAULT_PAGE_SIZE, max_size=MAX_PAGE_SIZE):
     """Serialize only the current page.
 
     serialize_page receives an ordered, already-sliced queryset iterable and
     must return a list of JSON-ready dicts.
     """
-    page, size = _page_params(request)
+    page, size = _page_params(request, default_size, max_size)
     total = queryset.count()
     start = (page - 1) * size
     results = serialize_page(queryset[start:start + size])

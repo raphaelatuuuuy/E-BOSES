@@ -60,6 +60,36 @@ class PrivateMediaStorage(_PrivateBase):
         raise ValueError("Private media must use an authenticated media view.")
 
 
+def preview_link_response(file_field):
+    """JSON link variant for ready previews; None when unavailable.
+
+    Lets clients fetch bytes directly from object storage WITHOUT forwarding
+    their Authorization header to a third party (browsers forward headers on
+    redirects, which would leak JWTs). Callers fall back to FileResponse.
+    Only used when ?link=1 is passed; permission checks stay in the view.
+    """
+    from rest_framework.response import Response
+
+    name = getattr(file_field, "name", "") or ""
+    if BACKEND != "cloudinary" or not name:
+        return None
+    try:
+        if isinstance(file_field.storage, PrivateMediaStorage):
+            url = signed_private_url(name)
+            cache_control = "private, max-age=300"
+        else:
+            url = file_field.storage.url(name)
+            cache_control = "public, max-age=3600"
+    except Exception:
+        return None
+    if not url:
+        return None
+    response = Response({"status": "ready", "url": url})
+    response["X-EBOSES-Preview-Status"] = "ready"
+    response["Cache-Control"] = cache_control
+    return response
+
+
 def signed_private_url(name, *, expires_in=300):
     if BACKEND != "cloudinary":
         return None

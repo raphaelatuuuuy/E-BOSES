@@ -14,7 +14,7 @@ from apps.accounts.permissions import IsVerifiedAccount as IsAuthenticated
 from apps.emergencies.services import mark_witness_notifications_read
 
 from .models import BrowserPushSubscription, NativePushDevice, Notification
-from .presence import are_users_online, is_user_online, presence_key
+from .presence import are_users_online, is_user_online
 from .serializers import BrowserPushSubscriptionSerializer, NativePushDeviceSerializer, NotificationSerializer
 from .services import web_push_config_health
 from .tickets import issue_websocket_ticket
@@ -41,11 +41,13 @@ class PresenceStatusView(APIView):
             return Response({"detail": "A maximum of 100 presence ids may be requested."}, status=status.HTTP_400_BAD_REQUEST)
         cache_started = time.perf_counter()
         try:
-            # One Redis round-trip regardless of ID count (was N sequential GETs).
-            values = cache.get_many([presence_key(uid) for uid in ids]) or {}
+            # One Redis round-trip regardless of ID count (was N sequential
+            # GETs), with a hard sub-second deadline — presence is
+            # non-critical and must never hold a worker slot for seconds.
             statuses = {
-                str(uid): bool(values.get(presence_key(uid))) for uid in ids
+                str(uid): value for uid, value in are_users_online(ids).items()
             }
+            statuses.update({str(uid): False for uid in ids if str(uid) not in statuses})
         except Exception:
             statuses = {str(uid): False for uid in ids}
         cache_ms = (time.perf_counter() - cache_started) * 1000

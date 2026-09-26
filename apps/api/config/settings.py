@@ -91,6 +91,7 @@ INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "config.middleware.SlowRequestLoggingMiddleware",
+    "config.middleware.LoadSheddingMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -287,6 +288,8 @@ CELERY_TASK_ROUTES = {
     "apps.concerns.tasks.process_concern_media_privacy_task": {"queue": "heavy"},
     "apps.concerns.tasks.run_content_moderation_ai_task": {"queue": "heavy"},
     "apps.concerns.tasks.run_resident_precheck_job": {"queue": "heavy"},
+    "apps.concerns.tasks.run_media_check_job": {"queue": "heavy"},
+    "apps.emergencies.tasks.generate_street_view_task": {"queue": "heavy"},
     "apps.emergencies.tasks.generate_emergency_media_preview_task": {"queue": "heavy"},
     "apps.sms.tasks.sms_ai_assist_task": {"queue": "heavy"},
     "apps.sms.tasks.reverse_geocode_alert_task": {"queue": "heavy"},
@@ -460,6 +463,11 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = env.int("FILE_UPLOAD_MAX_MEMORY_SIZE", default=10 
 MEDIA_DEDUP_WINDOW_DAYS = env.int("MEDIA_DEDUP_WINDOW_DAYS", default=0)
 # Requests slower than this are logged as warnings (config/middleware.py).
 SLOW_REQUEST_LOG_MS = env.int("SLOW_REQUEST_LOG_MS", default=500)
+# Load shedding (config/middleware.py LoadSheddingMiddleware): friendly 503s
+# for heavy upload endpoints past this RSS. OFF by default — enable only if
+# memory logs show sustained peaks near the limit after the bounding fixes.
+LOAD_SHEDDING_ENABLED = env.bool("LOAD_SHEDDING_ENABLED", default=False)
+LOAD_SHEDDING_RSS_MB = env.float("LOAD_SHEDDING_RSS_MB", default=450.0)
 
 # Data retention (PH Data Privacy Act): how long personal content survives
 # after it stops being useful. The nightly beat task enforces these periods;
