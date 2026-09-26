@@ -90,6 +90,8 @@ services:
         sync: false
       - key: RESEND_API_KEY
         sync: false
+      - key: FIREBASE_CREDENTIALS_PATH
+        sync: false
       - key: IP2GEO_API_KEY
         sync: false
       - key: IP2GEO_API_URL

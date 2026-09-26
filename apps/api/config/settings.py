@@ -10,6 +10,7 @@ import hmac
 import os
 from pathlib import Path
 import socket
+import ssl
 import sys
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -201,6 +202,14 @@ def _celery_redis_url(value):
 
 CELERY_BROKER_URL = _celery_redis_url(env("CELERY_BROKER_URL", default=REDIS_URL))
 CELERY_RESULT_BACKEND = _celery_redis_url(env("CELERY_RESULT_BACKEND", default=REDIS_URL))
+
+# Celery 5.6 strips URL query strings when loading broker/result URLs into
+# conf, so ?ssl_cert_reqs=... in the URL never reaches the transports (the
+# result backend then refuses rediss outright). Pass it as transport options
+# instead. Local redis:// URLs are untouched.
+if CELERY_BROKER_URL.lower().startswith("rediss://"):
+    CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+    CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 
 # Django cache: shared Redis instead of the per-process LocMemCache so the API
 # server, Celery worker and beat all see the same keys. Beat tasks (POI
