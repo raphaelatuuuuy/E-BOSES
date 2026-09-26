@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { useNavigate } from "react-router-dom"
 import { Check, TriangleAlertIcon } from "lucide-react"
+import { toast } from "sonner"
 
 import { useAuthSession } from "@/features/auth/auth-session"
 import {
@@ -98,6 +99,33 @@ export default function GuestReportPage() {
     return () =>
       window.removeEventListener("eboses:report-created", handleReportCreated)
   }, [refreshPublicReports])
+
+  // Duplicate tap inside the guest dialog: open this exact report's alert
+  // panel and focus its map pin — no navigation, the guest keeps map context.
+  const snapshotRef = useRef(snapshot)
+  snapshotRef.current = snapshot
+  useEffect(() => {
+    const handleShowReport = (event: Event) => {
+      const detail = (event as CustomEvent<{ kind?: unknown; id?: unknown }>).detail
+      const id = typeof detail?.id === "number" ? detail.id : Number(detail?.id)
+      if (!Number.isInteger(id)) return
+      const kind = detail?.kind === "emergency" ? "emergency" : "concern"
+      const current = snapshotRef.current
+      const found = [
+        ...(current?.concerns ?? []),
+        ...(current?.emergencies ?? []),
+      ].some((item) => item.id === id)
+      if (!found) {
+        toast.info("That report isn't publicly listed, so it can't be opened here.")
+        return
+      }
+      setSelected({ kind, id })
+      setAlertsPanelOpen(true)
+    }
+    window.addEventListener("eboses:show-public-report", handleShowReport)
+    return () =>
+      window.removeEventListener("eboses:show-public-report", handleShowReport)
+  }, [])
 
   const sessionUser = user
     ? {

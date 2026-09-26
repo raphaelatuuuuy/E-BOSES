@@ -911,5 +911,74 @@ class ConfigurableOCRWorkflowTests(TestCase):
             decide_case(case.pk, official=official, approve=True, reason="")
         decided = decide_case(case.pk, official=official, approve=True, reason="Document reviewed by the barangay official.")
         self.assertEqual(decided.status, ResidenceVerificationCase.Status.APPROVED)
+
+
+class OCRSamplePublishedFallbackTests(TestCase):
+    """Sample URLs must survive publish: types live on in the published config
+    after the draft is cloned, so GET falls back to published read-only
+    instead of 404ing every sample (photo shows then disappears)."""
+
+    def _jpeg_file(self, name="sample.jpg"):
+        from io import BytesIO
+
+        from django.core.files.base import ContentFile
+        from PIL import Image as PILImage
+
+        output = BytesIO()
+        PILImage.new("RGB", (64, 48), (90, 110, 130)).save(output, "JPEG", quality=88)
+        return ContentFile(output.getvalue(), name=name)
+
+    def _official_client(self):
+        from rest_framework.test import APIClient
+
+        official = User.objects.create_superuser(
+            email="sample-official@example.com",
+            password="Str0ng!Pass123",
+        )
+        client = APIClient()
+        client.force_authenticate(official)
+        return client
+
+    def test_sample_serves_from_published_when_draft_lacks_type(self):
+        from apps.accounts.models import OCRDocumentType, OCRSample
+        from apps.concerns.test_helpers import active_test_community
+
+        community = active_test_community()
+        OCRConfigurationVersion.objects.filter(
+            community=community, scope="residence_proof"
+        ).delete()
+        config = OCRConfigurationVersion.objects.create(
+            community=community,
+            scope="residence_proof",
+            version=1,
+            status="published",
+        )
+        document = OCRDocumentType.objects.create(
+            configuration=config, code="barangay_id", name="Barangay ID"
+        )
+        OCRSample.objects.create(
+            document_type=document,
+            name="single",
+            file=self._jpeg_file(),
+            original_filename="sample.jpg",
+            mime_type="image/jpeg",
+            is_active=True,
+        )
+
+        response = self._official_client().get(
+            "/api/auth/ocr/document-types/barangay_id/sample/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/jpeg")
+        content = b"".join(response.streaming_content)
+        self.assertTrue(content.startswith(b"\xff\xd8"))
+
+    def test_sample_still_404s_for_unknown_code(self):
+        response = self._official_client().get(
+            "/api/auth/ocr/document-types/no-such-type/sample/"
+        )
+
+        self.assertEqual(response.status_code, 404)
         with self.assertRaises(Exception):
             decide_case(case.pk, official=official, approve=False, reason="Changed mind")

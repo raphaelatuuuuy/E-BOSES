@@ -1338,8 +1338,16 @@ class OCRDocumentSampleView(APIView):
     def get(self, request, code):
         if not _official(request):
             return Response({"detail": "Official permission required."}, status=status.HTTP_403_FORBIDDEN)
-        config = draft_configuration(community=_official_community(request))
+        community = _official_community(request)
+        config = draft_configuration(community=community)
         document = config.document_types.filter(code=code).first() if config else None
+        if not document:
+            # Read-only fallback: types live on in the published config after
+            # publish (fresh draft clone), or were saved outside this draft.
+            # Without it every sample URL 404s the moment the draft no longer
+            # carries the type — the "photo shows then disappears" bug.
+            published = published_configuration(community=community)
+            document = published.document_types.filter(code=code).first() if published else None
         if not document:
             return Response({"detail": "Document type not found."}, status=status.HTTP_404_NOT_FOUND)
         side = self._resolve_side(request, document)

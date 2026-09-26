@@ -680,6 +680,12 @@ SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = env.bool("CSRF_COOKIE_HTTPONLY", default=False)
 SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax")
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax")
+REFRESH_COOKIE_SAMESITE = env("REFRESH_COOKIE_SAMESITE", default=SESSION_COOKIE_SAMESITE)
+# Dedicated override for the JWT refresh cookie (apps/accounts/views.py
+# set_refresh_cookie): it previously reused SESSION_COOKIE_SAMESITE, so a
+# REFRESH_COOKIE_SAMESITE env value was silently ignored. Values are plain
+# strings — env parsing preserves "None" verbatim (never Python None), and
+# SameSite=None requires Secure (enabled above).
 SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=not IS_LOCAL_DEVELOPMENT)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https") if env.bool("TRUST_X_FORWARDED_PROTO", default=not IS_LOCAL_DEVELOPMENT) else None
 SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0 if IS_LOCAL_DEVELOPMENT else 31536000)

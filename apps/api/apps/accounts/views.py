@@ -146,7 +146,9 @@ def set_refresh_cookie(response, refresh_token):
         max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
         httponly=True,
         secure=settings.REFRESH_COOKIE_SECURE,
-        samesite=settings.SESSION_COOKIE_SAMESITE or "Lax",
+        samesite=getattr(settings, "REFRESH_COOKIE_SAMESITE", None)
+        or settings.SESSION_COOKIE_SAMESITE
+        or "Lax",
         path="/api/auth/",
     )
 
@@ -155,7 +157,9 @@ def delete_refresh_cookie(response):
     response.delete_cookie(
         REFRESH_COOKIE_NAME,
         path="/api/auth/",
-        samesite=settings.SESSION_COOKIE_SAMESITE or "Lax",
+        samesite=getattr(settings, "REFRESH_COOKIE_SAMESITE", None)
+        or settings.SESSION_COOKIE_SAMESITE
+        or "Lax",
     )
 
 

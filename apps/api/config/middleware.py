@@ -39,14 +39,30 @@ def _ensure_query_counter():
 
 
 def _rss_mb():
-    """Process RSS in MB, or None where unavailable. Never raises."""
+    """Current process RSS in MB, or None where unavailable. Never raises.
+
+    NOTE: resource.getrusage().ru_maxrss is the peak since process start and
+    can never decrease — it must NOT be used here, or every log line shows a
+    pinned high value that looks like a stuck leak. Read current resident
+    pages from /proc on Linux (Render) instead.
+    """
+    try:
+        import os
+
+        if os.path.exists("/proc/self/statm"):
+            with open("/proc/self/statm", "rb") as handle:
+                resident_pages = int(handle.read().split()[1])
+            page_bytes = os.sysconf("SC_PAGE_SIZE")
+            return round(resident_pages * page_bytes / (1024 * 1024), 1)
+    except Exception:
+        pass
     try:
         import resource
-
-        # ru_maxrss is kilobytes on Linux, bytes on macOS — normalize.
-        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         import sys
 
+        # Last resort: peak-ever (monotonic — before/after deltas from this
+        # are meaningless, but a rising value still signals growth).
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         if sys.platform == "darwin":
             rss = rss / (1024 * 1024)
         else:

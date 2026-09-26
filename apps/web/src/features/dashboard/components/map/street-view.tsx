@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { ExpandIcon, ShrinkIcon, XIcon } from "lucide-react"
+import { ExpandIcon, FootprintsIcon, MapIcon, ShrinkIcon, XIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -708,13 +708,7 @@ export function StreetViewModal({
             onClick={() => void closeStreetView()}
             className="size-11"
           >
-            <span
-              aria-hidden
-              className="material-symbols-outlined leading-none select-none"
-              style={{ fontSize: "20px" }}
-            >
-              directions_run
-            </span>
+            <FootprintsIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
           <MapControlButton
             tone="light"
@@ -738,13 +732,7 @@ export function StreetViewModal({
             onClick={() => setMiniOpen((open) => !open)}
             className="size-11"
           >
-            <span
-              aria-hidden
-              className="material-symbols-outlined leading-none select-none"
-              style={{ fontSize: "20px" }}
-            >
-              map
-            </span>
+            <MapIcon className="size-5" strokeWidth={1.9} />
           </MapControlButton>
         </MapControlStack>
         </div>

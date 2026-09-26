@@ -115,7 +115,8 @@ export function isMapDrawableConcern(concern: { status: string }) {
 }
 
 export function isResolvedRecord(record: { status: string }) {
-  return record.status === "resolved" || record.status === "partially_resolved"
+  const normalized = (record.status ?? "").trim().toLowerCase();
+  return normalized === "resolved" || normalized === "partially_resolved";
 }
 
 export function isAdvisoryExpired(

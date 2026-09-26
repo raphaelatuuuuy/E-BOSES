@@ -702,8 +702,10 @@ export function ResidentLeafletMap({
           resolutionCount: post.resolution_evidence?.filter((item) =>
             item.mime_type.startsWith("image/")
           ).length,
-          resolved:
-            post.status === "resolved" || post.status === "partially_resolved",
+          resolved: (() => {
+            const normalized = (post.status ?? "").trim().toLowerCase();
+            return normalized === "resolved" || normalized === "partially_resolved";
+          })(),
           resolvedAt:
             [...(post.status_events ?? [])]
               .filter((event) => statusGroupOf(event.status) === "closed")

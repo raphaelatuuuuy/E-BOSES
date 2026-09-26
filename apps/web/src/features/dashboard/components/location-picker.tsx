@@ -48,7 +48,7 @@ import {
   advisoryLabel,
   advisoryMarkerHtml,
 } from "@/features/dashboard/components/community-content/advisory-tags"
-import { advisoryDoneColor } from "@/features/dashboard/components/alerts-map/lib"
+import { advisoryDoneColor, isActiveEmergency } from "@/features/dashboard/components/alerts-map/lib"
 import {
   bindHoverCard,
   closeHoverCardsOnLeave,
@@ -1098,26 +1098,19 @@ export default function LocationPickerModal({
                   )
                 )
               : glyphPinHtml({
-                  paths: GLYPHS.emergency,
-                  color: [
-                    "resolved",
-                    "closed",
-                    "cancelled",
-                    "false_alarm",
-                    "invalid",
-                  ].includes(alert.status)
+                  // Same settled rule as every other map: settled pins get
+                  // the check glyph, not the triangle. Previously only the
+                  // color changed, so resolved alerts drew green triangles.
+                  paths: !isActiveEmergency(alert)
+                    ? GLYPHS.resolved
+                    : GLYPHS.emergency,
+                  color: !isActiveEmergency(alert)
                     ? MAP_COLORS.resolved
                     : MAP_COLORS.emergency,
                   size: 28,
                   selected,
                   hoverGrow: true,
-                  tint: [
-                    "resolved",
-                    "closed",
-                    "cancelled",
-                    "false_alarm",
-                    "invalid",
-                  ].includes(alert.status),
+                  tint: !isActiveEmergency(alert),
                 })
         const marker = L.marker([alert.latitude, alert.longitude], {
           icon: L.divIcon({

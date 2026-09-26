@@ -136,7 +136,9 @@ export function isConcernActive(concern: {
 }
 
 export function isEmergencyActive(status: string | null | undefined): boolean {
-  return !SETTLED_EMERGENCY_STATUSES.has((status ?? "").trim())
+  // Normalize: a "Resolved"/" RESOLVED " variant must settle exactly like
+  // "resolved" — otherwise the pin keeps the triangle alert glyph.
+  return !SETTLED_EMERGENCY_STATUSES.has((status ?? "").trim().toLowerCase())
 }
 
 export function statusNotes(concern: {

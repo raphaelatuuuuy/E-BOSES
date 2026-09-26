@@ -971,6 +971,26 @@ class AuthAPITests(APITestCase):
         self.assertIn("eboses_refresh_token", response.cookies)
         self.assertTrue(response.cookies["eboses_refresh_token"]["httponly"])
 
+    def test_login_refresh_cookie_honors_samesite_override(self):
+        """REFRESH_COOKIE_SAMESITE must reach Set-Cookie (it was silently ignored)."""
+        get_user_model().objects.create_user(
+            email="samesite@example.com",
+            phone_number="+639241234568",
+            password="Str0ng!Pass123",
+            status=get_user_model().Status.VERIFIED,
+        )
+
+        with override_settings(REFRESH_COOKIE_SAMESITE="None"):
+            response = self.client.post(
+                "/api/auth/login/",
+                {"identifier": "samesite@example.com", "password": "Str0ng!Pass123"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        morsel = response.cookies["eboses_refresh_token"]
+        self.assertEqual(morsel["samesite"], "None")
+
     def test_bad_password_returns_a_machine_readable_code(self):
         get_user_model().objects.create_user(
             email="wrongpass@example.com",

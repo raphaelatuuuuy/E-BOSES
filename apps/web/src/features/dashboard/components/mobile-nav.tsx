@@ -13,6 +13,7 @@ import {
   MegaphoneIcon,
   PlusIcon,
   ShieldCheckIcon,
+  SirenIcon,
   TriangleAlert,
   UserCircleIcon,
   UserCogIcon,
@@ -181,15 +182,13 @@ function SosTab({ tab = false }: { tab?: boolean }) {
           hot ? "text-sos" : "text-neutral-400 hover:text-sos"
         )}
       >
-        <span
+        <SirenIcon
           aria-hidden
           className={cn(
-            "material-symbols-outlined select-none text-[26px] leading-none",
+            "size-[26px] leading-none select-none",
             hot && "animate-sos-icon-blink"
           )}
-        >
-          sos
-        </span>
+        />
         <span className="text-[11px] leading-none font-bold">
           {activeEmergency ? "Ongoing" : "Need help?"}
         </span>
@@ -214,15 +213,13 @@ function SosTab({ tab = false }: { tab?: boolean }) {
           : "text-sos hover:bg-neutral-100 hover:text-sos-bright active:bg-neutral-200",
       )}
     >
-      <span
-        aria-hidden
-        className={cn(
-          "material-symbols-outlined select-none text-2xl leading-none",
-          hot && "animate-sos-icon-blink",
-        )}
-      >
-        sos
-      </span>
+        <SirenIcon
+          aria-hidden
+          className={cn(
+            "size-6 leading-none select-none",
+            hot && "animate-sos-icon-blink",
+          )}
+        />
     </button>
   )
 }
