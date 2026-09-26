@@ -29,7 +29,7 @@ CAPACITOR_ASSETS = {"cordova.js", "cordova_plugins.js"}
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_OWNER = "raphaelatuuuuy"
 GITHUB_REPO = "E-BOSES"
-GITHUB_TAG = "v1"
+GITHUB_TAG = os.environ.get("GITHUB_TAG", "v1")
 
 NPM = "npm.cmd" if IS_WINDOWS else "npm"
 NPX = "npx.cmd" if IS_WINDOWS else "npx"

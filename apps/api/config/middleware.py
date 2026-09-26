@@ -2,10 +2,40 @@ import logging
 import threading
 import time
 
+from contextvars import ContextVar
+
 from django.conf import settings
 from django.db import connection
 
 logger = logging.getLogger("eboses.slow_requests")
+
+# Per-request SQL counter. connection.queries is only populated under
+# DEBUG=True, so production always reported queries=0. This wrapper counts
+# executions without storing SQL text (storing it would itself grow memory
+# per request — the thing we are trying to observe). ContextVar-based so
+# counts stay correct when sync ORM work hops threads under ASGI.
+_query_count_var: ContextVar[int] = ContextVar("eboses_query_count", default=0)
+_query_wrapper_installed = False
+_query_wrapper_lock = threading.Lock()
+
+
+def _counting_wrapper(execute, sql, params, many, context):
+    _query_count_var.set(_query_count_var.get() + 1)
+    return execute(sql, params, many, context)
+
+
+def _ensure_query_counter():
+    global _query_wrapper_installed
+    if _query_wrapper_installed:
+        return
+    with _query_wrapper_lock:
+        if _query_wrapper_installed:
+            return
+        try:
+            connection.execute_wrappers.append(_counting_wrapper)
+        except Exception:
+            pass
+        _query_wrapper_installed = True
 
 
 def _rss_mb():
@@ -105,21 +135,25 @@ class SlowRequestLoggingMiddleware:
 
     def __init__(self, get_response):
         self.get_response = get_response
+        _ensure_query_counter()
 
     def __call__(self, request):
         started = time.perf_counter()
         rss_before = _rss_mb()
         type(self)._active_requests(1)
+        token = _query_count_var.set(0)
         try:
             response = self.get_response(request)
         finally:
             elapsed_ms = (time.perf_counter() - started) * 1000
             active = type(self)._active_requests(-1)
+            try:
+                query_count = _query_count_var.get()
+            except Exception:
+                query_count = -1
+            finally:
+                _query_count_var.reset(token)
             if elapsed_ms >= getattr(settings, "SLOW_REQUEST_LOG_MS", 500):
-                try:
-                    query_count = len(connection.queries)
-                except Exception:
-                    query_count = -1
                 rss_after = _rss_mb()
                 try:
                     response_bytes = len(getattr(response, "content", b"") or b"")

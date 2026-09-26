@@ -247,10 +247,15 @@ def escalate_overdue_emergencies_task(minutes=None):
     if not cache.add(lock_key, True, 55):
         return {"escalated": 0, "routed": 0, "minutes": minutes, "skipped": "overlap"}
     try:
+        from apps.db_resilience import retry_on_db_blip
+
         from .views import escalate_overdue_assignments, retry_waiting_alerts
 
-        escalations = escalate_overdue_assignments(minutes=minutes)
-        routed = retry_waiting_alerts()
+        # Pooler blips must not fail the sweep: retry once on a fresh
+        # connection; the handlers themselves stay idempotent.
+        escalations = retry_on_db_blip(
+            lambda: escalate_overdue_assignments(minutes=minutes))()
+        routed = retry_on_db_blip(retry_waiting_alerts)()
         return {"escalated": len(escalations), "routed": len(routed), "minutes": minutes}
     finally:
         cache.delete(lock_key)

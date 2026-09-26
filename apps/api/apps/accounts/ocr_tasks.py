@@ -46,9 +46,13 @@ def process_test_run_task(self, test_run_id, side=""):
 
 @shared_task(time_limit=90, soft_time_limit=60)
 def ocr_health_canary_task():
+    from apps.db_resilience import retry_on_db_blip
+
     from .ocr_runtime import run_health_canary
 
-    status = run_health_canary()
+    # A pooler blip must not masquerade as provider trouble: retry once on a
+    # fresh connection so the OCR signal reflects OCR, not the database.
+    status = retry_on_db_blip(run_health_canary)()
     return {"provider": status.provider, "status": status.status}
 
 
