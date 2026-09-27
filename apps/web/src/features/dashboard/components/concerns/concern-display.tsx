@@ -20,8 +20,8 @@ export const filters = [
   "All",
   "Active",
   "Resolved",
-  "Rejected",
   "Appealed",
+  "Rejected",
 ] as const
 
 export const activeStatuses: ConcernStatus[] = [...ACTIVE_CONCERN_STATUSES]

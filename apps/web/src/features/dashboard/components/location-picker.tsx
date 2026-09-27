@@ -48,10 +48,14 @@ import {
   advisoryLabel,
   advisoryMarkerHtml,
 } from "@/features/dashboard/components/community-content/advisory-tags"
-import { advisoryDoneColor } from "@/features/dashboard/components/alerts-map/lib"
+import {
+  advisoryDoneColor,
+  isActiveEmergency,
+} from "@/features/dashboard/components/alerts-map/lib"
 import {
   bindHoverCard,
   closeHoverCardsOnLeave,
+  openHoverCard,
 } from "@/features/dashboard/components/map/photo-tooltip"
 import {
   StreetViewModal,
@@ -456,6 +460,11 @@ export default function LocationPickerModal({
   )
   const youLayerRef = useRef<leaflet.LayerGroup | null>(null)
   const publicAlertMarkersRef = useRef(new Map<string, leaflet.Marker>())
+  // Hover cards per public pin, so a programmatic focus (duplicate tap) can
+  // open the same tip a hover would.
+  const publicAlertCardsRef = useRef(
+    new Map<string, { card: leaflet.Popup; marker: leaflet.Marker }>()
+  )
   const [gpsFix, setGpsFix] = useState<{ lat: number; lng: number } | null>(
     null
   )
@@ -1025,6 +1034,7 @@ export default function LocationPickerModal({
       if (cancelled || !publicAlertLayerRef.current) return
       group.clearLayers()
       publicAlertMarkersRef.current.clear()
+      publicAlertCardsRef.current.clear()
       const areaGroup = publicAdvisoryAreaLayerRef.current
       areaGroup?.clearLayers()
       publicAdvisoryAreasRef.current.clear()
@@ -1098,26 +1108,17 @@ export default function LocationPickerModal({
                   )
                 )
               : glyphPinHtml({
-                  paths: GLYPHS.emergency,
-                  color: [
-                    "resolved",
-                    "closed",
-                    "cancelled",
-                    "false_alarm",
-                    "invalid",
-                  ].includes(alert.status)
+                  // A settled alert is a check, not a still-dangerous triangle.
+                  paths: !isActiveEmergency(alert)
+                    ? GLYPHS.resolved
+                    : GLYPHS.emergency,
+                  color: !isActiveEmergency(alert)
                     ? MAP_COLORS.resolved
                     : MAP_COLORS.emergency,
                   size: 28,
                   selected,
                   hoverGrow: true,
-                  tint: [
-                    "resolved",
-                    "closed",
-                    "cancelled",
-                    "false_alarm",
-                    "invalid",
-                  ].includes(alert.status),
+                  tint: !isActiveEmergency(alert),
                 })
         const marker = L.marker([alert.latitude, alert.longitude], {
           icon: L.divIcon({
@@ -1181,7 +1182,7 @@ export default function LocationPickerModal({
           )
           if (selected) paintWide(key, wideColor)
         }
-        bindHoverCard(
+        const hoverCard = bindHoverCard(
           L,
           map,
           marker,
@@ -1234,7 +1235,13 @@ export default function LocationPickerModal({
           size
         )
         marker.addTo(group)
-        publicAlertMarkersRef.current.set(`${alert.kind}:${alert.id}`, marker)
+        const markerKey = `${alert.kind}:${alert.id}`
+        publicAlertMarkersRef.current.set(markerKey, marker)
+        if (hoverCard)
+          publicAlertCardsRef.current.set(markerKey, {
+            card: hoverCard,
+            marker,
+          })
       }
     })
     return () => {
@@ -1252,11 +1259,14 @@ export default function LocationPickerModal({
 
   useEffect(() => {
     if (!open || !selectedAlert) return
-    const marker = publicAlertMarkersRef.current.get(
-      `${selectedAlert.kind}:${selectedAlert.id}`
-    )
-    if (marker && mapRef.current)
-      mapRef.current.panTo(marker.getLatLng(), { animate: true })
+    const key = `${selectedAlert.kind}:${selectedAlert.id}`
+    const marker = publicAlertMarkersRef.current.get(key)
+    if (!mapRef.current) return
+    if (marker) mapRef.current.panTo(marker.getLatLng(), { animate: true })
+    // Focusing a pin shows the same hover tip a pointer hover would, so the
+    // selected report reads as "this one" on the map.
+    const entry = publicAlertCardsRef.current.get(key)
+    if (entry) openHoverCard(mapRef.current, entry.card, entry.marker)
   }, [open, selectedAlert])
 
   // Clear stale results when the query drops below the debounce threshold, or

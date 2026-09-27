@@ -160,7 +160,7 @@ else:
     db_config.setdefault("CONN_HEALTH_CHECKS", True)
     db_config.setdefault("OPTIONS", {})
     db_config["OPTIONS"].setdefault("connect_timeout", 5)
-    db_config["OPTIONS"].setdefault("options", "-c statement_timeout=15000")
+    db_config["OPTIONS"].setdefault("options", "-c statement_timeout=30000")
     if ENABLE_GIS:
         DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
@@ -658,6 +658,18 @@ _DEFAULT_CSP = (
 )
 CONTENT_SECURITY_POLICY = "" if IS_LOCAL_DEVELOPMENT else env("CONTENT_SECURITY_POLICY", default=_DEFAULT_CSP)
 PERMISSIONS_POLICY = "" if IS_LOCAL_DEVELOPMENT else env("PERMISSIONS_POLICY", default="geolocation=(self), camera=(), microphone=()")
+if IS_TEST_RUN:
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    REFRESH_COOKIE_SECURE = False
+    SESSION_COOKIE_SAMESITE = "Lax"
+    CSRF_COOKIE_SAMESITE = "Lax"
+    SECURE_SSL_REDIRECT = False
+    SECURE_HSTS_SECONDS = 0
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
+    CONTENT_SECURITY_POLICY = ""
+    PERMISSIONS_POLICY = ""
 _default_csrf_trusted = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

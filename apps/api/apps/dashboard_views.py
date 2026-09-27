@@ -1,6 +1,8 @@
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.db.models import Count, OuterRef, Q, Subquery
 from django.db.models.functions import TruncDate
 from django.utils import timezone
@@ -100,8 +102,6 @@ EMERGENCY_WORKING = EMERGENCY_ACTIVE - EMERGENCY_OPEN
 
 def common_counts(user):
     today = timezone.localdate()
-    from django.core.cache import cache
-
     communities = community_ids_for_user(user)
     community_key = "-".join(str(item) for item in sorted(communities)) or "none"
     shared_key = f"dashboard:shared-counts:v2:{community_key}:{today.isoformat()}"
@@ -118,8 +118,18 @@ def common_counts(user):
             cache.set(shared_key, shared, 10)
         except Exception:
             pass
+    try:
+        unread = cache.get(f"dashboard:unread-notifications:{user.pk}")
+    except Exception:
+        unread = None
+    if unread is None:
+        unread = Notification.objects.filter(recipient=user, is_read=False).count()
+        try:
+            cache.set(f"dashboard:unread-notifications:{user.pk}", unread, 10)
+        except Exception:
+            pass
     return {
-        "unread_notifications": Notification.objects.filter(recipient=user, is_read=False).count(),
+        "unread_notifications": unread,
         **shared,
     }
 
@@ -128,6 +138,12 @@ class ResidentDashboardSummaryView(APIView):
 
     def get(self, request):
         touch_last_seen(request.user)
+        communities = community_ids_for_user(request.user)
+        community_key = "-".join(str(item) for item in sorted(communities)) or "none"
+        cache_key = f"dashboard:resident-summary:v2:{request.user.pk}:{community_key}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
         requested_period = str(request.query_params.get("period", "week")).lower()
         period = requested_period if requested_period in REPORT_PERIODS else "week"
         mine = Concern.objects.filter(reporter=request.user)
@@ -151,7 +167,7 @@ class ResidentDashboardSummaryView(APIView):
             ).count()
         else:
             barangay_active = EmergencyAlert.objects.filter(status__in=EMERGENCY_ACTIVE).count()
-        return Response({
+        result = {
             **common_counts(request.user),
             "reports_total": countable_mine.count(),
             "reports_active": mine.filter(status__in=CONCERN_ACTIVE).count(),
@@ -165,14 +181,19 @@ class ResidentDashboardSummaryView(APIView):
                 user=request.user,
                 status__in=[AccountRequest.Status.SUBMITTED, AccountRequest.Status.REVIEWED],
             ).count(),
-            **community_overview_counts(community_ids_for_user(request.user)),
+            **community_overview_counts(communities),
             # Keep the old week fields for clients that have not moved to the
             # period-aware chart yet. These are now resident-scoped as well.
             "week_total": resident_week["total"],
             "delta_week_pct": resident_week["delta_pct"],
             "week_days": resident_week["days"],
             "report_overview": report_overview,
-        })
+        }
+        try:
+            cache.set(cache_key, result, 30)
+        except Exception:
+            pass
+        return Response(result)
 
 def is_official(user):
     User = get_user_model()
@@ -332,6 +353,11 @@ def community_overview_counts(communities):
     prev_start = (month_start - timedelta(days=1)).replace(day=1)
     week_start = today - timedelta(days=6)
     prev_week_start = week_start - timedelta(days=7)
+    community_key = "-".join(str(item) for item in sorted(communities)) or "none"
+    cache_key = f"dashboard:community-overview:v2:{community_key}:{today.isoformat()}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
     visible = Concern.objects.filter(
         community_id__in=communities,
         archived_at__isnull=True,
@@ -390,7 +416,7 @@ def community_overview_counts(communities):
     week_prev_total = visible.filter(
         created_at__date__gte=prev_week_start, created_at__date__lt=week_start
     ).count()
-    return {
+    result = {
         "community_total": visible.count(),
         "community_active": community_active,
         "community_in_progress": visible.filter(
@@ -406,6 +432,11 @@ def community_overview_counts(communities):
         "delta_week_pct": pct_change(week_total, week_prev_total),
         "week_days": week_days,
     }
+    try:
+        cache.set(cache_key, result, 120)
+    except Exception:
+        pass
+    return result
 
 
 def median(values):
@@ -917,6 +948,11 @@ class OfficialDashboardSummaryView(APIView):
             return Response({"detail": "You do not have permission to view official summaries."}, status=status.HTTP_403_FORBIDDEN)
         User = get_user_model()
         communities = community_ids_for_user(request.user)
+        community_key = "-".join(str(item) for item in sorted(communities)) or "none"
+        cache_key = f"dashboard:official-summary:v2:{request.user.pk}:{community_key}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
         selected_unit, unit_error = selected_official_unit(
             request,
             request.user,
@@ -943,7 +979,7 @@ class OfficialDashboardSummaryView(APIView):
             Q(resident_profile__community_id__in=communities)
             | Q(designations__is_active=True, designations__department__community_id__in=communities)
         ).distinct()
-        return Response({
+        result = {
             **common_counts(request.user),
             "new_concerns": Concern.objects.filter(
                 community_id__in=communities,
@@ -983,7 +1019,12 @@ class OfficialDashboardSummaryView(APIView):
                     else None
                 )
             ),
-        })
+        }
+        try:
+            cache.set(cache_key, result, 30)
+        except Exception:
+            pass
+        return Response(result)
 
 class OfficialAnalyticsView(APIView):
     """Every figure the official overview draws, computed in the database.
@@ -1021,6 +1062,7 @@ class OfficialAnalyticsView(APIView):
 
         User = get_user_model()
         communities = community_ids_for_user(request.user)
+        community_key = "-".join(str(item) for item in sorted(communities)) or "none"
         community_names = Community.objects.filter(
             pk__in=communities,
         ).values_list("name", flat=True)
@@ -1033,6 +1075,10 @@ class OfficialAnalyticsView(APIView):
         )
         if unit_error is not None:
             return unit_error
+        cache_key = f"dashboard:official-analytics:v2:{request.user.pk}:{community_key}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
         today = timezone.localdate()
         start = today - timedelta(days=ANALYTICS_WINDOW_DAYS - 1)
 
@@ -1228,66 +1274,69 @@ class OfficialAnalyticsView(APIView):
 
         settled = closure["settled"] + emergency_closure
         resolved = closure["resolved"] + emergency_resolved
-        return Response(
-            {
-                "window_days": ANALYTICS_WINDOW_DAYS,
-                "generated_at": timezone.now().isoformat(),
-                "totals": {
-                    "open": counts["open"],
-                    "working": counts["working"],
-                    "new_today": counts["new_today"],
-                    "filed_window": counts["filed_window"],
-                    "closed_window": closed_window,
-                    "net_window": counts["filed_window"] - closed_window,
-                },
-                # The share bar answers "where does the whole caseload sit right
-                # now", so unlike the charts it is not windowed.
-                "share": {
-                    "open": counts["open"],
-                    "working": counts["working"],
-                    "closed": counts["settled"],
-                },
-                "series": series,
-                "by_category": by_category,
-                "resolution": {
-                    "rate_percent": round(resolved / settled * 100) if settled else 0,
-                    "resolved": resolved,
-                    "settled": settled,
-                    "median_days": (
-                        round(resolution_seconds / 86400, 1)
-                        if resolution_seconds is not None
-                        else None
-                    ),
-                },
-                "emergencies": {
-                    "active": emergencies.filter(status__in=EMERGENCY_LIVE).count(),
-                    "responders_on_duty": User.objects.filter(
-                        role=User.Role.FIRST_RESPONDER,
-                        status=User.Status.VERIFIED,
-                        is_on_duty=True,
-                        designations__is_active=True,
-                        designations__department__community_id__in=communities,
-                    )
-                    .distinct()
-                    .count(),
-                    "median_response_minutes": (
-                        round(response_seconds / 60, 1) if response_seconds is not None else None
-                    ),
-                },
-                "attention": attention,
-                "unit": official_unit_payload(selected_unit),
-                "community_name": " · ".join(sorted(community_names)) or "Community",
-                "unit_totals": unit_totals,
-                "community_totals": community_totals,
-                "report_overview": official_report_overview(
-                    scoped_concerns,
-                    period,
-                    scoped_emergencies,
+        result = {
+            "window_days": ANALYTICS_WINDOW_DAYS,
+            "generated_at": timezone.now().isoformat(),
+            "totals": {
+                "open": counts["open"],
+                "working": counts["working"],
+                "new_today": counts["new_today"],
+                "filed_window": counts["filed_window"],
+                "closed_window": closed_window,
+                "net_window": counts["filed_window"] - closed_window,
+            },
+            # The share bar answers "where does the whole caseload sit right
+            # now", so unlike the charts it is not windowed.
+            "share": {
+                "open": counts["open"],
+                "working": counts["working"],
+                "closed": counts["settled"],
+            },
+            "series": series,
+            "by_category": by_category,
+            "resolution": {
+                "rate_percent": round(resolved / settled * 100) if settled else 0,
+                "resolved": resolved,
+                "settled": settled,
+                "median_days": (
+                    round(resolution_seconds / 86400, 1)
+                    if resolution_seconds is not None
+                    else None
                 ),
-                "recent_reports": unit_recent_reports,
-                "critical_report": critical_report,
-            }
-        )
+            },
+            "emergencies": {
+                "active": emergencies.filter(status__in=EMERGENCY_LIVE).count(),
+                "responders_on_duty": User.objects.filter(
+                    role=User.Role.FIRST_RESPONDER,
+                    status=User.Status.VERIFIED,
+                    is_on_duty=True,
+                    designations__is_active=True,
+                    designations__department__community_id__in=communities,
+                )
+                .distinct()
+                .count(),
+                "median_response_minutes": (
+                    round(response_seconds / 60, 1) if response_seconds is not None else None
+                ),
+            },
+            "attention": attention,
+            "unit": official_unit_payload(selected_unit),
+            "community_name": " · ".join(sorted(community_names)) or "Community",
+            "unit_totals": unit_totals,
+            "community_totals": community_totals,
+            "report_overview": official_report_overview(
+                scoped_concerns,
+                period,
+                scoped_emergencies,
+            ),
+            "recent_reports": unit_recent_reports,
+            "critical_report": critical_report,
+        }
+        try:
+            cache.set(cache_key, result, 60)
+        except Exception:
+            pass
+        return Response(result)
 
 
 class ResponderDashboardSummaryView(APIView):
@@ -1298,13 +1347,19 @@ class ResponderDashboardSummaryView(APIView):
         User = get_user_model()
         if not (request.user.is_superuser or request.user.role == User.Role.FIRST_RESPONDER):
             return Response({"detail": "You do not have permission to view responder summaries."}, status=status.HTTP_403_FORBIDDEN)
+        communities = community_ids_for_user(request.user)
+        community_key = "-".join(str(item) for item in sorted(communities)) or "none"
+        cache_key = f"dashboard:responder-summary:v2:{request.user.pk}:{community_key}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
         assigned = EmergencyResponderAssignment.objects.filter(responder=request.user)
         newly_routed = assigned.filter(
             status=EmergencyResponderAssignment.Status.ASSIGNED,
             alert__status=EmergencyAlert.Status.ROUTED,
         ).count()
         dashboard = responder_unit_dashboard(request, request.user)
-        return Response({
+        result = {
             **common_counts(request.user),
             "is_on_duty": request.user.is_on_duty,
             "responder_unit": request.user.responder_unit,
@@ -1320,4 +1375,9 @@ class ResponderDashboardSummaryView(APIView):
             # Transitional response key for older clients. No acknowledgement
             # action exists; this now carries the same newly-routed count.
             "awaiting_acknowledgement": newly_routed,
-        })
+        }
+        try:
+            cache.set(cache_key, result, 30)
+        except Exception:
+            pass
+        return Response(result)

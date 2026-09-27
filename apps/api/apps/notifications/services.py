@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
@@ -987,6 +988,13 @@ def broadcast_notification(notification) -> dict:
             push_delivered_at=push_result["delivered_at"],
             push_failure_count=push_result["failure_count"],
         )
+    if push_result.get("status") in ("delivered", "partial"):
+        cache.set("service-status:push-delivered", time.time(), 172800)
+    try:
+        notification.push_status = push_result.get("status", "")
+        notification.save(update_fields=["push_status"])
+    except Exception:
+        pass
     return push_result
 
 def send_native_push(notification, payload: dict) -> dict:

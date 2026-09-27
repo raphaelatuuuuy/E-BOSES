@@ -12,6 +12,8 @@ import * as React from "react"
 
 /** Desktop breakpoint — matches `min-width: 1024px`. */
 export const DESKTOP_MIN_PX = 1024
+/** Tablet breakpoint — matches `min-width: 768px`. */
+export const TABLET_MIN_PX = 768
 
 /** Resident shell max width (grid + content column clamp). */
 export const SHELL_MAX_RESIDENT = 1600
@@ -80,6 +82,10 @@ export function useMinWidth(px: number) {
 
 export function useIsDesktop() {
   return useMinWidth(DESKTOP_MIN_PX)
+}
+
+export function useIsTablet() {
+  return useMinWidth(TABLET_MIN_PX)
 }
 
 export type ShellRole = "resident" | "official" | "responder"

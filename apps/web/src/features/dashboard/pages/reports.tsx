@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import {
   CircleCheck,
-  CircleX,
   ClockIcon,
   PlusIcon,
   PencilLineIcon,
@@ -73,7 +72,7 @@ import {
   type OpsPaneSpec,
 } from "@/features/dashboard/components/workspace/ops-workspace"
 import { concernSeverityOf } from "@/features/dashboard/components/record/concern-adapter"
-import { useIsDesktop } from "@/features/dashboard/lib/shell"
+import { useIsTablet } from "@/features/dashboard/lib/shell"
 
 function ActionPane({
   report,
@@ -134,7 +133,6 @@ const statusFilters = [
   "Emergencies",
   "In Progress",
   "Resolved",
-  "Rejected",
   "Appealed",
   "All",
 ] as const
@@ -183,7 +181,6 @@ const filterMeta: Record<
     bg: "bg-emerald-600",
     subtext: "Closed concerns",
   },
-  Rejected: { icon: CircleX, bg: "bg-red-500", subtext: "Declined concerns" },
   Appealed: { icon: ScaleIcon, bg: "bg-amber-500", subtext: "Under review" },
   All: { icon: UsersIcon, bg: "bg-neutral-700", subtext: "All concerns" },
 }
@@ -210,14 +207,13 @@ function matchesOfficialFilter(report: Concern, filter: string) {
   switch (filter) {
     case "All":
       return true
+    
     case "Emergencies":
-      return false
+      return Boolean(report.escalated_alert)
     case "In Progress":
       return isOpenStatus(report.status)
     case "Resolved":
       return isResolvedRecord(report)
-    case "Rejected":
-      return report.status === "rejected" && !hasOpenAppeal(report)
     case "Appealed":
       return hasOpenAppeal(report)
     default:
@@ -339,7 +335,7 @@ function OfficialConcernDashboard({
   const ranked = useMemo(() => rankConcerns(filtered, now), [filtered, now])
 
   const draft = useDecisionDraft(current)
-  const isLgUp = useIsDesktop()
+  const isLgUp = useIsTablet()
   const [actionPaneOpen, setActionPaneOpen] = useState(false)
   const [filterOpen, setFilterOpen] = useState(false)
   const [filterMode, setFilterMode] = useState<"Status" | "Priority">("Status")
@@ -445,7 +441,7 @@ function OfficialConcernDashboard({
       <div
         role="listbox"
         aria-label="Concern queue filters"
-        className="absolute top-[64px] right-4 left-4 z-30 overflow-hidden rounded-[20px] bg-white p-1.5 shadow-lg ring-1 ring-neutral-200 lg:right-auto"
+        className="fixed top-16 left-4 right-4 z-30 overflow-y-auto rounded-[20px] bg-white p-3 shadow-lg ring-1 ring-neutral-200 md:right-auto md:left-auto md:w-[300px] max-h-[70vh]"
         style={{
           width: isLgUp
             ? queueWidth
@@ -503,7 +499,7 @@ function OfficialConcernDashboard({
                   setActiveFilter(filter)
                   setFilterOpen(false)
                 }}
-                className="flex w-full items-center gap-3 rounded-[12px] px-4 py-2.5 text-left text-[15px] transition hover:bg-neutral-50 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:outline-none focus-visible:ring-inset"
+                className="flex w-full items-center gap-3 rounded-[12px] px-4 py-3 text-left text-[15px] transition hover:bg-neutral-50 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:outline-none focus-visible:ring-inset"
               >
                 <span
                   className={cn(
@@ -574,14 +570,14 @@ function OfficialConcernDashboard({
 
   const recordPane = current ? (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 px-0 pt-0 pb-0 lg:px-4 lg:pt-3 lg:pb-4">
-        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent lg:rounded-[24px] lg:bg-white lg:ring-1 lg:ring-neutral-200">
+      <div className="min-h-0 flex-1 px-0 pt-0 pb-0 md:px-4 md:pt-3 md:pb-4">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent md:rounded-[24px] md:bg-white md:ring-1 md:ring-neutral-200">
           <ReportDetailHeader
             report={current}
             audience={audience === "official" ? "official" : "resident"}
           />
 
-          <div className="min-h-0 flex-1 px-0 pt-3 pb-0 lg:px-4 lg:pb-4">
+          <div className="min-h-0 flex-1 px-0 pt-3 pb-0 md:px-4 md:pb-4">
             {chatTabContent}
           </div>
         </div>
@@ -591,8 +587,8 @@ function OfficialConcernDashboard({
 
   const alertRecordPane = selectedAlert ? (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 px-0 pt-0 pb-0 lg:px-4 lg:pt-3 lg:pb-4">
-        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent lg:rounded-[24px] lg:bg-white lg:ring-1 lg:ring-neutral-200">
+      <div className="min-h-0 flex-1 px-0 pt-0 pb-0 md:px-4 md:pt-3 md:pb-4">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent md:rounded-[24px] md:bg-white md:ring-1 md:ring-neutral-200">
           {(() => {
             const reporterName =
               selectedAlert.reporter_display ||
@@ -600,7 +596,7 @@ function OfficialConcernDashboard({
               "Unknown reporter"
             const submitted = new Date(selectedAlert.created_at)
             return (
-              <div className="shrink-0 px-0 pt-0 lg:px-6 lg:pt-5">
+              <div className="shrink-0 px-0 pt-0 md:px-6 md:pt-5">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-[13px] font-normal text-subtle-foreground">
                     {statusLabelOf(
@@ -637,7 +633,7 @@ function OfficialConcernDashboard({
             )
           })()}
 
-          <div className="min-h-0 flex-1 px-0 pt-3 pb-0 lg:px-4 lg:pb-4">
+          <div className="min-h-0 flex-1 px-0 pt-3 pb-0 md:px-4 md:pb-4">
             {showResponderCta ? (
               <div className="flex h-full min-h-0 flex-col items-center justify-center rounded-[24px] border border-neutral-200 bg-white px-6 text-center">
                 <span className="flex size-12 items-center justify-center rounded-full bg-orange-50 text-orange-600 ring-1 ring-orange-100">
@@ -770,9 +766,9 @@ function OfficialConcernDashboard({
         className="ops-plain bg-transparent"
         onListResize={setQueueWidth}
         bar={
-          <header className="relative mt-5 flex h-16 shrink-0 items-center justify-between gap-4 px-4 lg:mt-0">
+          <header className="relative mt-5 flex h-16 shrink-0 items-center justify-between gap-4 px-4 md:mt-0">
             <label
-              className="flex h-12 flex-1 items-center gap-2 rounded-full bg-white pr-1.5 pl-4 ring-1 ring-neutral-300 focus-within:ring-2 focus-within:ring-neutral-500 focus-within:ring-offset-2 lg:flex-none"
+              className="flex h-12 flex-1 items-center gap-2 rounded-full bg-white pr-1.5 pl-4 ring-1 ring-neutral-300 focus-within:ring-2 focus-within:ring-neutral-500 focus-within:ring-offset-2 md:flex-none"
               style={{
                 width: isLgUp
                   ? queueWidth
@@ -1125,23 +1121,23 @@ export default function ReportsPage() {
       <div className="flex flex-col">
         <div className="flex-1 p-4 md:p-10">
           <Skeleton className="h-28 w-full rounded-2xl" />
-          <div className="scrollbar-hide mt-6 w-full max-w-full min-w-0 touch-pan-x overflow-x-scroll overscroll-x-contain [-webkit-overflow-scrolling:touch] lg:overflow-visible">
-            <div className="flex min-w-max flex-nowrap gap-2 pb-1 lg:grid lg:min-w-0 lg:grid-cols-5">
+          <div className="scrollbar-hide mt-6 w-full max-w-full min-w-0 touch-pan-x overflow-x-scroll overscroll-x-contain [-webkit-overflow-scrolling:touch] md:overflow-visible">
+            <div className="flex min-w-max flex-nowrap gap-2 pb-1 md:grid md:min-w-0 md:grid-cols-5">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton
                   key={i}
-                  className="h-8 w-20 shrink-0 rounded-full lg:w-full"
+                  className="h-8 w-20 shrink-0 rounded-full md:w-full"
                 />
               ))}
             </div>
           </div>
-          <div className="mt-4 grid gap-6 lg:grid-cols-5">
-            <div className="flex flex-col gap-2 lg:col-span-3">
+          <div className="mt-4 grid gap-6 md:grid-cols-5">
+            <div className="flex flex-col gap-2 md:col-span-3">
               {Array.from({ length: 4 }).map((_, i) => (
                 <Skeleton key={i} className="h-[68px] rounded-lg" />
               ))}
             </div>
-            <div className="hidden lg:col-span-2 lg:block">
+            <div className="hidden md:col-span-2 md:block">
               <Skeleton className="h-72 rounded-xl" />
             </div>
           </div>
@@ -1258,3 +1254,7 @@ export default function ReportsPage() {
     />
   )
 }
+
+
+
+

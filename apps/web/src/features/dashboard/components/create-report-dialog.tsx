@@ -45,7 +45,6 @@ import { ReportDetailsDialog } from "@/features/dashboard/components/report-deta
 import {
   duplicatePhotoFeedLocation,
   duplicatePhotoFeedback,
-  duplicatePhotoReportIssueLocation,
   DUPLICATE_PHOTO_FEEDBACK,
   isPhotoVerdictRejected,
   photoVerdictsWithWarningFallback,
@@ -1475,11 +1474,18 @@ export function CreateReportDialog({
     resetForm()
     setSubmittedReport(null)
     setOpen(false)
-    navigate(
-      guest
-        ? duplicatePhotoReportIssueLocation(match.concern_id)
-        : duplicatePhotoFeedLocation(match.concern_id)
-    )
+    if (guest) {
+      // Stay on the guest map: the page opens the matching report's panel and
+      // focuses its pin. Navigating away (or to a signed-in route) would lose
+      // the map context and land the guest on a sign-in wall.
+      window.dispatchEvent(
+        new CustomEvent("eboses:show-public-report", {
+          detail: { kind: "concern", id: match.concern_id },
+        })
+      )
+      return
+    }
+    navigate(duplicatePhotoFeedLocation(match.concern_id))
   }
 
   const footerErrors = useMemo(() => {

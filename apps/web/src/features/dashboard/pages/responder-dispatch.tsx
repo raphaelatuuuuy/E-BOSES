@@ -656,7 +656,7 @@ export default function ResponderDispatchPage() {
    * takes every pixel that is left.
    */
   const emptyState = (
-    <div className="mx-auto flex min-h-0 w-full max-w-2xl min-w-0 flex-1 flex-col gap-3 lg:max-w-none">
+    <div className="mx-auto flex min-h-0 w-full max-w-2xl min-w-0 flex-1 flex-col gap-3 md:max-w-none">
       <DispatchCard className="shrink-0">
         <div className="flex items-start gap-3">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-slate-soft text-navy-muted">
@@ -692,7 +692,7 @@ export default function ResponderDispatchPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[60svh] flex-1 items-center justify-center lg:h-full">
+      <div className="flex min-h-[60svh] flex-1 items-center justify-center md:h-full">
         <LoaderCircleIcon className="size-8 animate-spin text-subtle-foreground" />
       </div>
     )
@@ -701,8 +701,8 @@ export default function ResponderDispatchPage() {
   return (
     // flex-1 so the empty state can fill the shell's mobile column instead of
     // ending at a fixed height with blank canvas under it. Inert on desktop,
-    // where the shell's main is not a flex container and lg:h-full governs.
-    <div className="flex min-w-0 flex-1 flex-col p-4 lg:h-full lg:overflow-hidden lg:p-6">
+    // where the shell's main is not a flex container and md:h-full governs.
+    <div className="flex min-w-0 flex-1 flex-col p-4 md:h-full md:overflow-hidden md:p-6">
       {selected ? (
         <DispatchBody
           alert={selected}
@@ -799,7 +799,7 @@ function DispatchBody({
   )
 
   const incidentColumn = (
-    <div className="ops-pane flex w-full min-w-0 flex-col gap-3 lg:pr-1">
+    <div className="ops-pane flex w-full min-w-0 flex-col gap-3 md:pr-1">
       <DispatchOverviewCard
         alert={alert}
         viewerId={viewerId}
@@ -818,7 +818,7 @@ function DispatchBody({
           stops the column scrolling visibly under the pill. */}
       <DispatchActionBar
         actions={actions}
-        className="sticky bottom-0 z-30 hidden bg-canvas pt-3 pb-3 lg:block"
+        className="sticky bottom-0 z-30 hidden bg-canvas pt-3 pb-3 md:block"
       />
     </div>
   )

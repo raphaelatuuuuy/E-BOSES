@@ -82,20 +82,20 @@ function useWorkspaceTier(): "wide" | "mid" | "mobile" {
   const [tier, setTier] = React.useState<"wide" | "mid" | "mobile">(() => {
     if (typeof window === "undefined") return "wide"
     if (window.innerWidth >= 1440) return "wide"
-    return window.innerWidth >= 1024 ? "mid" : "mobile"
+    return window.innerWidth >= 768 ? "mid" : "mobile"
   })
 
   React.useEffect(() => {
     const wide = window.matchMedia("(min-width: 1440px)")
-    const desktop = window.matchMedia("(min-width: 1024px)")
+    const tablet = window.matchMedia("(min-width: 768px)")
     const apply = () =>
-      setTier(wide.matches ? "wide" : desktop.matches ? "mid" : "mobile")
+      setTier(wide.matches ? "wide" : tablet.matches ? "mid" : "mobile")
     apply()
     wide.addEventListener("change", apply)
-    desktop.addEventListener("change", apply)
+    tablet.addEventListener("change", apply)
     return () => {
       wide.removeEventListener("change", apply)
-      desktop.removeEventListener("change", apply)
+      tablet.removeEventListener("change", apply)
     }
   }, [])
 
@@ -355,7 +355,7 @@ function MobileSheetLayout({
       {/* The queue pane owns scrolling on mobile. Keeping an overflow-y-auto
           host here creates a nested scroll container and traps touch/wheel
           gestures before the queue can reach its bottom. */}
-      <div className="min-h-0 flex-1 overflow-visible max-lg:overflow-visible lg:overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-visible max-md:overflow-visible md:overflow-hidden">
         {list?.node}
       </div>
 

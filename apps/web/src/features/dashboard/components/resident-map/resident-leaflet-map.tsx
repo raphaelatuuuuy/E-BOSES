@@ -76,7 +76,7 @@ export type MapApi = {
 
 const EMERGENCY_PIN = 28
 
-/** Ongoing SOS — the same circle-and-glyph an official and a responder see. */
+/** Settled alerts show the check glyph in resolved green. */
 function emergencyPinHtml(selected: boolean, resolved: boolean) {
   return glyphPinHtml({
     paths: resolved ? GLYPHS.resolved : GLYPHS.emergency,

@@ -197,7 +197,7 @@ export function DispatchOverviewCard({
           </div>
         }
         action={
-          <div className="hidden items-center gap-1 lg:flex">
+          <div className="hidden items-center gap-1 md:flex">
             {showDutyToggle !== false ? <DutyToggle /> : null}
             <OpsContrastToggle />
             {onMinimise ? (
@@ -295,14 +295,14 @@ export function DispatchOverviewCard({
           busy={travelProfileBusy}
         />
       ) : view === "chat" ? (
-        <div className="-mx-5 -mb-5 mt-4 border-t border-card-line lg:-mx-6 lg:-mb-6">
+        <div className="-mx-5 -mb-5 mt-4 border-t border-card-line md:-mx-6 md:-mb-6">
           <EmergencyChatPanel
             alertId={alert.id}
             open
             theme="light"
             bare
             disabled={["resolved", "cancelled"].includes(alert.status)}
-            className="h-[400px] lg:h-[min(52svh,500px)]"
+            className="h-[400px] md:h-[min(52svh,500px)]"
           />
         </div>
       ) : (

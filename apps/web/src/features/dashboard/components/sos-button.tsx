@@ -205,6 +205,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
         openWizard()
         return
       }
+      openWizard()
       return
     }
     if (!user) {
@@ -355,7 +356,7 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
           className="fixed inset-0 z-[300] flex cursor-pointer flex-col items-center justify-center overflow-hidden bg-black/45 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
         >
           <div className="absolute inset-0 bg-sos/15 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150" />
-          <p className="relative px-6 pb-4 text-center text-6xl font-extrabold tracking-tight text-white transition-colors duration-150 hover:text-sos lg:text-8xl">
+          <p className="relative px-6 pb-4 text-center text-6xl font-extrabold tracking-tight text-white transition-colors duration-150 hover:text-sos md:text-8xl">
             {hasActiveEmergency ? "Track my emergency" : "Need help?"}
           </p>
           <p className="relative px-6 text-center text-base font-medium text-white/70">
@@ -404,3 +405,4 @@ export function SOSButton({ suppressed = false }: { suppressed?: boolean }) {
     </>
   )
 }
+

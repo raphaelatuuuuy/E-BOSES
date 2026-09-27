@@ -385,6 +385,34 @@ def _claim_media_privacy(media_id: int, *, force: bool):
     return media.pk
 
 
+def _privacy_task_already_queued(media_id):
+    try:
+        import base64
+        import json
+
+        import redis
+        from django.conf import settings as dj_settings
+
+        client = redis.Redis.from_url(dj_settings.CELERY_BROKER_URL, decode_responses=True)
+        for raw in client.lrange("heavy", 0, 500):
+            try:
+                env = json.loads(raw)
+            except ValueError:
+                continue
+            if env.get("headers", {}).get("task") != "apps.concerns.tasks.process_concern_media_privacy_task":
+                continue
+            try:
+                payload = json.loads(base64.b64decode(env.get("body") or b""))
+            except ValueError:
+                continue
+            args = payload[0] if isinstance(payload, list) else []
+            if media_id in list(args or []):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def enqueue_concern_media_privacy(media_id, *, force=False):
     """Queue privacy processing; never run SAM3 inline in production."""
     try:
@@ -613,6 +641,8 @@ def retry_pending_concern_jobs_task():
         ).values_list("pk", flat=True)[:50]
     )
     for media_id in queued_media:
+        if _privacy_task_already_queued(media_id):
+            continue
         try:
             process_concern_media_privacy_task.delay(media_id)
             requeued["media_privacy"] += 1

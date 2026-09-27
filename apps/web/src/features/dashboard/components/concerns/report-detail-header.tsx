@@ -79,7 +79,7 @@ export function ReportDetailHeader({
   }
 
   return (
-    <div className="shrink-0 px-0 pt-0 lg:px-6 lg:pt-5">
+    <div className="shrink-0 px-0 pt-0 md:px-6 md:pt-5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           {showCallButton ? (

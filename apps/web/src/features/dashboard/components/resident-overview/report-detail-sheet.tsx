@@ -97,6 +97,10 @@ export function OverviewReportDetailSheet({
   }
 
   const report = detail
+  // The list row is slim and omits coordinates, so prefer the loaded detail
+  // (which carries lat/lng) for the map. Falling back to `post` keeps the
+  // backdrop alive while the detail request is still in flight.
+  const mapSource = report ?? post
   const closedCase = report
     ? ["rejected", "appealed", "resolved"].includes(report.status)
     : false
@@ -171,13 +175,13 @@ export function OverviewReportDetailSheet({
         backdrop={
           post ? (
             <ReportLocationMap
-              latitude={post.latitude}
-              longitude={post.longitude}
-              streetAddress={post.address || post.barangay}
-              category={post.category}
-              iconKey={post.category_ref?.icon_key}
-              status={post.status}
-              severity={post.severity}
+              latitude={mapSource?.latitude}
+              longitude={mapSource?.longitude}
+              streetAddress={mapSource?.address || mapSource?.barangay}
+              category={mapSource?.category}
+              iconKey={mapSource?.category_ref?.icon_key}
+              status={mapSource?.status}
+              severity={mapSource?.severity}
               heightClassName="h-full"
               focusAboveSheet
               onBack={() =>

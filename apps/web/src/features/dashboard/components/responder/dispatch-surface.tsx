@@ -33,7 +33,7 @@ export function DispatchCard({
     <Tag
       className={cn(
         "min-w-0 overflow-hidden rounded-3xl border border-card-line bg-card",
-        padded && "p-5 lg:p-6",
+        padded && "p-5 md:p-6",
         className,
       )}
     >

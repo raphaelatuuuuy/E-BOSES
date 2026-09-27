@@ -43,7 +43,7 @@ import { openSettingsDialog } from "@/features/dashboard/components/settings/set
 import { ProfileAccountMenu } from "@/features/dashboard/components/profile-account-menu"
 import {
   ResidentContentGrid,
-  RESIDENT_DESKTOP_MIN_PX,
+  RESIDENT_TABLET_MIN_PX,
 } from "@/features/dashboard/components/resident-top-bar"
 import { FEED_MAX, RAIL_W } from "@/features/dashboard/lib/shell"
 import {
@@ -461,20 +461,20 @@ export default function HomePage() {
         <div className="px-4 py-3">
           <Skeleton className="mx-auto h-10 w-full max-w-md rounded-full" />
         </div>
-        <div
-          className="mx-auto w-full p-4 lg:grid lg:grid-cols-[minmax(0,680px)_288px] lg:gap-4 lg:px-5"
-          style={{ maxWidth: FEED_MAX + RAIL_W + 16 }}
-        >
-          <div className="min-w-0 space-y-3">
-            <Skeleton className="h-14 w-full rounded-lg" />
-            <Skeleton className="h-9 w-full rounded-md" />
-            <Skeleton className="h-40 w-full rounded-lg" />
+                          <div
+            className="mx-auto w-full p-4 md:grid md:grid-cols-[minmax(0,680px)_288px] md:gap-4 md:px-5"
+            style={{ maxWidth: FEED_MAX + RAIL_W + 16 }}
+          >
+            <div className="min-w-0 space-y-3">
+              <Skeleton className="h-14 w-full rounded-lg" />
+              <Skeleton className="h-9 w-full rounded-md" />
+              <Skeleton className="h-40 w-full rounded-lg" />
+            </div>
+            <div className="hidden min-w-0 space-y-3 md:block">
+              <Skeleton className="h-24 w-full rounded-lg" />
+              <Skeleton className="h-48 w-full rounded-lg" />
+            </div>
           </div>
-          <div className="hidden min-w-0 space-y-3 lg:block">
-            <Skeleton className="h-24 w-full rounded-lg" />
-            <Skeleton className="h-48 w-full rounded-lg" />
-          </div>
-        </div>
       </div>
     )
   }
@@ -486,7 +486,7 @@ export default function HomePage() {
         .resident-mobile-top { display: none; }
         .resident-mobile-top.staff-feed-top { display: none !important; }
         .resident-home-rail { min-width: 0; }
-        @media (max-width: ${RESIDENT_DESKTOP_MIN_PX - 1}px) {
+        @media (max-width: ${RESIDENT_TABLET_MIN_PX - 1}px) {
           .resident-mobile-top { display: block; }
           .resident-home-desktop-grid { display: block !important; }
           .resident-home-rail { display: none !important; }
@@ -540,9 +540,9 @@ export default function HomePage() {
       {/*
         Mobile: padded feed · Desktop: same grid as top bar
       */}
-      <ResidentContentGrid className="resident-home-desktop-grid min-w-0 flex-1 pt-3 pb-6 max-lg:pt-3.5 lg:pt-3 lg:pb-8">
+      <ResidentContentGrid className="resident-home-desktop-grid min-w-0 flex-1 pt-3 pb-6 max-md:pt-3.5 md:pt-3 md:pb-8">
         {/* CENTER feed column */}
-        <div className="w-full min-w-0 max-lg:px-3.5">
+        <div className="w-full min-w-0 max-md:px-3.5">
           <div className="mb-3 flex items-center gap-2">
             <button
               type="button"
@@ -571,7 +571,7 @@ export default function HomePage() {
           </div>
 
           {/* Desktop: inline chips only */}
-          <div className="mb-3 hidden flex-wrap items-center gap-1.5 lg:flex">
+          <div className="mb-3 hidden flex-wrap items-center gap-1.5 md:flex">
             {FEED_TABS.map((tab) => {
               const active = activeFeedTab === tab.id
               return (
@@ -601,9 +601,9 @@ export default function HomePage() {
           ) : null}
 
           {hasUrgentAlerts ? (
-            <Link
-              to="/dashboard/alerts-map"
-              className="hover:bg-sos/10/80 mb-3 flex items-center gap-3 rounded-2xl border border-neutral-300 bg-sos/10 px-3.5 py-3 no-underline transition-colors lg:mb-2.5 lg:rounded-lg"
+              <Link
+                to="/dashboard/alerts-map"
+                className="hover:bg-sos/10/80 mb-3 flex items-center gap-3 rounded-2xl border border-neutral-300 bg-sos/10 px-3.5 py-3 no-underline transition-colors md:mb-2.5 md:rounded-lg"
             >
               <span className="flex size-12 shrink-0 items-center justify-center text-sos">
                 <AlertTriangleIcon
@@ -725,8 +725,8 @@ export default function HomePage() {
 
       {/* Mobile feed filter sheet — Nextdoor “Filter by” layout, E-Boses white */}
       {feedFilterOpen ? (
-        <div
-          className="fixed inset-0 z-[200] flex flex-col justify-end bg-black/30 lg:hidden"
+          <div
+            className="fixed inset-0 z-[200] flex flex-col justify-end bg-black/30 md:hidden"
           role="dialog"
           aria-modal="true"
           aria-label="Filter by"
@@ -783,3 +783,5 @@ export default function HomePage() {
     </div>
   )
 }
+
+

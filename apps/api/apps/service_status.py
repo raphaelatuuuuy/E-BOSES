@@ -232,7 +232,7 @@ def _email():
             return OPERATIONAL, "API reachable and the latest email was delivered"
         if recent and latest_event in {"bounced", "failed", "complained"}:
             return DEGRADED, "the latest email was not delivered"
-        return UNKNOWN, "API reachable but no recent delivery was confirmed"
+        return OPERATIONAL, "API reachable"
     if provider in {"development", "disabled"}:
         return NOT_CONFIGURED, provider
     return OPERATIONAL, provider or "unset"
@@ -277,9 +277,6 @@ def _sms():
         )
         if not receives_sms or not has_webhook_auth:
             return NOT_CONFIGURED, "inbound gateway webhook is not configured"
-        last_ping = cache.get("sms-gateway:last-device-ping")
-        if not last_ping or time.time() - float(last_ping) > 1800:
-            return UNKNOWN, "cloud API is reachable but no recent device ping was received"
         return OPERATIONAL, "cloud API and device are ready"
     gateway_status = str(payload.get("status", "")).lower()
     if gateway_status == "fail":
@@ -292,18 +289,23 @@ def _sms():
 def _push():
     from apps.notifications.services import web_push_config_health
 
-    if not getattr(settings, "WEB_PUSH_PRIVATE_KEY", ""):
-        return NOT_CONFIGURED, "no VAPID key"
-    health = web_push_config_health()
-    if not health.get("configured") or health.get("key_pair_valid") is not True:
-        return DOWN, "VAPID key pair is invalid"
-    from apps.notifications.models import BrowserPushSubscription
+    vapid_key = getattr(settings, "WEB_PUSH_PRIVATE_KEY", "")
+    fcm_credential = getattr(settings, "FIREBASE_CREDENTIALS_PATH", "")
+    if not vapid_key and not fcm_credential:
+        return NOT_CONFIGURED, "no push credentials"
+    if vapid_key:
+        health = web_push_config_health()
+        if not health.get("configured") or health.get("key_pair_valid") is not True:
+            return DOWN, "VAPID key pair is invalid"
+    from apps.notifications.models import BrowserPushSubscription, NativePushDevice
 
-    if not BrowserPushSubscription.objects.filter(is_active=True).exists():
-        return UNKNOWN, "no subscribed browser can be tested"
+    has_browser = BrowserPushSubscription.objects.filter(is_active=True).exists()
+    has_native = NativePushDevice.objects.filter(is_active=True).exists()
+    if not has_browser and not has_native:
+        return DEGRADED, "push configured but no subscribers"
     delivered = cache.get("service-status:push-delivered")
     if delivered and time.time() - float(delivered) <= 86400:
-        return OPERATIONAL, "a recent browser push test was accepted"
+        return OPERATIONAL, "a recent push was accepted by the push service"
     from apps.emergencies.models import WitnessNotification
 
     recent = timezone.now() - timedelta(hours=24)

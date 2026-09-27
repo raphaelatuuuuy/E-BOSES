@@ -146,7 +146,7 @@ export default function OfficialConfigurationHubPage({
 
   return (
     <div className="min-h-full bg-white">
-      <div className="mx-auto w-full max-w-[1100px] px-6 pt-6 pb-6 sm:px-10 sm:pt-8 lg:pb-20">
+      <div className="mx-auto w-full max-w-[1100px] px-6 pt-6 pb-6 sm:px-10 sm:pt-8 md:pb-20">
         <PageHeader
           title={<>Set up your <span className="text-brand-orange">Area</span></>}
           subtitle="Manage how your community routes concerns, dispatches responders and verifies residents."

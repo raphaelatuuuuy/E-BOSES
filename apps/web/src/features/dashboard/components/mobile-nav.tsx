@@ -653,7 +653,7 @@ function CentralAlertTab({
     />
   )
 
-  return critical ? (
+  return (
     <button
       type="button"
       onClick={onClick}
@@ -664,16 +664,6 @@ function CentralAlertTab({
       {icon}
       <span className="text-[10px] leading-none font-bold">{item.label}</span>
     </button>
-  ) : (
-    <Link
-      to={item.to}
-      aria-current={active ? "page" : undefined}
-      aria-label={label}
-      className={className}
-    >
-      {icon}
-      <span className="text-[10px] leading-none font-bold">{item.label}</span>
-    </Link>
   )
 }
 
@@ -873,9 +863,9 @@ export function MobileNav() {
     location.pathname.startsWith("/dashboard/reports")
   ) {
     return (
-      <div
-        data-mobile-nav
-        className="pointer-events-none fixed right-0 bottom-0 left-0 z-30 lg:hidden"
+        <div
+          data-mobile-nav
+          className="pointer-events-none fixed right-0 bottom-0 left-0 z-30 lg:hidden"
       >
         <div className="pointer-events-none flex items-end justify-center px-4 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]">
           <button
@@ -976,3 +966,4 @@ export function MobileNav() {
     </>
   )
 }
+

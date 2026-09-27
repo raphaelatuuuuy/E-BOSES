@@ -65,16 +65,45 @@ def build_apk():
     verify_native_sms_plugin()
 
     print("\n" + "=" * 60)
-    print("Step 3: Build APK")
+    print("Step 3: Build signed release APK")
     print("=" * 60)
     gradlew = ANDROID_DIR / "gradlew"
     if IS_WINDOWS:
         gradlew = str(gradlew) + ".bat"
-    run([str(gradlew), "assembleDebug"], cwd=str(ANDROID_DIR))
+    run([str(gradlew), "assembleRelease"], cwd=str(ANDROID_DIR))
+    keystore = ANDROID_DIR / "upload-keystore.jks"
+    if not keystore.is_file():
+        run([
+            "keytool", "-genkeypair", "-v",
+            "-keystore", str(keystore),
+            "-keyalg", "RSA", "-keysize", "2048",
+            "-validity", "10000",
+            "-alias", "upload",
+            "-storepass", "android", "-keypass", "android",
+            "-dname", "CN=E-Boses, O=E-Boses, C=PH",
+        ], cwd=str(ANDROID_DIR))
+    unsigned_apk = ANDROID_DIR / "app" / "build" / "outputs" / "apk" / "release" / "app-release-unsigned.apk"
+    signed_apk = ANDROID_DIR / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
+    run([
+        "jarsigner", "-verbose", "-sigalg", "SHA256withRSA", "-digestalg", "SHA-256",
+        "-keystore", str(keystore), "-storepass", "android", "-keypass", "android",
+        str(unsigned_apk), "upload",
+    ], cwd=str(ANDROID_DIR / "app" / "build" / "outputs" / "apk" / "release"))
+    zipalign = None
+    for bd in sorted(Path(ANDROID_DIR / "sdk").rglob("zipalign.exe"), reverse=True):
+        zipalign = bd
+        break
+    if not zipalign:
+        for bd in sorted(Path(r"C:\Users\TO GOD BE THE GLORY\AppData\Local\Android\Sdk\build-tools").rglob("zipalign.exe"), reverse=True):
+            zipalign = bd
+            break
+    if not zipalign:
+        raise FileNotFoundError("zipalign not found")
+    run([str(zipalign), "-f", "4", str(unsigned_apk), str(signed_apk)], cwd=str(ANDROID_DIR / "app" / "build" / "outputs" / "apk" / "release"))
 
 
 def find_apk():
-    apk = ANDROID_DIR / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    apk = ANDROID_DIR / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
     if not apk.is_file():
         raise FileNotFoundError(apk)
     return apk

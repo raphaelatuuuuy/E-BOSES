@@ -37,7 +37,7 @@ export default function ResponderOverviewPage() {
   const activeConcerns = concerns.filter((concern) => !["resolved", "rejected"].includes(concern.status)).length
 
   return (
-    <main className="min-h-full bg-white px-5 pb-24 pt-8 md:px-8 lg:px-10 lg:pb-10">
+    <main className="min-h-full bg-white px-5 pb-24 pt-8 md:px-8 md:px-10 md:pb-10">
       <div className="mx-auto max-w-5xl">
         <header>
           <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-neutral-500">Responder workspace</p>

@@ -76,7 +76,7 @@ const statusMeta: Record<
   appealed: {
     icon: ScaleIcon,
     bg: "bg-purple-500",
-    subtext: "Resident filed an appeal",
+    subtext: "Appeal denied",
   },
 }
 
@@ -385,7 +385,7 @@ export function OfficialStatusPanel({
   }
 
   const statusOptions = statusOptionsFor().filter(
-    (s) => s !== "submitted" && s !== "appealed" && s !== "in_progress"
+    (s) => s !== "submitted" && s !== "in_progress" && !(s === "appealed" && report.status !== "appealed")
   )
   const displayStatus = status === "in_progress" ? "under_review" : status
   const statusIsCustom = !statusOptions.includes(displayStatus)

@@ -7,6 +7,7 @@ import re
 from importlib import import_module
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
+from django.core.cache import cache
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -2051,6 +2052,13 @@ class ConcernFeedView(APIView):
         date_to = request.query_params.get("date_to")
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
+        cache_key = f"dashboard:concern-feed:{request.user.pk}:{request.META.get('QUERY_STRING', '')}"
+        try:
+            cached = cache.get(cache_key)
+        except Exception:
+            cached = None
+        if cached is not None:
+            return Response(cached)
         concerns = decorate_concerns(queryset, request.user)
 
         # Server-side "nearby" support: the client passes its own position and
@@ -2081,6 +2089,10 @@ class ConcernFeedView(APIView):
             key=lambda item: (severity_order.get(item.severity, 0), item.updated_at, item.pk),
             reverse=True,
         )
+        try:
+            cache.set(cache_key, ConcernSerializer(concerns, many=True, context={"request": request, "privacy_safe": True}).data, 30)
+        except Exception:
+            pass
         return Response(ConcernSerializer(concerns, many=True, context={"request": request, "privacy_safe": True}).data)
 
 
@@ -2332,7 +2344,7 @@ class PublicCommentAttachmentView(APIView):
         if not allowed:
             return Response({"detail": "You cannot access this attachment."}, status=status.HTTP_404_NOT_FOUND)
         field = attachment.preview_file if preview else attachment.file
-        if not field:
+        if not field or not field.storage.exists(field.name):
             return Response({"detail": "Attachment unavailable."}, status=status.HTTP_404_NOT_FOUND)
         response = FileResponse(field.open("rb"), content_type="image/jpeg" if preview else attachment.mime_type)
         response["Content-Disposition"] = f'inline; filename="{attachment.original_filename}"'
@@ -3725,6 +3737,8 @@ class ConcernResolutionEvidenceRawView(APIView):
             object_id=evidence.pk,
             request_meta=request_meta(request),
         )
+        if not evidence.file or not evidence.file.storage.exists(evidence.file.name):
+            return Response({"detail": "The original file is no longer available."}, status=status.HTTP_404_NOT_FOUND)
         return FileResponse(
             evidence.file.open("rb"),
             content_type=evidence.mime_type or "application/octet-stream",
@@ -3738,7 +3752,7 @@ def _ensure_evidence_preview(evidence):
     never streamed from an AllowAny route. Called at evidence creation, so
     this path only fires for legacy rows.
     """
-    if evidence.preview_file:
+    if evidence.preview_file and evidence.preview_file.storage.exists(evidence.preview_file.name):
         return evidence.preview_file
     try:
         with evidence.file.open("rb") as source:
@@ -3814,17 +3828,29 @@ class AnnouncementListView(APIView):
         dispatch_due_announcements()
         now = timezone.now()
         from apps.community_scope import community_ids_for_user
+        cache_key = f"dashboard:announcements:{request.user.pk}:{request.META.get('QUERY_STRING', '')}"
+        try:
+            cached = cache.get(cache_key)
+        except Exception:
+            cached = None
+        if cached is not None:
+            return Response(cached)
         announcements = Announcement.objects.filter(
             community_id__in=community_ids_for_user(request.user),
             is_published=True,
             audience__in=[Announcement.Audience.ALL, Announcement.Audience.RESIDENTS],
         ).filter(Q(starts_at__isnull=True) | Q(starts_at__lte=now)).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
         announcements = announcements.order_by("-is_pinned", "-published_at", "-created_at", "-id")
-        return paginate_response(
+        result = paginate_response(
             request,
             announcements,
             lambda page: AnnouncementSerializer(page, many=True).data,
         )
+        try:
+            cache.set(cache_key, result.data, 30)
+        except Exception:
+            pass
+        return Response(result.data)
 
 def _announcement_audit_snapshot(announcement):
     """Immutable, human-readable context for announcement audit details."""
@@ -4064,6 +4090,8 @@ class ConcernMediaRawView(APIView):
             object_id=media.pk,
             request_meta=request_meta(request),
         )
+        if not media.file or not media.file.storage.exists(media.file.name):
+            return Response({"detail": "The original file is no longer available."}, status=status.HTTP_404_NOT_FOUND)
         return FileResponse(media.file.open("rb"), content_type=media.mime_type or "application/octet-stream")
 
 
@@ -4090,7 +4118,7 @@ class ConcernMediaPreviewView(APIView):
         )
         if not is_publicly_displayable and not user_can_access_concern_media_raw(request.user, media):
             return Response({"detail": "You do not have permission to access this media."}, status=status.HTTP_403_FORBIDDEN)
-        if media.preview_file:
+        if media.preview_file and media.preview_file.storage.exists(media.preview_file.name):
             response = FileResponse(media.preview_file.open("rb"), content_type="image/jpeg")
             response["X-EBOSES-Preview-Status"] = "ready"
             response["Cache-Control"] = "no-store"

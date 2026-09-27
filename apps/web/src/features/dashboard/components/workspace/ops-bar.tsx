@@ -89,7 +89,7 @@ export function OpsBar({
       </div>
 
       {counters.length > 0 ? (
-        <div className="hidden min-w-0 items-center gap-4 lg:flex">
+        <div className="hidden min-w-0 items-center gap-4 md:flex">
           <span aria-hidden className="h-4 w-px bg-card-line" />
           {counters.map((counter) => (
             <Counter key={counter.label} counter={counter} />

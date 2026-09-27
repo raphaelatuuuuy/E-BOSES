@@ -5,6 +5,7 @@ from difflib import SequenceMatcher
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count, OuterRef, Q, Subquery
+from django.http import HttpResponse
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -1738,6 +1739,7 @@ class LlmDecisionLogListView(APIView):
             "concern__category_ref__department",
         ).prefetch_related(
             "concern__media",
+            "concern__resolution_evidence",
             "concern__ai_assessment",
             "concern__escalated_emergencies",
         )
@@ -1852,6 +1854,27 @@ def _concern_media_payload(concern) -> list[dict]:
     return media
 
 
+def _concern_resolution_payload(concern) -> list[dict]:
+    """Photos a responder attached when closing the concern.
+
+    Kept separate from the submitted evidence so the audit view can show
+    "what it looked like after" beside the original report.
+    """
+    if not concern:
+        return []
+    evidence = []
+    for index, item in enumerate(concern.resolution_evidence.all()):
+        if not (item.mime_type or "").startswith("image/"):
+            continue
+        evidence.append({
+            "id": item.pk,
+            "label": item.original_filename or f"Resolved photo {index + 1}",
+            "preview_url": f"/api/concerns/resolution-evidence/{item.pk}/preview/",
+            "raw_url": f"/api/concerns/resolution-evidence/{item.pk}/raw/",
+        })
+    return evidence
+
+
 def _decision_log_payload(row: LlmDecisionLog) -> dict:
     """Build a readable, current-state audit row without losing raw snapshots."""
     concern = row.concern
@@ -1896,11 +1919,19 @@ def _decision_log_payload(row: LlmDecisionLog) -> dict:
         street_imagery = dict(street_imagery)
         image_b64 = street_imagery.pop("image_b64", "")
         display_output["street_imagery"] = dict(street_imagery)
+        # Never inline the panorama in a list response: a page of the audit log
+        # used to ship hundreds of base64 JPEGs. The UI loads it lazily from
+        # the stored snapshot through the street-image endpoint instead.
         if image_b64:
-            street_imagery["image"] = f"data:image/jpeg;base64,{image_b64}"
+            street_imagery["image_url"] = (
+                f"/api/concerns/classification/log/{row.pk}/street-image/"
+            )
 
     input_snapshot = row.input_snapshot if isinstance(row.input_snapshot, dict) else {}
     address = (concern.address if concern and concern.address else input_snapshot.get("location")) or ""
+    _duplicate_msg = "Please use a different photo, this issue was already reported."
+    if _duplicate_msg in address:
+        address = address.replace(_duplicate_msg, "").strip(" ,;")
     category_unit = None
     if concern and concern.category_ref_id:
         category_unit = concern.category_ref.department
@@ -1985,6 +2016,7 @@ def _decision_log_payload(row: LlmDecisionLog) -> dict:
             "legacy": not bool(final_snapshot),
         },
         "submitted_media": _concern_media_payload(concern),
+        "resolution_media": _concern_resolution_payload(concern),
         "street_imagery": street_imagery,
     }
 
@@ -2078,6 +2110,61 @@ class LlmDecisionLogStreetImageryView(APIView):
         if result is None:
             result = {"status": "disabled", "reason": "street_imagery_not_configured"}
         return Response(result)
+
+
+class LlmDecisionLogStreetImageView(APIView):
+    """Serve the stored Street View photo for one decision-log row.
+
+    The audit log links to this instead of embedding the base64 image in its
+    list response, so one page of the log no longer ships hundreds of
+    multi-hundred-kilobyte panoramas.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        granted = capabilities_for(request.user)
+        if CONFIGURE_CLASSIFICATION not in granted and MANAGE_USERS not in granted:
+            return Response(
+                {"detail": "You do not have permission to read automated decisions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        community_ids = community_ids_for_user(request.user)
+        if not community_ids:
+            return Response(
+                {"detail": "You do not have permission to read automated decisions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        row = (
+            LlmDecisionLog.objects.filter(
+                Q(concern__community_id__in=community_ids)
+                | Q(concern__isnull=True, assigned_department__community_id__in=community_ids)
+            )
+            .filter(pk=pk)
+            .only("id", "output_snapshot")
+            .first()
+        )
+        if row is None:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        snapshot = row.output_snapshot if isinstance(row.output_snapshot, dict) else {}
+        street = snapshot.get("street_imagery")
+        street = street if isinstance(street, dict) else {}
+        image_b64 = street.get("image_b64") or ""
+        if not image_b64:
+            return Response(
+                {"detail": "No road photo is stored for this entry."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        try:
+            image = base64.b64decode(image_b64)
+        except (ValueError, TypeError):
+            return Response(
+                {"detail": "The stored road photo is unreadable."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        response = HttpResponse(image, content_type="image/jpeg")
+        response["Cache-Control"] = "private, max-age=3600"
+        return response
 
 
 class CommunityModerationSimulationView(APIView):

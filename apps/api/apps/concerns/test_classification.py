@@ -7,18 +7,21 @@ model that reads the photo directly, and a schema whose fields are the ones the
 official interface actually shows.
 """
 
+import base64
 from dataclasses import replace
-from io import BytesIO
+from io import BytesIO, StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from PIL import Image, ImageDraw
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.accounts.models import AuditLog
 from apps.concerns.ai import process_concern_ai
 from apps.concerns.ai.duplicate_detector import report_fingerprints
 from apps.concerns.ai.gemma_analyzer import GemmaAnalyzer, low_information_reason, parse_gemma_result, payload_from_result
@@ -27,7 +30,7 @@ from apps.concerns.ai.image_prep import PreparedImage
 from apps.concerns.ai.pipeline import _visual_duplicate_check
 from apps.concerns.classification_api import _assigned_unit_for_category, _photo_verdict_payload, _resident_feedback
 from apps.concerns.test_helpers import active_test_community
-from apps.concerns.models import Concern, ConcernAiAssessment, ConcernCategory, ConcernClassificationConfiguration, ConcernMedia, ContentFlag, Department, Designation, LlmDecisionLog, Position
+from apps.concerns.models import Concern, ConcernAiAssessment, ConcernCategory, ConcernClassificationConfiguration, ConcernMedia, ConcernResolutionEvidence, ContentFlag, Department, Designation, LlmDecisionLog, Position
 from apps.concerns.test_helpers import ensure_test_profile, grant_position
 from apps.media_utils import phash_blocks_file, phash_file, sha256_file
 
@@ -639,6 +642,223 @@ class ConcernClassificationApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         street_preview.assert_called_once()
         self.assertEqual(street_preview.call_args.args[0].community_id, community.pk)
+
+
+class LlmDecisionLogMediaTests(APITestCase):
+    """The audit view needs its photos addressed, not inlined or dropped."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.official = User.objects.create_user(
+            email="audit-media-official@example.com", phone_number="+639180000031",
+            password="pass", role=User.Role.BARANGAY_OFFICIAL, status=User.Status.VERIFIED,
+        )
+        grant_captain(self.official)
+        self.resident = User.objects.create_user(
+            email="audit-media-resident@example.com", phone_number="+639180000032",
+            password="pass", role=User.Role.RESIDENT, status=User.Status.VERIFIED,
+        )
+        ensure_test_profile(self.resident)
+
+    def _concern(self):
+        return Concern.objects.create(
+            reporter=self.resident,
+            community=self.resident.resident_profile.community,
+            title="Blocked drainage",
+            description="Water backs up at the blocked drainage beside our homes.",
+            category=Concern.Category.ENVIRONMENT,
+        )
+
+    def test_payload_addresses_road_image_lazily_and_keeps_resolution_photos(self):
+        concern = self._concern()
+        ConcernResolutionEvidence.objects.create(
+            concern=concern,
+            file=SimpleUploadedFile("after.jpg", b"\xff\xd8\xff\xd9", content_type="image/jpeg"),
+            original_filename="after.jpg",
+            mime_type="image/jpeg",
+        )
+        row = LlmDecisionLog.objects.create(
+            run_kind=LlmDecisionLog.RunKind.PRODUCTION,
+            domain=LlmDecisionLog.Domain.CONCERN,
+            concern=concern,
+            output_snapshot={"street_imagery": {"status": "checked", "verdict": "area_matches", "image_b64": base64.b64encode(b"\xff\xd8\xff\xd9").decode()}},
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.get("/api/concerns/classification/log/?domain=concern&run_kind=production")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        entry = next(item for item in response.data["results"] if item["id"] == row.pk)
+        self.assertEqual(entry["street_imagery"]["image_url"], f"/api/concerns/classification/log/{row.pk}/street-image/")
+        self.assertNotIn("image", entry["street_imagery"])
+        self.assertEqual(len(entry["resolution_media"]), 1)
+        self.assertTrue(entry["resolution_media"][0]["preview_url"])
+
+    def test_street_image_endpoint_serves_the_stored_panorama(self):
+        concern = self._concern()
+        raw = b"\xff\xd8\xff\xd9panorama"
+        row = LlmDecisionLog.objects.create(
+            run_kind=LlmDecisionLog.RunKind.PRODUCTION,
+            domain=LlmDecisionLog.Domain.CONCERN,
+            concern=concern,
+            output_snapshot={"street_imagery": {"status": "checked", "image_b64": base64.b64encode(raw).decode()}},
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.get(f"/api/concerns/classification/log/{row.pk}/street-image/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["Content-Type"], "image/jpeg")
+        self.assertEqual(response.content, raw)
+
+    def test_street_image_endpoint_reports_a_missing_panorama(self):
+        concern = self._concern()
+        row = LlmDecisionLog.objects.create(
+            run_kind=LlmDecisionLog.RunKind.PRODUCTION,
+            domain=LlmDecisionLog.Domain.CONCERN,
+            concern=concern,
+            output_snapshot={"street_imagery": {"status": "no_coverage"}},
+        )
+        self.client.force_authenticate(self.official)
+
+        response = self.client.get(f"/api/concerns/classification/log/{row.pk}/street-image/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class StreetImageryPanoramaWidthTests(TestCase):
+    """Panoramas narrower than a full 360° ring still count as coverage."""
+
+    def test_download_keeps_the_contiguous_tile_columns(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        from apps.concerns.ai import street_imagery as si
+
+        def tile_response(width=512, height=512):
+            buffer = BytesIO()
+            Image.new("RGB", (width, height), (40, 90, 60)).save(buffer, "JPEG")
+            buffer.seek(0)
+            return buffer.getvalue()
+
+        # 7 of 8 columns answer 200; the last column is 400, as Google serves
+        # for panoramas narrower than a full ring.
+        calls = {"count": 0}
+
+        class FakeResponse:
+            def __init__(self, status_code, content=b""):
+                self.status_code = status_code
+                self.content = content
+
+            def close(self):
+                pass
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise AssertionError(f"unexpected HTTP {self.status_code}")
+
+        def fake_get(url, **_kwargs):
+            calls["count"] += 1
+            if "x=7&" in url:
+                return FakeResponse(400)
+            return FakeResponse(200, tile_response())
+
+        with patch("apps.concerns.ai.street_imagery.requests.get", side_effect=fake_get):
+            result = si._download_full_pano("pano-with-short-row")
+
+        self.assertTrue(result)
+        self.assertGreater(calls["count"], 0)
+        decoded = base64.b64decode(result)
+        with Image.open(BytesIO(decoded)) as stitched:
+            # 7 kept columns * 512 px, downscaled to OUTPUT_WIDTH proportionally
+            self.assertEqual(stitched.width, si.OUTPUT_WIDTH)
+
+    def test_download_returns_empty_when_no_tiles_exist(self):
+        from apps.concerns.ai import street_imagery as si
+
+        class FakeResponse:
+            status_code = 400
+
+            def close(self):
+                pass
+
+        with patch("apps.concerns.ai.street_imagery.requests.get", return_value=FakeResponse()):
+            self.assertEqual(si._download_full_pano("missing-pano"), "")
+
+
+class StreetImageryBackfillTests(APITestCase):
+    """The backfill stores the fetched panorama and records the new verdict."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.resident = User.objects.create_user(
+            email="backfill-resident@example.com", phone_number="+639180000041",
+            password="pass", role=User.Role.RESIDENT, status=User.Status.VERIFIED,
+        )
+        ensure_test_profile(self.resident)
+        self.community = self.resident.resident_profile.community
+        self.concern = Concern.objects.create(
+            reporter=self.resident,
+            community=self.community,
+            title="Blocked drainage",
+            description="Water backs up at the blocked drainage beside our homes.",
+            category=Concern.Category.ENVIRONMENT,
+            latitude=14.6533628,
+            longitude=121.1187087,
+        )
+        buffer = BytesIO()
+        Image.new("RGB", (64, 64), (40, 90, 60)).save(buffer, "JPEG")
+        ConcernMedia.objects.create(
+            concern=self.concern,
+            file=SimpleUploadedFile("photo.jpg", buffer.getvalue(), content_type="image/jpeg"),
+            original_filename="photo.jpg",
+            mime_type="image/jpeg",
+        )
+        self.row = LlmDecisionLog.objects.create(
+            run_kind=LlmDecisionLog.RunKind.PRODUCTION,
+            domain=LlmDecisionLog.Domain.CONCERN,
+            concern=self.concern,
+            output_snapshot={"street_imagery": {"status": "no_coverage"}},
+        )
+        AuditLog.objects.create(
+            action="concern.ai_decided",
+            community=self.community,
+            metadata={"concern_id": self.concern.pk},
+        )
+
+    @patch("apps.concerns.management.commands.backfill_street_imagery.verify_street_context")
+    @patch("apps.concerns.management.commands.backfill_street_imagery.fetch_latest_street_imagery")
+    def test_backfill_saves_panorama_and_reverifies(self, fetch_imagery, verify_context):
+        fetch_imagery.return_value = SimpleNamespace(
+            pano_id="pano-1",
+            captured_date="2026",
+            latitude=14.6533,
+            longitude=121.1187,
+            distance_meters=1.5,
+            image_b64=base64.b64encode(b"panorama-bytes").decode(),
+        )
+        verify_context.return_value = {"verdict": "area_matches", "explanation": "Same area."}
+
+        call_command("backfill_street_imagery", stdout=StringIO())
+
+        self.row.refresh_from_db()
+        street = self.row.output_snapshot["street_imagery"]
+        self.assertEqual(street["status"], "checked")
+        self.assertEqual(street["verdict"], "area_matches")
+        self.assertTrue(street["image_b64"])
+        audit_row = AuditLog.objects.get(action="concern.ai_decided", metadata__concern_id=self.concern.pk)
+        self.assertEqual(audit_row.metadata["street_verdict"], "area_matches")
+        self.assertEqual(audit_row.metadata["analysis_log_id"], self.row.pk)
+
+    @patch("apps.concerns.management.commands.backfill_street_imagery.fetch_latest_street_imagery")
+    def test_backfill_reports_genuine_no_coverage_without_writing(self, fetch_imagery):
+        fetch_imagery.return_value = None
+
+        call_command("backfill_street_imagery", stdout=StringIO())
+
+        self.row.refresh_from_db()
+        self.assertEqual(self.row.output_snapshot["street_imagery"]["status"], "no_coverage")
 
 
 class ClassificationServiceStatusTests(APITestCase):

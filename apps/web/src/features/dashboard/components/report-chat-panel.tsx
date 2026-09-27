@@ -603,7 +603,7 @@ export function ReportChatPanel({
       {showHistory ? (
         <div
           className={cn(
-            "scrollbar-hide min-h-0 flex-1 space-y-3 px-3 py-3 max-lg:overflow-visible lg:overflow-y-auto lg:overscroll-contain",
+            "scrollbar-hide min-h-0 flex-1 space-y-3 px-3 py-3 max-md:overflow-visible md:overflow-y-auto md:overscroll-contain",
             plain && "max-h-none"
           )}
         >

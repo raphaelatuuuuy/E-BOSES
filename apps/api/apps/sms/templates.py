@@ -36,6 +36,10 @@ def ongoing_emergency():
     return "You already have an ongoing SOS emergency."
 
 
+def unverified_registration():
+    return "You are not yet registered with E-Boses. Please register in the app."
+
+
 def resident_progress(alert, status, *, unit_name=""):
     bodies = {
         "en_route": "Responders are on the way. Stay safe and keep your phone open.",

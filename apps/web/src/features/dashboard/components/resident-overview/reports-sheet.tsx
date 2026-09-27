@@ -30,7 +30,7 @@ import {
   searchResidentReports,
 } from "@/features/dashboard/components/concerns/resident-reports-workspace"
 import { OverviewReportRow } from "@/features/dashboard/components/resident-overview/report-rows"
-import { compareReportPriority } from "@/features/dashboard/lib/report-priority"
+import { reportSeverityRank } from "@/features/dashboard/lib/report-priority"
 
 const REPORTS_PER_PAGE = 4
 
@@ -104,7 +104,7 @@ export function OverviewReportsSheet({
   onOpenEmergency,
   loadReports = listMyConcerns,
   loadEmergencies,
-  title = (<>Monitor your <span className="text-brand-orange">reports</span></>),
+  title = (<>Monitor your <span className="text-brand-orange">Reports</span></>),
   description = "Every concern you submitted.",
   showPriority = false,
 }: {
@@ -183,7 +183,7 @@ export function OverviewReportsSheet({
         top,
         left: row.left,
         width: row.width,
-        maxHeight: Math.max(Math.min(110, window.innerHeight - top - 16), 48),
+        maxHeight: Math.max(Math.min(400, window.innerHeight - top - 16), 48),
       })
     }
     place()
@@ -263,7 +263,13 @@ export function OverviewReportsSheet({
       ].sort((left, right) => {
         const leftReport = left.kind === "concern" ? left.post : left.report
         const rightReport = right.kind === "concern" ? right.post : right.report
-        return compareReportPriority(leftReport, rightReport)
+        const leftTop = reportSeverityRank(leftReport) >= 2
+        const rightTop = reportSeverityRank(rightReport) >= 2
+        if (leftTop !== rightTop) return leftTop ? -1 : 1
+        return (
+          rightReport.created_at.localeCompare(leftReport.created_at) ||
+          rightReport.id - leftReport.id
+        )
       }),
     [visible, visibleEmergencies]
   )

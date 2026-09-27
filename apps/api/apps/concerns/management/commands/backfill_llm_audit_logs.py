@@ -29,13 +29,23 @@ DOMAIN_ACTION = {
 def _concern_metadata(row):
     output = row.output_snapshot if isinstance(row.output_snapshot, dict) else {}
     final = output.get("final_decision") if isinstance(output.get("final_decision"), dict) else {}
+    street = output.get("street_imagery") if isinstance(output.get("street_imagery"), dict) else {}
+    concern = row.concern
     return {
         "concern_id": row.concern_id,
+        "concern_title": (concern.title or "")[:200] if concern else "",
         "decision": final.get("status", row.recommended_action or ""),
         "reason": final.get("reason", row.resident_message or ""),
         "rejection_code": "",
         "model_version": row.model_version or "",
         "recommended_action": row.recommended_action or "",
+        # Mirrors the live writer: the audit view reads these light fields
+        # instead of loading the full LLM snapshots.
+        "severity": output.get("severity") or "",
+        "relevance": output.get("relevance") or "",
+        "street_verdict": street.get("verdict") or "",
+        "street_reason": street.get("explanation") or street.get("reason") or "",
+        "analysis_log_id": row.pk,
         "backfilled": True,
     }
 

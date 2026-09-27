@@ -182,7 +182,7 @@ export function ProfileAccountMenu({
   const sheet =
     open && typeof document !== "undefined"
       ? createPortal(
-          <div className="fixed inset-0 z-[240] flex justify-end lg:hidden" role="dialog" aria-modal="true">
+          <div className="fixed inset-0 z-[240] flex justify-end md:hidden" role="dialog" aria-modal="true">
             <button
               type="button"
               className="absolute inset-0 bg-black/45"

@@ -42,7 +42,7 @@ def ensure_concern_media_preview(media):
     ever set by a privacy run, so a preview produced here is served to
     authorised users only.
     """
-    if media.preview_file and media.preview_file.name:
+    if media.preview_file and media.preview_file.name and media.preview_file.storage.exists(media.preview_file.name):
         return media.preview_file
     source = media.file
     # The AI image-review stage may have opened and closed this FieldFile. A

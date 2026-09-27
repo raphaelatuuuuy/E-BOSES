@@ -46,6 +46,13 @@ function sameText(a: string, b: string) {
 }
 
 function reportSentence(report: Concern) {
+  if (report.status === "rejected") {
+    return rejectionMessage(report)
+  }
+  const severityReason = (report.severity_reason || "").replace(/^\s*the\s+/i, "")
+  if (severityReason) {
+    return severityReason.charAt(0).toUpperCase() + severityReason.slice(1)
+  }
   const raw = (
     report.summary?.trim() ||
     report.title?.trim() ||
@@ -53,12 +60,10 @@ function reportSentence(report: Concern) {
     ""
   ).trim()
   if (!raw) return "The resident submitted this report."
-  if (/^(the resident|the report|this report|a report)\b/i.test(raw)) {
-    const sentence = `${raw.charAt(0).toUpperCase()}${raw.slice(1)}`
-    return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`
-  }
-  const source = tidySentence(raw)
-  return `The resident reports ${source}.`
+  const sentence = /^(the resident|the report|this report|a report)\b/i.test(raw)
+    ? raw
+    : `The resident reports ${tidySentence(raw)}`
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1)
 }
 
 const PRIORITY_META: Record<
@@ -176,14 +181,16 @@ export function ReportDescriptionCard({
 
   return (
     <article
-      className={cn(
-        "flex w-full items-start gap-2 rounded-2xl px-3.5 py-3 text-[15px] leading-relaxed",
-        resolved
-          ? "bg-emerald-50 text-emerald-900"
-          : critical
-            ? "bg-severity-critical-surface text-sos"
-            : "bg-brand-orange-soft text-orange-800"
-      )}
+        className={cn(
+          "flex w-full items-start gap-2 rounded-2xl px-3.5 py-3 text-[15px] leading-relaxed",
+          resolved
+            ? "bg-emerald-50 text-emerald-900"
+            : report.status === "rejected"
+              ? "bg-red-50 text-red-900"
+              : critical
+                ? "bg-severity-critical-surface text-sos"
+                : "bg-brand-orange-soft text-orange-800"
+        )}
     >
       {resolved ? (
         <CircleCheck
@@ -241,30 +248,45 @@ export function ReportDescriptionCard({
                     <PlayIcon className="size-4 shrink-0" />
                     Video evidence
                   </button>
-                )}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-    </article>
-  )
+                 )}
+               </div>
+             ) : null}
+           </div>
+         ) : null}
+       </div>
+     </article>
+   )
+}
+
+function rejectionMessage(report: Concern): string {
+  const code = report.rejection_code || ""
+  const map: Record<string, string> = {
+    automated_multiple_issues: "The report was rejected because it describes more than one issue. Please resubmit with a single concern per report.",
+    automated_street_imagery_resubmit: "The report was rejected because the photo does not match the reported location.",
+    automated_street_imagery_inconclusive_resubmit: "The report was rejected because the photo does not show enough surrounding landmarks to verify the location. Please recapture a wider photo showing the road and nearby buildings, signs, or other landmarks, then resubmit.",
+    automated_photo_unsupported: "The report was rejected because the photo does not clearly show the reported issue. Please submit a photo that clearly shows the reported issue.",
+    automated_photo_mismatch: "The report was rejected because the photo contradicts the issue described. Please submit a photo that matches what the report describes.",
+    automated_unclear_description: "The report was rejected because the description is unclear or contains irrelevant details.",
+  }
+  if (map[code]) return map[code]
+  if (report.validation_summary && report.validation_summary !== "Automated validation passed.") return report.validation_summary
+  return "This report was rejected."
 }
 
 export function ReportReporterCard({
-  report,
-  onChat,
-}: {
-  report: Concern
-  onChat?: () => void
+   report,
+   onChat,
+ }: {
+   report: Concern
+   onChat?: () => void
 }) {
-  const { user } = useAuthSession()
-  const [calling, setCalling] = useState(false)
-  const name = report.reporter?.full_name?.trim() || report.reporter_full_name?.trim() || "Resident"
-  const phone = report.reporter?.phone_number?.trim() || ""
-  const isAnonymous = report.is_anonymous === true || report.reporter?.id === 0
-  const redacted = report.status === "resolved"
-  const canCall = Boolean(phone) && user?.id !== report.reporter?.id && !redacted
+   const { user } = useAuthSession()
+   const [calling, setCalling] = useState(false)
+   const name = report.reporter?.full_name?.trim() || report.reporter_full_name?.trim() || "Resident"
+   const phone = report.reporter?.phone_number?.trim() || ""
+   const isAnonymous = report.is_anonymous === true || report.reporter?.id === 0
+   const redacted = report.status === "resolved"
+   const canCall = Boolean(phone) && user?.id !== report.reporter?.id
 
   function callReporter() {
     if (!canCall || calling) return
@@ -289,7 +311,7 @@ export function ReportReporterCard({
           {name}
         </p>
         <p className="text-[12px] text-neutral-500">
-          {redacted ? "Phone unavailable" : (phone || (isAnonymous ? "Anonymous report" : "Resident"))}
+          {phone || (isAnonymous ? "Anonymous report" : "Resident")}
         </p>
       </div>
       {canCall ? (
@@ -305,7 +327,7 @@ export function ReportReporterCard({
           <span>Call</span>
         </button>
       ) : null}
-      {onChat && !isAnonymous ? (
+      {onChat && !isAnonymous && !redacted ? (
         <button
           type="button"
           onClick={onChat}
@@ -350,7 +372,7 @@ export function ReportAssignmentFooter({
           onClick={onChat}
           aria-label="Chat"
           title="Chat"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-1 text-[13px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none"
+          className="inline-flex shrink-0 items-center gap-1 rounded-full px-1 py-0.5 text-[12px] font-normal text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:outline-none"
         >
           <MessageCircleIcon className="size-4" aria-hidden />
           <span>Chat</span>

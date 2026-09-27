@@ -25,8 +25,8 @@ const STATUS_CHOICE_LABEL: Record<string, string> = {
   assigned: "Assigned to a unit",
   in_progress: "Being handled",
   resolved: "Resolved",
-  rejected: "Denied appeal",
-  appealed: "Under appeal",
+  rejected: "Rejected",
+  appealed: "Denied appeal",
 }
 
 /** Every status an official may move a report to. */

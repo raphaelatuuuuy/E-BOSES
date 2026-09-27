@@ -5,7 +5,6 @@ import {
   CircleCheck,
   ImageOffIcon,
   LoaderCircleIcon,
-  Maximize2Icon,
   RefreshCwIcon,
   ScanLineIcon,
   SignalHighIcon,
@@ -30,7 +29,10 @@ import { describeApiError } from "@/features/dashboard/lib/api-errors"
 import { mediaIntegrityVerdict } from "@/features/dashboard/lib/plain-language"
 import { UserAvatar } from "@/features/dashboard/components/home/user-avatar"
 import { SEVERITY_TONE } from "@/features/dashboard/components/concerns/concern-queue-item"
-import { MediaLightbox } from "@/features/dashboard/components/authenticated-media"
+import {
+  AuthenticatedMediaImage,
+  MediaLightbox,
+} from "@/features/dashboard/components/authenticated-media"
 import { toMediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import {
   fetchAuthorizedProof,
@@ -147,7 +149,7 @@ function outcomeOf(action: string | null | undefined): string {
 }
 
 const DOMAIN_FILTERS: { value: LlmDecisionLogDomain | ""; label: string }[] = [
-  { value: "", label: "All reports" },
+  { value: "", label: "Reports" },
   { value: "concern", label: "Concerns" },
   { value: "verification", label: "Verification" },
 ]
@@ -689,16 +691,25 @@ function StreetViewEvidence({
 }: {
   street: NonNullable<LlmDecisionLogEntry["street_imagery"]> | null
 }) {
+  // The stored panorama is served lazily by the audit endpoints, so it is the
+  // first choice. Fall back to an inline snapshot, then a live lookup, only
+  // when no stored image is addressed.
+  const remoteUrl = street?.image_url || ""
+  const inlineImage = street?.image || ""
   const canLoadImage = Boolean(
     street &&
-    !street.image &&
+    !inlineImage &&
+    !remoteUrl &&
     street.status === "checked" &&
     street.latitude != null &&
     street.longitude != null
   )
-  const [image, setImage] = useState(street?.image || "")
+  const [image, setImage] = useState(inlineImage)
   const [imageLoading, setImageLoading] = useState(canLoadImage)
   const [imageFailed, setImageFailed] = useState(false)
+  const [remoteStatus, setRemoteStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading")
   const [previewOpen, setPreviewOpen] = useState(false)
 
   useEffect(() => {
@@ -722,14 +733,37 @@ function StreetViewEvidence({
     return () => controller.abort()
   }, [canLoadImage, street?.latitude, street?.longitude])
 
-  if ((!image && !canLoadImage) || imageFailed) return null
+  const loadedSrc = remoteUrl && remoteStatus === "ready"
+    ? remoteUrl
+    : image
+  const unavailable =
+    (remoteUrl && remoteStatus === "error") || (!remoteUrl && imageFailed)
+  if (!loadedSrc && !canLoadImage && !remoteUrl) return null
 
   return (
     <div className="min-w-0">
       <p className="mb-2 text-[12px] font-semibold tracking-tight text-neutral-500">
         Panorama image
       </p>
-      {image && !imageFailed ? (
+      {unavailable ? (
+        <p className="mt-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-meta text-neutral-500">
+          The road photo for this entry could not be loaded.
+        </p>
+      ) : remoteUrl && remoteStatus !== "error" ? (
+        <button
+          type="button"
+          onClick={() => remoteStatus === "ready" && setPreviewOpen(true)}
+          aria-label="Preview panorama image"
+          className="mt-2 block w-full overflow-hidden rounded-[14px] text-left focus-visible:ring-2 focus-visible:ring-brand-navy focus-visible:ring-offset-2 focus-visible:outline-none"
+        >
+          <AuthenticatedMediaImage
+            src={remoteUrl}
+            alt="Panorama near the pin"
+            className="block h-auto w-full rounded-[14px] object-cover"
+            onStatus={setRemoteStatus}
+          />
+        </button>
+      ) : image && !imageFailed ? (
         <button
           type="button"
           onClick={() => setPreviewOpen(true)}
@@ -748,10 +782,10 @@ function StreetViewEvidence({
           Loading panorama image…
         </p>
       ) : null}
-      {previewOpen && image ? (
+      {previewOpen && loadedSrc ? (
         <MediaLightbox
           items={[
-            toMediaPreviewItem(image, "Panorama near the pin", "image/jpeg"),
+            toMediaPreviewItem(loadedSrc, "Panorama near the pin", "image/jpeg"),
           ]}
           index={0}
           onClose={() => setPreviewOpen(false)}
@@ -869,6 +903,32 @@ export function DecisionDetailsDialog({
           : []),
       ]
     : []
+  // Every photo that explains the case, in the order an official reads it:
+  // the reported issue, what it looked like after, then the document (for an
+  // ID check). The road panorama is appended by StreetViewEvidence.
+  const caseImages: { src: string; label: string }[] = isVerification
+    ? verificationImages.map((image) => ({
+        ...image,
+        label: displayedSide
+          ? `${image.label} · ${displayedSide}`
+          : image.label,
+      }))
+    : [
+        ...(entry.submitted_media || []).map((media, index) => ({
+          src: media.preview_url || media.raw_url,
+          label:
+            (entry.submitted_media?.length ?? 0) === 1
+              ? "Concern photo"
+              : `Concern photo ${index + 1}`,
+        })),
+        ...(entry.resolution_media || []).map((media, index) => ({
+          src: media.preview_url || media.raw_url,
+          label:
+            (entry.resolution_media?.length ?? 0) === 1
+              ? "Resolved photo"
+              : `Resolved photo ${index + 1}`,
+        })),
+      ]
 
   return (
     <SheetDialog
@@ -887,22 +947,84 @@ export function DecisionDetailsDialog({
     >
       <div className="space-y-8">
         <section className="border-b border-neutral-200 pb-6">
-          <p className="text-[12px] font-medium tracking-wide text-neutral-500">
-            Summary
-          </p>
-          <div className="mt-3 flex items-start gap-3">
-            <DecisionIcon
-              className={cn("mt-0.5 size-5 shrink-0", decisionTone)}
-              strokeWidth={2}
-              aria-hidden
-            />
-            <div className="max-w-[65ch] min-w-0">
-              <h3 className="text-[18px] leading-snug font-semibold tracking-[-0.015em] text-pretty text-neutral-950">
-                {decisionLabel}
-              </h3>
-              <p className="mt-1.5 text-[14px] leading-6 text-pretty text-neutral-600">
-                {summary}
-              </p>
+          <div className="grid gap-5 md:grid-cols-[minmax(0,300px)_minmax(0,1fr)]">
+            <div className="space-y-3">
+              {caseImages.length ? (
+                <div
+                  className={cn(
+                    "grid gap-2",
+                    caseImages.length > 1 && "grid-cols-2"
+                  )}
+                >
+                  {caseImages.map((image, index) => (
+                    <figure
+                      key={`${image.label}-${image.src}`}
+                      className="min-w-0"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPreviewIndex(index)}
+                        aria-label={`Preview ${image.label.toLowerCase()}`}
+                        className="block w-full overflow-hidden rounded-[14px] focus-visible:ring-2 focus-visible:ring-brand-navy focus-visible:ring-offset-2 focus-visible:outline-none"
+                      >
+                        <ProtectedLogImage
+                          src={image.src}
+                          label={image.label}
+                          unavailableText={`${image.label} is no longer available.`}
+                          allowRetry={false}
+                          className="mt-0 block h-40 w-full rounded-[14px] border-0 object-cover"
+                        />
+                      </button>
+                      <figcaption className="mt-1.5 text-[12px] font-medium text-neutral-600">
+                        {image.label}
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex h-40 items-center justify-center rounded-[14px] border border-dashed border-neutral-200 text-[13px] text-neutral-400">
+                  No photo on file
+                </div>
+              )}
+              {street ? <StreetViewEvidence street={street} /> : null}
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex items-start gap-3">
+                <DecisionIcon
+                  className={cn("mt-0.5 size-5 shrink-0", decisionTone)}
+                  strokeWidth={2}
+                  aria-hidden
+                />
+                <div className="max-w-[65ch] min-w-0">
+                  <h3 className="text-[18px] leading-snug font-semibold tracking-[-0.015em] text-pretty text-neutral-950">
+                    {decisionLabel}
+                  </h3>
+                  <p className="mt-1.5 text-[14px] leading-6 text-pretty text-neutral-600">
+                    {summary}
+                  </p>
+                </div>
+              </div>
+              {findings.length ? (
+                <ul className="mt-4 space-y-2.5 border-t border-neutral-200 pt-4">
+                  {findings.map((finding) => (
+                    <li
+                      key={finding.text}
+                      className="flex gap-2.5 text-[14px] leading-relaxed text-neutral-700"
+                    >
+                      {createElement(finding.icon, {
+                        className: cn(
+                          "mt-0.5 size-4 shrink-0",
+                          DETAIL_FINDING_TONE[finding.tone]
+                        ),
+                        strokeWidth: 2,
+                        "aria-hidden": true,
+                      })}
+                      <span className="min-w-0 break-words">{finding.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           </div>
         </section>
@@ -1028,133 +1150,7 @@ export function DecisionDetailsDialog({
               </p>
             </div>
           ) : null}
-          {findings.length ? (
-            <div className="mt-5 border-t border-neutral-200 pt-4">
-              <p className="text-[12px] font-medium tracking-wide text-neutral-500">
-                Results
-              </p>
-              <ul className="mt-3 space-y-2">
-                {findings.map((finding) => (
-                  <li
-                    key={finding.text}
-                    className="flex gap-2 text-[13.5px] leading-relaxed text-neutral-700"
-                  >
-                    {createElement(finding.icon, {
-                      className: cn(
-                        "mt-0.5 size-4 shrink-0",
-                        DETAIL_FINDING_TONE[finding.tone]
-                      ),
-                      strokeWidth: 2,
-                      "aria-hidden": true,
-                    })}
-                    <span className="min-w-0 break-words">{finding.text}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
         </section>
-
-        {isVerification && verificationImages.length ? (
-          <section>
-            <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-neutral-950">
-              Image comparison
-            </h3>
-            <div
-              className={cn(
-                "mt-3 grid gap-4",
-                verificationImages.length > 1 && "sm:grid-cols-2"
-              )}
-            >
-              {verificationImages.map((image, index) => (
-                <figure key={`${image.label}-${image.src}`} className="min-w-0">
-                  <button
-                    type="button"
-                    onClick={() => setPreviewIndex(index)}
-                    aria-label={`Preview ${image.label.toLowerCase()}`}
-                    className="group relative block w-full overflow-hidden rounded-[14px] text-left focus-visible:ring-2 focus-visible:ring-brand-navy focus-visible:ring-offset-2 focus-visible:outline-none"
-                  >
-                    <ProtectedLogImage
-                      src={image.src}
-                      label={image.label}
-                      unavailableText={`${image.label} is no longer available.`}
-                      allowRetry={false}
-                      className="block h-auto w-full rounded-[14px] border-0 object-contain"
-                    />
-                    <span className="absolute top-3 right-3 inline-flex items-center gap-1.5 rounded-full bg-neutral-950/70 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
-                      <Maximize2Icon
-                        className="size-3.5"
-                        strokeWidth={2}
-                        aria-hidden
-                      />{" "}
-                      Preview
-                    </span>
-                    {displayedSide ? (
-                      <span className="absolute bottom-3 left-3 rounded-full bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-neutral-800 backdrop-blur-sm">
-                        {displayedSide}
-                      </span>
-                    ) : null}
-                  </button>
-                  <figcaption className="mt-2 text-[12px] font-medium text-neutral-600">
-                    {image.label}
-                  </figcaption>
-                </figure>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        {!isVerification && entry.submitted_media?.length ? (
-          <section>
-            <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-neutral-950">
-              {isVerification ? "Submitted document" : "Evidence"}
-            </h3>
-            <div
-              className={cn(
-                "mt-3 grid gap-5",
-                (entry.submitted_media?.length ?? 0) > 1 && "md:grid-cols-2"
-              )}
-            >
-              {entry.submitted_media.map((media, index) => {
-                const label = isVerification
-                  ? "Submitted document"
-                  : entry.submitted_media?.length === 1
-                    ? "Submitted evidence"
-                    : `Submitted evidence ${index + 1}`
-                return (
-                  <figure key={media.id} className="min-w-0">
-                    <button
-                      type="button"
-                      onClick={() => setPreviewIndex(index)}
-                      aria-label={`Preview ${label.toLowerCase()}`}
-                      className="block w-full overflow-hidden rounded-[14px] text-left focus-visible:ring-2 focus-visible:ring-brand-navy focus-visible:ring-offset-2 focus-visible:outline-none"
-                    >
-                      <ProtectedLogImage
-                        src={media.preview_url || media.raw_url}
-                        label={label}
-                        className="mt-0 block h-auto max-h-none w-full max-w-none rounded-[14px] border-0 object-contain"
-                      />
-                    </button>
-                    {(entry.submitted_media?.length ?? 0) > 1 ? (
-                      <figcaption className="mt-2 text-meta text-neutral-500">
-                        {label}
-                      </figcaption>
-                    ) : null}
-                  </figure>
-                )
-              })}
-            </div>
-          </section>
-        ) : null}
-
-        {!isVerification && street ? (
-          <section>
-            <StreetViewEvidence
-              key={`${street.latitude ?? ""}-${street.longitude ?? ""}-${street.image ?? ""}`}
-              street={street}
-            />
-          </section>
-        ) : null}
 
         {entry.content_flag_id ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2.5">
@@ -1175,24 +1171,11 @@ export function DecisionDetailsDialog({
             ) : null}
           </div>
         ) : null}
-        {previewIndex !== null &&
-        (isVerification
-          ? verificationImages.length
-          : entry.submitted_media?.length) ? (
+        {previewIndex !== null && caseImages.length ? (
           <MediaLightbox
-            items={
-              isVerification
-                ? verificationImages.map((image) =>
-                    toMediaPreviewItem(image.src, image.label, "image")
-                  )
-                : (entry.submitted_media || []).map((media, index) =>
-                    toMediaPreviewItem(
-                      media.preview_url || media.raw_url,
-                      media.label || `Submitted evidence ${index + 1}`,
-                      "image"
-                    )
-                  )
-            }
+            items={caseImages.map((image) =>
+              toMediaPreviewItem(image.src, image.label, "image")
+            )}
             index={previewIndex}
             onClose={() => setPreviewIndex(null)}
           />

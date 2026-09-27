@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
+import { toast } from "sonner"
 import {
   Check,
   TriangleAlertIcon,
@@ -135,6 +136,38 @@ export default function ReportIssuePage() {
       cancelled = true
     }
   }, [])
+
+  // Duplicate tap inside the guest dialog: select this exact report and let the
+  // map focus its pin. No navigation, so the guest keeps the map context
+  // instead of being sent to a sign-in wall.
+  useEffect(() => {
+    const handleShowReport = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ kind?: unknown; id?: unknown }>
+      ).detail
+      const id = typeof detail?.id === "number" ? detail.id : Number(detail?.id)
+      if (!Number.isInteger(id)) return
+      const kind = detail?.kind === "emergency" ? "emergency" : "concern"
+      const found = [
+        ...(snapshot?.concerns ?? []),
+        ...(snapshot?.emergencies ?? []),
+      ].some((item) => item.id === id)
+      if (!found) {
+        toast.info(
+          "That report isn't publicly listed, so it can't be opened here."
+        )
+        return
+      }
+      // No sheet: close whatever is open and let the map focus the matching
+      // pin (and show its hover tip). Opening the alert panel would cover the
+      // map the guest is trying to look at.
+      setAlertsPanelOpen(false)
+      setSelected({ kind, id })
+    }
+    window.addEventListener("eboses:show-public-report", handleShowReport)
+    return () =>
+      window.removeEventListener("eboses:show-public-report", handleShowReport)
+  }, [snapshot])
 
   useEffect(() => {
     const handleReportCreated = () => {

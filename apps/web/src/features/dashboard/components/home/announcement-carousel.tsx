@@ -58,7 +58,7 @@ export function AnnouncementCarousel({
   }
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-neutral-300 bg-white lg:rounded-lg">
+    <article className="overflow-hidden rounded-2xl border border-neutral-300 bg-white md:rounded-lg">
       <div
         ref={trackRef}
         onScroll={onScroll}

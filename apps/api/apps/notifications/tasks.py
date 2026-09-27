@@ -119,3 +119,35 @@ def deliver_notifications_batch_task(notification_ids):
         except Exception:
             continue
     return {"requested": len(notification_ids), "delivered": delivered}
+
+
+@shared_task(time_limit=120, soft_time_limit=90)
+def retry_notification_delivery(notification_id):
+    """Retry push delivery for a notification that failed or was never delivered."""
+    from .models import Notification
+    from .services import broadcast_notification
+
+    notification = Notification.objects.filter(pk=notification_id).first()
+    if not notification:
+        return {"notification_id": notification_id, "skipped": True, "reason": "not_found"}
+    push_result = broadcast_notification(notification)
+    return {"notification_id": notification_id, "push_status": push_result.get("status")}
+
+
+@shared_task(time_limit=30, soft_time_limit=20)
+def find_stuck_notifications(hours=24, limit=100):
+    """Find notifications created but never delivered a push."""
+    from django.utils import timezone
+
+    from .models import Notification
+
+    cutoff = timezone.now() - timezone.timedelta(hours=hours)
+    stuck = list(
+        Notification.objects.filter(
+            created_at__lt=cutoff,
+            push_status__in=("", "failed"),
+        )
+        .order_by("-created_at")[:max(1, limit)]
+        .values("id", "type", "created_at", "push_status", "recipient_id")
+    )
+    return {"stuck_count": len(stuck), "notifications": stuck}

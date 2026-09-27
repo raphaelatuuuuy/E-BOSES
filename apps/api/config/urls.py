@@ -32,6 +32,7 @@ from apps.concerns.system_api import (
     SystemStatusView,
 )
 from apps.audit_log import AuditLogView
+from apps.audit_report import AuditReportView, ConcernSearchView
 from apps.emergencies.public_api import (
     PublicCommunitiesView,
     PublicCommunityBoundaryView,
@@ -95,6 +96,8 @@ urlpatterns = [
     path("api/config/summary/", ConfigurationSummaryView.as_view(), name="config-summary"),
     path("api/config/service-status/", ServiceStatusView.as_view(), name="config-service-status"),
     path("api/config/audit-log/", AuditLogView.as_view(), name="config-audit-log"),
+    path("api/config/audit-log/report/", AuditReportView.as_view(), name="config-audit-report"),
+    path("api/config/concerns/search/", ConcernSearchView.as_view(), name="config-concern-search"),
     path("api/config/weather-health/", WeatherHealthReportView.as_view(), name="config-weather-health"),
     path("api/config/resend-health/", ResendHealthWebhookView.as_view(), name="config-resend-health"),
     path("api/system/status/", SystemStatusView.as_view(), name="system-status"),

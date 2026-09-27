@@ -117,6 +117,7 @@ export function AuthenticatedMediaImage({
   className,
   draggable,
   hideOnError = false,
+  onStatus,
 }: {
   src: string
   alt: string
@@ -124,8 +125,16 @@ export function AuthenticatedMediaImage({
 
   draggable?: boolean
   hideOnError?: boolean
+  /** Lets a caller distinguish "still loading" from "failed" so it can show
+   * its own placeholder text instead of only a spinner/icon. */
+  onStatus?: (status: "loading" | "ready" | "error") => void
 }) {
   const { objectUrl, failed } = useAuthenticatedBlob(src)
+
+  useEffect(() => {
+    if (!onStatus) return
+    onStatus(failed ? "error" : objectUrl ? "ready" : "loading")
+  }, [failed, objectUrl, onStatus])
 
   if (failed) {
     if (hideOnError) return null

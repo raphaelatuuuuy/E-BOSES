@@ -1,0 +1,320 @@
+import hashlib
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import requests
+
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+ROOT = Path(__file__).resolve().parent.parent.parent
+WEB_DIR = ROOT / "apps" / "web"
+ANDROID_DIR = WEB_DIR / "android"
+FILE_NAME = "E-Boses Test.apk"
+RELEASE_NAME = "E-Boses v1-test (Test Build)"
+RELEASE_BODY = (
+    "Test build. Built from the local `v1` branch with a local `.env` and a "
+    "white app-icon background. Separate release from the production "
+    "`E-Boses.apk`; it never overwrites the production asset."
+)
+IS_WINDOWS = platform.system() == "Windows"
+NATIVE_PUBLIC_DIR = ANDROID_DIR / "app" / "src" / "main" / "assets" / "public"
+CAPACITOR_ASSETS = {"cordova.js", "cordova_plugins.js"}
+ARTIFACT_DIR = WEB_DIR / "dist-test"
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_OWNER = "raphaelatuuuuy"
+GITHUB_REPO = "E-BOSES"
+GITHUB_TAG = "v1-test"
+
+NPM = "npm.cmd" if IS_WINDOWS else "npm"
+NPX = "npx.cmd" if IS_WINDOWS else "npx"
+GITHUB_CONNECT_TIMEOUT = 30
+GITHUB_TRANSFER_TIMEOUT = 180
+
+
+def run(cmd, cwd=None):
+    print(f"\n>>> {' '.join(cmd)}")
+    env = os.environ.copy()
+    if IS_WINDOWS:
+        npm_dir = os.path.join(os.environ.get("APPDATA", ""), "npm")
+        if os.path.isdir(npm_dir) and npm_dir not in env["PATH"]:
+            env["PATH"] = npm_dir + ";" + env["PATH"]
+    result = subprocess.run(cmd, cwd=cwd, shell=False, env=env)
+    if result.returncode != 0:
+        print(f"!!! Command failed with code {result.returncode}")
+        sys.exit(1)
+
+
+def build_apk():
+    print("=" * 60)
+    print("Step 1: Build web app")
+    print("=" * 60)
+    run([NPM, "run", "build:native"], cwd=str(WEB_DIR))
+
+    print("\n" + "=" * 60)
+    print("Step 2: Sync Android project")
+    print("=" * 60)
+    run([NPX, "cap", "sync", "android"], cwd=str(WEB_DIR))
+    sync_native_web_assets()
+    verify_native_web_assets()
+    verify_native_sms_plugin()
+
+    print("\n" + "=" * 60)
+    print("Step 3: Build APK")
+    print("=" * 60)
+    gradlew = ANDROID_DIR / "gradlew"
+    if IS_WINDOWS:
+        gradlew = str(gradlew) + ".bat"
+    run([str(gradlew), "assembleDebug"], cwd=str(ANDROID_DIR))
+
+
+def find_apk():
+    apk = ANDROID_DIR / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    if not apk.is_file():
+        raise FileNotFoundError(apk)
+    return apk
+
+
+def stage_apk(apk_path):
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    staged = ARTIFACT_DIR / FILE_NAME
+    shutil.copy2(apk_path, staged)
+    return staged
+
+
+def sync_native_web_assets():
+    source_dir = WEB_DIR / "dist-native"
+    if not source_dir.is_dir():
+        raise FileNotFoundError(source_dir)
+
+    NATIVE_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
+    for child in NATIVE_PUBLIC_DIR.iterdir():
+        if child.name in CAPACITOR_ASSETS:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+    for child in source_dir.iterdir():
+        destination = NATIVE_PUBLIC_DIR / child.name
+        if child.is_dir():
+            shutil.copytree(child, destination)
+        else:
+            shutil.copy2(child, destination)
+
+
+def file_hash(path, algorithm):
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, algorithm).hexdigest()
+
+
+def verify_github_asset(asset_id, expected_size, expected_sha256):
+    headers = github_headers()
+    asset_url = (
+        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+        f"/releases/assets/{asset_id}"
+    )
+    response = requests.get(
+        asset_url,
+        headers={**headers, "Accept": "application/octet-stream"},
+        stream=True,
+        timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Could not download uploaded GitHub asset for verification: "
+            f"{response.status_code} {response.text[:500]}"
+        )
+
+    byte_count = 0
+    digest = hashlib.sha256()
+    for chunk in response.iter_content(chunk_size=1024 * 1024):
+        if not chunk:
+            continue
+        byte_count += len(chunk)
+        digest.update(chunk)
+    actual_sha256 = digest.hexdigest()
+    if byte_count != expected_size or actual_sha256 != expected_sha256:
+        raise RuntimeError(
+            "GitHub APK byte verification failed: "
+            f"expected {expected_size} bytes/{expected_sha256}, "
+            f"received {byte_count} bytes/{actual_sha256}"
+        )
+    print(
+        f"Verified GitHub APK bytes: {byte_count} bytes, "
+        f"SHA-256 {actual_sha256}"
+    )
+
+
+def verify_native_web_assets():
+    source_dir = WEB_DIR / "dist-native"
+    missing = []
+    mismatched = []
+    for source in source_dir.rglob("*"):
+        if not source.is_file():
+            continue
+        destination = NATIVE_PUBLIC_DIR / source.relative_to(source_dir)
+        if not destination.is_file():
+            missing.append(str(destination.relative_to(ANDROID_DIR)))
+            continue
+        if file_hash(source, "sha256") != file_hash(destination, "sha256"):
+            mismatched.append(str(destination.relative_to(ANDROID_DIR)))
+
+    if missing or mismatched:
+        details = []
+        if missing:
+            details.append(f"missing={missing[:10]}")
+        if mismatched:
+            details.append(f"mismatched={mismatched[:10]}")
+        raise RuntimeError("Native web bundle verification failed: " + "; ".join(details))
+
+    stale = [
+        str(path.relative_to(NATIVE_PUBLIC_DIR))
+        for path in NATIVE_PUBLIC_DIR.rglob("*")
+        if path.is_file()
+        and path.name not in CAPACITOR_ASSETS
+        and not (source_dir / path.relative_to(NATIVE_PUBLIC_DIR)).is_file()
+    ]
+    if stale:
+        raise RuntimeError(f"Stale native web assets remain: {stale[:10]}")
+
+    print(f"Verified native web bundle sync: {source_dir} -> {NATIVE_PUBLIC_DIR}")
+
+
+def verify_native_sms_plugin():
+    plugin = ANDROID_DIR / "app" / "src" / "main" / "java" / "com" / "eboses" / "app" / "SmsInboxPlugin.java"
+    activity = ANDROID_DIR / "app" / "src" / "main" / "java" / "com" / "eboses" / "app" / "MainActivity.java"
+    plugin_text = plugin.read_text(encoding="utf-8") if plugin.is_file() else ""
+    if "void sendSms(PluginCall call)" not in plugin_text:
+        raise RuntimeError("SmsInboxPlugin.sendSms is missing from the Android project")
+    if "void openSms(PluginCall call)" not in plugin_text:
+        raise RuntimeError("SmsInboxPlugin.openSms is missing from the Android project")
+    if not activity.is_file() or "registerPlugin(SmsInboxPlugin.class)" not in activity.read_text(encoding="utf-8"):
+        raise RuntimeError("SmsInboxPlugin is not registered in MainActivity")
+    print("Verified native SMS plugin registration and outbound SMS capability")
+
+
+def github_headers():
+    if not GITHUB_TOKEN:
+        raise RuntimeError(
+            "GITHUB_TOKEN not set.\n"
+            "Set it as an environment variable before running:\n"
+            f"  Windows: set GITHUB_TOKEN={GITHUB_TOKEN or '<your-token>'}\n"
+            "  Mac/Linux: export GITHUB_TOKEN=<your-token>"
+        )
+    return {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+
+
+def upload_to_github_releases(apk_path):
+    print("=" * 60)
+    print("Step 4: Upload to GitHub Releases")
+    print("=" * 60)
+    headers = github_headers()
+    expected_size = apk_path.stat().st_size
+    expected_sha256 = file_hash(apk_path, "sha256")
+    with apk_path.open("rb") as source:
+        file_data = source.read()
+    if len(file_data) != expected_size:
+        raise RuntimeError(
+            f"APK changed while reading: stat={expected_size} bytes, "
+            f"read={len(file_data)} bytes"
+        )
+    print(f"Local APK: {expected_size} bytes, SHA-256 {expected_sha256}")
+
+    release_id = None
+    r = requests.get(
+        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tags/{GITHUB_TAG}",
+        headers=headers,
+        timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
+    )
+    if r.status_code == 200:
+        release = r.json()
+        release_id = release.get("id")
+        print(f"Existing test release found: {release.get('html_url')}")
+
+    if release_id:
+        print(f"Deleting existing test release {release_id}...")
+        r = requests.delete(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/{release_id}",
+            headers=headers,
+            timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
+        )
+        if r.status_code not in (204,):
+            raise RuntimeError(f"Failed to delete release: {r.status_code} {r.text}")
+        print("Test release deleted.")
+
+    print(f"Creating test release {GITHUB_TAG}...")
+    r = requests.post(
+        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases",
+        headers=headers,
+        json={
+            "tag_name": GITHUB_TAG,
+            "name": RELEASE_NAME,
+            "body": RELEASE_BODY,
+            "draft": False,
+            "prerelease": True,
+        },
+        timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
+    )
+    if r.status_code not in (201,):
+        raise RuntimeError(f"Failed to create release: {r.status_code} {r.text}")
+    release = r.json()
+    print(f"Test release created: {release.get('html_url')}")
+
+    upload_url = release.get("upload_url", "")
+    if not upload_url:
+        raise RuntimeError("No upload_url in release response")
+    upload_url = re.sub(r"\{[^}]*\}", "", upload_url)
+
+    print(f"Uploading {FILE_NAME}...")
+    upload_headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(len(file_data)),
+    }
+    r = requests.post(
+        upload_url + f"?name={FILE_NAME}",
+        headers=upload_headers,
+        data=file_data,
+        timeout=(GITHUB_CONNECT_TIMEOUT, GITHUB_TRANSFER_TIMEOUT),
+    )
+
+    if r.status_code not in (201, 202):
+        raise RuntimeError(f"Upload failed: {r.status_code} {r.text[:500]}")
+
+    asset = r.json()
+    asset_id = asset.get("id")
+    if not asset_id:
+        raise RuntimeError("GitHub upload response did not contain an asset id")
+    if asset.get("size") is not None and int(asset["size"]) != expected_size:
+        raise RuntimeError(
+            f"GitHub reported {asset.get('size')} bytes, expected {expected_size}"
+        )
+    reported_digest = (asset.get("digest") or "").lower()
+    if reported_digest and reported_digest != f"sha256:{expected_sha256}":
+        raise RuntimeError(
+            f"GitHub reported digest {reported_digest}, expected sha256:{expected_sha256}"
+        )
+    verify_github_asset(asset_id, expected_size, expected_sha256)
+
+    download_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/{GITHUB_TAG}/{FILE_NAME}"
+    print(f"Uploaded: {download_url}")
+    return download_url
+
+
+if __name__ == "__main__":
+    build_apk()
+    apk = find_apk()
+    staged = stage_apk(apk)
+    print(f"\nFound APK: {apk}")
+    print(f"Staged test APK: {staged}")
+    link = upload_to_github_releases(staged)
+    print(f"\nDownload: {link}")

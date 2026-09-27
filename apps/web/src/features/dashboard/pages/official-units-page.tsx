@@ -423,7 +423,7 @@ export default function OfficialUnitsPage({ embedded = false }: { embedded?: boo
 
   return (
     <ConfigShell embedded={embedded} hideEmbeddedAction={embedded} icon={Building2Icon} eyebrow="User management" title="Units"
-      className="pb-0 lg:pb-0"
+      className="pb-0 md:pb-0"
       description="Add the barangay offices, desks, teams and committees that receive reports."
       stats={[
         { label: "Active units", value: units.filter((u) => u.is_active).length },

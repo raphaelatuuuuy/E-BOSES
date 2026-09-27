@@ -573,16 +573,10 @@ class ConcernResolutionEvidenceSerializer(serializers.ModelSerializer):
         )
 
     def get_raw_url(self, obj):
-        path = f"/api/concerns/resolution-evidence/{obj.pk}/raw/"
-        request = self.context.get("request")
-        return request.build_absolute_uri(path) if request else path
+        return f"/api/concerns/resolution-evidence/{obj.pk}/raw/"
 
     def get_preview_url(self, obj):
-        if not self.context.get("public_resolution"):
-            return ""
-        path = f"/api/concerns/resolution-evidence/{obj.pk}/preview/"
-        request = self.context.get("request")
-        return request.build_absolute_uri(path) if request else path
+        return f"/api/concerns/resolution-evidence/{obj.pk}/preview/"
 
 
 class ConcernStatusEventSerializer(serializers.ModelSerializer):
@@ -1022,6 +1016,7 @@ class ConcernSerializer(serializers.ModelSerializer):
     # Severity band, derived from the AI assessment. Exposed so clients can
     # show it without recomputing, and so API ordering and UI ordering agree.
     severity = serializers.CharField(read_only=True, default="low")
+    severity_reason = serializers.SerializerMethodField()
     # Coarse distance (meters) from the requesting viewer's own position to
     # this concern. Set by the feed view when the client passes its lat/lng;
     # it lets "nearby" ranking work without exposing the concern's exact
@@ -1121,6 +1116,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             "comment_count",
             "upvoters",
             "severity",
+            "severity_reason",
             "user_vote",
             "distance_meters",
             "created_at",
@@ -1150,6 +1146,12 @@ class ConcernSerializer(serializers.ModelSerializer):
             and obj.reporter_community_id
             and obj.community_id != obj.reporter_community_id
         )
+
+    def get_severity_reason(self, obj) -> str:
+        assessment = getattr(obj, "ai_assessment", None)
+        if not assessment or assessment.status != ConcernAiAssessment.Status.COMPLETED:
+            return ""
+        return assessment.severity_reason or ""
 
     def get_access_mode(self, obj):
         from apps.community_access import concern_access_mode
@@ -1365,7 +1367,7 @@ class ConcernSerializer(serializers.ModelSerializer):
             return ConcernResolutionEvidenceSerializer(
                 obj.resolution_evidence.all(),
                 many=True,
-                context={**self.context, "public_resolution": True},
+                context=self.context,
             ).data
         if not self._can_view_case(obj):
             return []
@@ -1762,6 +1764,7 @@ class ConcernListSerializer(serializers.ModelSerializer):
     resolution_actor = serializers.SerializerMethodField()
     resolution_photo = serializers.SerializerMethodField()
     resolution_photo_count = serializers.SerializerMethodField()
+    resolution_evidence = serializers.SerializerMethodField()
 
     class Meta:
         model = Concern
@@ -1799,6 +1802,7 @@ class ConcernListSerializer(serializers.ModelSerializer):
             "resolution_actor",
             "resolution_photo",
             "resolution_photo_count",
+            "resolution_evidence",
         )
 
     def get_reporter(self, obj):
@@ -1855,6 +1859,13 @@ class ConcernListSerializer(serializers.ModelSerializer):
         if obj.status != Concern.Status.RESOLVED:
             return 0
         return sum(1 for item in obj.resolution_evidence.all() if item.mime_type.startswith("image/"))
+
+    def get_resolution_evidence(self, obj):
+        return ConcernResolutionEvidenceSerializer(
+            obj.resolution_evidence.all(),
+            many=True,
+            context=self.context,
+        ).data
 
     def get_photo_count(self, obj) -> int:
         return len(obj.media.all())

@@ -118,7 +118,7 @@ export function ConfigShell({
       <div className={cn(
         embedded
           ? "flex min-h-0 w-full flex-1 flex-col"
-          : "mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 lg:pb-28",
+          : "mx-auto w-full max-w-[1100px] px-6 pt-10 pb-6 sm:px-10 md:pb-28",
         className,
       )}>
         {!embedded ? (

@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react"
 import {
   CircleCheck,
-  CircleX,
   ClockIcon,
   InboxIcon,
   ScaleIcon,
@@ -50,9 +49,6 @@ export function filterResidentReports(reports: Concern[], filter: string) {
   if (filter === "Resolved") {
     return reports.filter((report) => isResolvedRecord(report))
   }
-  if (filter === "Rejected") {
-    return reports.filter((report) => report.status === "rejected")
-  }
   if (filter === "Appealed") {
     return reports.filter(
       (report) =>
@@ -82,14 +78,13 @@ const residentFilterMeta: Record<
   string,
   { icon: typeof ClockIcon; bg: string; subtext: string }
 > = {
-  All: { icon: UsersIcon, bg: "bg-neutral-700", subtext: "All reports" },
+  All: { icon: UsersIcon, bg: "bg-neutral-700", subtext: "Reports" },
   Active: { icon: ClockIcon, bg: "bg-brand-orange", subtext: "Being handled" },
   Resolved: {
     icon: CircleCheck,
     bg: "bg-emerald-600",
     subtext: "Fixed issues",
   },
-  Rejected: { icon: CircleX, bg: "bg-red-500", subtext: "Not accepted" },
   Appealed: { icon: ScaleIcon, bg: "bg-amber-500", subtext: "Under review" },
 }
 
@@ -190,7 +185,7 @@ export function ResidentReportsWorkspace({
       <div
         role="listbox"
         aria-label="Report status filters"
-        className="absolute top-[64px] right-4 left-4 z-30 overflow-hidden rounded-[20px] bg-white p-1.5 shadow-lg ring-1 ring-neutral-200 lg:right-auto"
+        className="fixed top-16 left-4 right-4 z-30 overflow-y-auto rounded-[20px] bg-white p-3 shadow-lg ring-1 ring-neutral-200 md:right-auto md:left-auto md:w-[300px] max-h-[70vh]"
         style={{
           width: isLgUp
             ? queueWidth
@@ -213,7 +208,7 @@ export function ResidentReportsWorkspace({
                 setActiveFilter(filter)
                 setFilterOpen(false)
               }}
-              className="flex w-full items-center gap-3 rounded-[12px] px-4 py-2.5 text-left text-[15px] transition hover:bg-neutral-50 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:outline-none focus-visible:ring-inset"
+              className="flex w-full items-center gap-3 rounded-[12px] px-4 py-3 text-left text-[15px] transition hover:bg-neutral-50 focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:outline-none focus-visible:ring-inset"
             >
               <span
                 className={cn(
@@ -300,12 +295,12 @@ export function ResidentReportsWorkspace({
 
   const detailPane = (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 px-0 pt-0 pb-0 lg:px-4 lg:pt-3 lg:pb-4">
+      <div className="min-h-0 flex-1 px-0 pt-0 pb-0 md:px-4 md:pt-3 md:pb-4">
         {current ? (
-          <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent lg:rounded-[24px] lg:bg-white lg:ring-1 lg:ring-neutral-200">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent md:rounded-[24px] md:bg-white md:ring-1 md:ring-neutral-200">
             <ReportDetailHeader report={current} audience="resident" />
 
-            <div className="min-h-0 flex-1 px-0 pt-3 pb-0 lg:px-4 lg:pb-4">
+            <div className="min-h-0 flex-1 px-0 pt-3 pb-0 md:px-4 md:pb-4">
               <ReportChatPanel
                 key={`resident-chat-${current.id}`}
                 concernId={current.id}
@@ -402,7 +397,7 @@ export function ResidentReportsWorkspace({
         bar={
           <header className="relative flex h-16 shrink-0 items-center justify-between gap-4 px-4">
             <label
-              className="flex h-12 flex-1 items-center gap-2 rounded-full bg-white pr-1.5 pl-4 ring-1 ring-neutral-300 focus-within:ring-2 focus-within:ring-neutral-500 focus-within:ring-offset-2 lg:flex-none"
+              className="flex h-12 flex-1 items-center gap-2 rounded-full bg-white pr-1.5 pl-4 ring-1 ring-neutral-300 focus-within:ring-2 focus-within:ring-neutral-500 focus-within:ring-offset-2 md:flex-none"
               style={{
                 width: isLgUp
                   ? queueWidth

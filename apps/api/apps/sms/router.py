@@ -152,6 +152,14 @@ def handle_inbound(payload) -> InboundSmsMessage:
     match = match_sender(sender)
     inbound.matched_user = match.user
     inbound.sender_match_status = match.status
+
+    if match.status == SenderMatch.UNVERIFIED:
+        inbound.outcome = InboundSmsMessage.Outcome.REJECTED
+        inbound.detail = "Unverified number — registration required."
+        inbound.save(update_fields=["outcome", "detail", "matched_user", "sender_match_status"])
+        _send(inbound, sender, Reply(templates.unverified_registration(), purpose=SmsPurpose.COMMAND_REPLY))
+        return inbound
+
     role = resolve_role(match.user)
 
     try:

@@ -1,12 +1,11 @@
 import { createPortal } from "react-dom"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import {
   ActivityIcon,
   ChevronRightIcon,
-  MapPinIcon,
+  FileTextIcon,
   ScrollTextIcon,
-  SignalIcon,
-  ZoomInIcon,
 } from "lucide-react"
 
 import { apiRequest } from "@/lib/api"
@@ -15,26 +14,13 @@ import { recheckOcrServiceHealth } from "@/features/ocr/api"
 import { cn } from "@workspace/ui/lib/utils"
 import { PageSection } from "@/components/ui/page-header"
 import { SheetDialog } from "@/features/dashboard/components/sheet-dialog"
+import { AuditReportDialog } from "@/features/dashboard/components/concerns/audit-report-dialog"
 import { MediaLightbox, AuthenticatedMediaImage } from "@/features/dashboard/components/authenticated-media"
+import { toMediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import type { MediaPreviewItem } from "@/features/dashboard/lib/authenticated-media"
 import { CONFIGURATION_PAGE_SIZE, ConfigurationListToolbar, ConfigurationPager } from "@/features/dashboard/components/config/configuration-list-controls"
 import { ConfigurationInfoRow, ConfigurationTable } from "@/features/dashboard/components/config/configuration-table"
-
-function ImageButton({ src, label, onPreview }: { src: string; label: string; onPreview: () => void }) {
-  return (
-    <button type="button" onClick={onPreview} className="relative shrink-0 group">
-      <AuthenticatedMediaImage
-        src={src}
-        alt={label}
-        className="h-28 w-28 rounded-xl border border-neutral-200 object-cover"
-        hideOnError
-      />
-      <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/30 opacity-0 transition-opacity group-hover:opacity-100">
-        <ZoomInIcon className="size-5 text-white" />
-      </span>
-    </button>
-  )
-}
+import { toast } from "sonner"
 
 type ModuleStatus = "operational" | "degraded" | "down" | "not_configured" | "unknown"
 type DayStatus = "operational" | "degraded" | "down" | "not_configured" | "no_data"
@@ -134,10 +120,27 @@ function availabilityLabel(availability: Availability): string {
 
 const WINDOW_DAYS = 90
 
-/* ── Status marks ── */
+const AUDIT_PAGE_SIZE = 20
 
-// Messages share one type style with "No issues." — same size, same weight.
-// Only the colour changes, so severity reads at a glance without a badge.
+function textOf(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
+function humaniseValue(value: string) {
+  const text = value.replace(/[_-]+/g, " ").trim()
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : ""
+}
+
+function auditDate(iso: string) {
+  return new Date(iso).toLocaleString("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+}
+
 const MESSAGE_TONE: Record<number, string> = {
   0: "text-neutral-500",
   1: "text-neutral-500",
@@ -294,52 +297,285 @@ function StatusBar({ days, className }: { days: DayEntry[]; className?: string }
   )
 }
 
+interface AuditPerson {
+  id: number
+  label: string
+  name: string
+  position: string
+  role: string
+  initials: string
+  service: boolean
+}
+
 interface AuditLogEntry {
   id: number
   action: string
   label: string
   category: string
   sensitive: boolean
-  actor: { name: string } | null
-  target: { name: string } | null
+  actor: AuditPerson | null
+  target: AuditPerson | null
+  ip_address: string
+  origin: string
   metadata: Record<string, unknown>
   created_at: string
 }
 
 interface AuditLogResponse {
   total: number
-  categories: { key: string; label: string }[]
+  categories: { key: string; label: string; count: number }[]
   entries: AuditLogEntry[]
 }
 
-function auditDate(iso: string) {
-  return new Date(iso).toLocaleString("en-PH", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
-}
-
-function priorityColor(value: string) {
-  switch (value) {
-    case "critical": return "text-red-700"
-    case "high": return "text-orange-700"
-    case "moderate": return "text-amber-700"
-    case "low": return "text-emerald-700"
-    default: return "text-neutral-500"
-  }
-}
-
-function humaniseAction(value: string) {
-  const text = value.replace(/_/g, " ").trim()
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "Automated check completed"
+function actorName(person: AuditLogEntry["actor"]): string {
+  return person?.label?.trim() || "Unknown account"
 }
 
 type SheetRow =
   | { kind: "audit"; key: string; label: string; actor: string; created_at: string; entry: AuditLogEntry }
   | { kind: "llm"; key: string; label: string; actor: string; created_at: string; entry: LlmDecisionLogEntry }
+
+const AUDIT_PHOTO_BADGES: Record<string, string> = {
+  report: "Submitted Photo",
+  resolution: "Resolution Photo",
+  area: "Road Area",
+}
+
+interface AuditImage {
+  kind: string
+  label: string
+  url: string
+}
+
+function auditPhotos(
+  meta: Record<string, unknown>,
+  action: string,
+): { primary: AuditImage | null; related: AuditImage[] } {
+  const media: AuditImage[] = (meta.media as AuditImage[] | undefined) ?? []
+
+  const noImageActions = new Set([
+    "auth.login_success",
+    "auth.login_ip_blocked",
+    "auth.registered",
+    "password_reset.requested",
+    "password_reset.requested_unknown",
+    "password_reset.confirmed",
+    "profile.updated",
+    "settings.updated",
+    "account.staff_updated",
+    "account.resident_status_updated",
+    "account.responder_updated",
+    "account.name_changed",
+    "account.phone_changed",
+    "account.email_changed",
+    "account.password_changed",
+    "account.deactivated",
+    "account.reactivated",
+    "account.deletion_completed",
+    "account.request_submitted",
+    "account.request_reviewed",
+    "account.request_withdrawn",
+    "admin.user_created",
+    "ocr.configuration_draft_saved",
+    "ocr.configuration_published",
+    "ocr.configuration_reset_defaults",
+    "ocr.template_sample_uploaded",
+    "ocr.template_restored",
+    "ocr.test_run_created",
+    "ocr.health_recheck",
+    "ocr.case_retry_requested",
+    "ocr.case_approved",
+    "ocr.case_rejected",
+    "concern.assigned",
+    "concern.reassigned",
+    "concern.chat_message",
+    "concern.published",
+    "concern.media_privacy_reprocessed",
+    "emergency.en_route",
+    "emergency.transferred",
+    "emergency.reassigned",
+    "emergency.assignment_removed",
+    "emergency.backup_assigned",
+    "emergency.duty_changed",
+    "emergency.category_created",
+    "map_boundary.updated",
+    "map_dispatch_policy.updated",
+    "content.flag_submitted",
+    "content.flag_reviewed",
+  ])
+
+  if (noImageActions.has(action) || media.length === 0) {
+    return { primary: null, related: [] }
+  }
+
+  const reports = media.filter((m) => m.kind === "report")
+  const resolutions = media.filter((m) => m.kind === "resolution")
+  const areas = media.filter((m) => m.kind === "area")
+
+  let primary: AuditImage | null = null
+
+  if (action === "concern.ai_decided") {
+    primary = reports[0] ?? null
+  } else if (action === "concern.resolved" || action === "emergency.resolved") {
+    primary = resolutions[0] ?? reports[0] ?? null
+  } else if (action === "concern.status_updated") {
+    const analysis =
+      meta.analysis !== undefined && meta.analysis !== null
+        ? (meta.analysis as Record<string, unknown>)
+        : null
+    primary = analysis?.street_verdict ? areas[0] ?? reports[0] ?? null : null
+  } else {
+    primary = reports[0] ?? resolutions[0] ?? areas[0] ?? null
+  }
+
+  return { primary, related: media }
+}
+
+function auditSummary(entry: AuditLogEntry): string {
+  const meta = entry.metadata
+  const actor = actorName(entry.actor)
+  const analysis =
+    meta.analysis !== undefined && meta.analysis !== null
+      ? (meta.analysis as Record<string, unknown>)
+      : null
+  const severity = analysis ? textOf(analysis.severity) : ""
+  const streetVerdict = analysis ? textOf(analysis.street_verdict) : ""
+  const streetReason = analysis ? textOf(analysis.street_reason) : ""
+  const concernStatus = textOf(meta.concern_status)
+  const trackingId = textOf(meta.tracking_id)
+  const reason = textOf(meta.reason)
+  const record = trackingId ? `report ${trackingId}` : "the record"
+
+  switch (entry.action) {
+    case "concern.ai_decided": {
+      const concernTitle = textOf(meta.concern_title)
+      const concernDescription = textOf(meta.concern_description)
+      const assignedUnit = textOf(meta.assigned_unit)
+      const description = concernDescription || concernTitle || ""
+      const parts = [
+        description ? `The resident reported: ${description}.` : null,
+        severity ? `Severity was assessed as ${severity}.` : null,
+        streetReason ? `Images show the same ${streetReason.toLowerCase()}.` : null,
+        streetVerdict ? `The street-image analysis returned ${streetVerdict}.` : null,
+        assignedUnit ? `Assigned unit: ${assignedUnit}.` : null,
+      ].filter(Boolean)
+      return parts.join(" ")
+    }
+    case "concern.resolved":
+    case "concern.status_updated": {
+      if (streetVerdict) {
+        return [
+          "A visible road scene was detected, so street-image comparison was performed together with GPS, map-pin, and barangay-boundary validation.",
+          "The available location evidence matched and the report location passed validation.",
+        ].join(" ")
+      }
+      if (concernStatus) {
+        return `The concern was ${concernStatus.toLowerCase()}.`
+      }
+      return `${actor} updated the concern status.`
+    }
+    case "ocr.verification_accepted":
+      return "The submitted identification document passed automated verification. The required information was detected and was consistent with the available account details. Sensitive details have been masked."
+    case "ocr.verification_rejected":
+      return "The submitted identification document did not pass automated verification. The required information could not be confirmed, and the case was held for review."
+    case "media.raw_accessed":
+      return "Sensitive visual details were detected and blurred before the image was displayed to other residents. The original media remains restricted to authorized personnel."
+    case "announcement.created":
+      return "A community advisory was published for the intended residents, and the related notification was sent successfully."
+    case "account.staff_updated":
+    case "account.resident_status_updated":
+      return "The selected account's permissions were updated. The change was completed by an authorized administrator."
+    case "auth.login_ip_blocked":
+      return "The sign-in attempt failed because the submitted credentials were invalid. No protected information was accessed."
+     default: {
+      const status = textOf(meta.status)
+      const result = concernStatus ?? status ?? "successfully"
+      const previousValue = textOf(meta.previous_value)
+      const updatedValue = textOf(meta.updated_value)
+      const device = textOf(meta.origin)
+      const ip = textOf(meta.ip_address)
+      const location = device || ip ? ` from ${[device, ip].filter(Boolean).join(" · ")}` : ""
+      if (previousValue && updatedValue) {
+        const base = `${actor} updated ${record} from ${previousValue} to ${updatedValue}. The change was completed successfully.`
+        return reason ? `${base} Reason: ${reason}.` : base
+      }
+      const base = `${actor} ${entry.label.toLowerCase()} on ${record}${location}. The action resulted in ${result}.`
+      return reason ? `${base} Reason: ${reason}.` : base
+    }
+  }
+}
+
+function AuditEntryDetail({ entry }: { entry: AuditLogEntry }) {
+  const meta = entry.metadata
+  const { primary, related } = auditPhotos(meta, entry.action)
+  const summary = auditSummary(entry)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [imageError, setImageError] = useState(false)
+
+  const previewItems = useMemo<MediaPreviewItem[]>(
+    () =>
+      related.map((photo) => ({
+        ...toMediaPreviewItem(photo.url, photo.label, "image"),
+        badge: AUDIT_PHOTO_BADGES[photo.kind] ?? "",
+      })),
+    [related],
+  )
+
+  function openPreview(index: number) {
+    setPreviewIndex(index)
+    setPreviewOpen(true)
+  }
+
+  return (
+    <div className="space-y-4">
+      {primary ? (
+        <div className="flex flex-row gap-4">
+          <button
+            type="button"
+            onClick={() => openPreview(0)}
+            aria-label={`Open ${primary.label}`}
+            className="group relative block aspect-square w-[120px] shrink-0 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-100"
+          >
+            {imageError ? (
+              <div className="flex size-full items-center justify-center">
+                <span className="text-[11px] text-neutral-400">Image unavailable</span>
+              </div>
+            ) : (
+              <AuthenticatedMediaImage
+                src={primary.url}
+                alt={primary.label}
+                className="size-full object-contain transition-transform duration-200 group-hover:scale-[1.04]"
+                onStatus={(status: "loading" | "ready" | "error") => {
+                  if (status === "error") {
+                    setImageError(true)
+                  }
+                }}
+              />
+            )}
+            <span className="absolute bottom-1 right-1 inline-flex size-6 items-center justify-center rounded-full bg-black/55 text-white">
+              <ChevronRightIcon className="size-3.5 rotate-[-45deg]" aria-hidden />
+            </span>
+          </button>
+          <p className="text-[13px] leading-relaxed text-neutral-600 flex-1">
+            {summary}
+          </p>
+        </div>
+      ) : (
+        <p className="text-[13px] leading-relaxed text-neutral-600">
+          {summary}
+        </p>
+      )}
+      {previewOpen && previewItems.length > 0 ? (
+        <MediaLightbox
+          items={previewItems}
+          index={previewIndex}
+          onClose={() => setPreviewOpen(false)}
+        />
+      ) : null}
+    </div>
+  )
+}
 
 function AuditLogSheet({
   open,
@@ -351,29 +587,38 @@ function AuditLogSheet({
   const [entries, setEntries] = useState<AuditLogEntry[]>([])
   const [llmEntries, setLlmEntries] = useState<LlmDecisionLogEntry[]>([])
   const [llmTotal, setLlmTotal] = useState(0)
+  const [total, setTotal] = useState(0)
   const [categories, setCategories] = useState<AuditLogResponse["categories"]>([])
   const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [activeCategory, setActiveCategory] = useState("all")
   const [loadedKey, setLoadedKey] = useState("")
   const [error, setError] = useState("")
   const [offset, setOffset] = useState(0)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [preview, setPreview] = useState<{ items: MediaPreviewItem[]; index: number } | null>(null)
-  const requestKey = `${open}|${activeCategory}|${search}`
+  const [reportOpen, setReportOpen] = useState(false)
+  const requestKey = `${open}|${activeCategory}|${debouncedSearch}|${offset}`
   const loading = open && loadedKey !== requestKey
   const isLlmFilter = activeCategory === "llm-verification"
 
+  // Typing a search must not fire a request per keystroke. One request, once
+  // the user pauses.
   useEffect(() => {
-    if (!open) return
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
+
+  useEffect(() => {
+    if (!open || loadedKey === requestKey) return
     let cancelled = false
     if (activeCategory === "llm-verification") {
       void getLlmDecisionLog({
         domain: "concern",
         run_kind: "production",
-        page: 1,
-        page_size: 200,
+        page: Math.floor(offset / AUDIT_PAGE_SIZE) + 1,
+        page_size: AUDIT_PAGE_SIZE,
         days: 30,
-        search: search.trim() || undefined,
+        search: debouncedSearch || undefined,
       })
         .then((next) => {
           if (cancelled) return
@@ -393,47 +638,67 @@ function AuditLogSheet({
       }
     }
     const params = new URLSearchParams({
-      category: activeCategory,
+      category: activeCategory === "sensitive" ? "all" : activeCategory,
       days: "30",
-      limit: "200",
-      offset: "0",
+      limit: String(AUDIT_PAGE_SIZE),
+      offset: String(offset),
     })
-    if (search.trim()) params.set("search", search.trim())
-    void apiRequest<AuditLogResponse>(`/config/audit-log/?${params}`)
+    if (activeCategory === "sensitive") params.set("sensitive", "1")
+    if (debouncedSearch) params.set("search", debouncedSearch)
+    void apiRequest<AuditLogResponse>(`/config/audit-log/?${params}`, {}, { timeoutMs: 30000 })
       .then((next) => {
         if (cancelled) return
         setEntries(next.entries)
+        setTotal(next.total)
         setCategories(next.categories)
         setError("")
         setLoadedKey(requestKey)
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
-          setError("The audit log could not be loaded right now.")
+          const msg = err instanceof Error ? err.message : ""
+          setError(
+            msg.includes("too long") || msg.includes("timeout")
+              ? "The audit log is taking too long to load. Try a narrower filter or fewer days."
+              : "The audit log could not be loaded right now.",
+          )
           setLoadedKey(requestKey)
         }
       })
     return () => {
       cancelled = true
     }
-  }, [activeCategory, open, requestKey, search])
+  }, [activeCategory, debouncedSearch, loadedKey, offset, open, requestKey])
+
+  function changeFilter(key: string) {
+    setActiveCategory(key)
+    setOffset(0)
+    setExpandedId(null)
+  }
+
+  function changeSearch(value: string) {
+    setSearch(value)
+    setOffset(0)
+    setExpandedId(null)
+  }
 
   const filterOptions = [
-    { key: "all", label: "Everything", count: entries.length },
-    ...categories.filter((category) => category.key !== "all").map((category) => ({
-      key: category.key,
-      label: category.label,
-      count: entries.filter((entry) => entry.category === category.key).length,
-    })),
-  ]
+     { key: "all", label: "Everything", count: total },
+     ...categories.filter((category) => category.key !== "all").map((category) => ({
+       key: category.key,
+       label: category.label,
+       count: entries.filter((entry) => entry.category === category.key).length,
+     })),
+     // A cross-category view of the actions that touch private data. Not every
+     // entry in it is worth an alarm, but each one looked at something private.
+     { key: "sensitive", label: "Private access", count: undefined },
+   ]
+
   const llmDecisionLabel = (entry: LlmDecisionLogEntry) => {
-    const decision = entry.final_decision?.label || humaniseAction(entry.recommended_action)
+    const decision = entry.final_decision?.label || humaniseValue(entry.recommended_action)
     return `System ${decision.toLowerCase()} a report`
   }
-  const auditDecisionLabel = (entry: AuditLogEntry) => {
-    const decision = String(entry.metadata?.decision || "decided").toLowerCase()
-    return `System ${decision} a report`
-  }
+
   const rows: SheetRow[] = isLlmFilter
     ? llmEntries.map((entry) => ({
         kind: "llm" as const,
@@ -443,16 +708,23 @@ function AuditLogSheet({
         created_at: entry.created_at,
         entry,
       }))
-      : entries.map((entry) => ({
+    : entries.map((entry) => ({
         kind: "audit" as const,
         key: `audit-${entry.id}`,
-        label: entry.action === "concern.ai_decided" ? auditDecisionLabel(entry) : entry.label,
-        actor: "Automated",
+        label: entry.label,
+        actor: entry.actor ? actorName(entry.actor) : "System",
         created_at: entry.created_at,
         entry,
       }))
+
   const expandedRow = rows.find((row) => row.key === expandedId)
-  const visibleEntries = expandedRow?.kind === "llm" ? [expandedRow] : rows.slice(offset, offset + CONFIGURATION_PAGE_SIZE)
+  // One open entry at a time: its siblings step aside so the detail is never
+  // competing with a table of other rows for the same viewport.
+   const visibleEntries = expandedRow ? [expandedRow] : rows
+
+  function LlmEntryDetail() {
+  return null
+}
 
   return (
     <>
@@ -465,9 +737,19 @@ function AuditLogSheet({
       titleClassName="text-center"
       size="wide"
       draggable
-      bodyScrollable={false}
+      bodyScrollable
       footer={rows.length > 0 ? (
-        <ConfigurationPager offset={offset} total={isLlmFilter ? llmTotal : entries.length} onChange={setOffset} noun="entries" className="py-0" inline />
+        <ConfigurationPager
+          offset={offset}
+          total={isLlmFilter ? llmTotal : total}
+          onChange={(next) => {
+            setOffset(next)
+            setExpandedId(null)
+          }}
+          noun="entries"
+          className="py-0"
+          inline
+        />
       ) : null}
       className="h-auto max-h-[min(720px,92dvh)]"
       bodyClassName="px-5 sm:px-7 pb-0"
@@ -475,20 +757,30 @@ function AuditLogSheet({
       <div className="space-y-4">
         <ConfigurationListToolbar
           search={search}
-          onSearch={(value) => { setSearch(value); setOffset(0) }}
+          onSearch={changeSearch}
           placeholder="Search audit activity"
           filters={filterOptions.map(({ key, label }) => ({ key, label }))}
           activeFilter={activeCategory}
-          onFilter={(value) => { setActiveCategory(value); setOffset(0) }}
+          onFilter={changeFilter}
+          trailing={
+            <button
+              type="button"
+              onClick={() => setReportOpen(true)}
+              aria-label="Generate report"
+              className="flex size-12 shrink-0 items-center justify-center rounded-full bg-brand-orange text-white transition-colors hover:bg-orange-600"
+            >
+              <FileTextIcon className="size-5" aria-hidden />
+            </button>
+          }
         />
 
-        {error ? (
+        {error && !loading ? (
           <p className="rounded-2xl border border-neutral-200 px-4 py-8 text-center text-[14px] text-neutral-500">
             {error}
           </p>
         ) : loading ? (
           <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white divide-y divide-neutral-100">
-            {Array.from({ length: 4 }).map((_, index) => (
+            {Array.from({ length: AUDIT_PAGE_SIZE }).map((_, index) => (
               <div key={index} className="h-[76px] animate-pulse bg-neutral-50" />
             ))}
           </div>
@@ -497,184 +789,54 @@ function AuditLogSheet({
             <ScrollTextIcon className="mx-auto size-7 text-neutral-300" aria-hidden />
             <h2 className="mt-4 text-meta text-neutral-500">No activity matches this view</h2>
           </div>
-                   ) : (
-                   <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white divide-y divide-neutral-100">
-               {visibleEntries.map((row) => {
-                 const expanded = expandedId === row.key
-                 return (
-                   <div key={row.key}>
-                     <button
-                       type="button"
-                       onClick={() => setExpandedId((current) => (current === row.key ? null : row.key))}
-                       className="group flex w-full items-center gap-3 p-4 text-left"
-                       aria-expanded={expanded}
-                     >
-                         <span className="min-w-0 flex-1">
-                           <span className="block break-words text-[15px] leading-snug font-bold text-neutral-900">
-                             {row.label}
-                           </span>
-                            <span className="mt-1 block break-words text-[13px] text-neutral-500">
-                              {auditDate(row.created_at)}
-                            </span>
-                         </span>
-                       <ChevronRightIcon
-                         className={cn(
-                           "size-5 shrink-0 text-neutral-400 transition-transform duration-200 group-hover:text-neutral-700",
-                           expanded && "rotate-90",
-                         )}
-                         strokeWidth={1.9}
-                         aria-hidden
-                       />
-                     </button>
-                     {expanded && row.kind === "audit" && row.entry.action === "concern.ai_decided" ? (
-                       <div className="max-h-[420px] overflow-y-auto border-t border-neutral-100 px-4 pb-4 pt-3">
-                         <dl className="grid grid-cols-1 gap-3 text-[13px] sm:grid-cols-2">
-                           <div><dt className="text-neutral-400">Report</dt><dd className="break-words font-medium text-neutral-900">{String(row.entry.metadata?.concern_title || "N/A")}</dd></div>
-                           <div><dt className="text-neutral-400">Decision</dt><dd className="font-medium text-neutral-900">{String(row.entry.metadata?.decision || "N/A")}</dd></div>
-                           <div className="sm:col-span-2"><dt className="text-neutral-400">Reason</dt><dd className="break-words font-medium text-neutral-900">{String(row.entry.metadata?.reason || "N/A")}</dd></div>
-                           <div><dt className="text-neutral-400">Model</dt><dd className="font-medium text-neutral-900">{String(row.entry.metadata?.model_version || "N/A")}</dd></div>
-                           <div><dt className="text-neutral-400">Rejection Code</dt><dd className="font-medium text-neutral-900">{String(row.entry.metadata?.rejection_code || "N/A")}</dd></div>
-                           <div><dt className="text-neutral-400">Date</dt><dd className="font-medium text-neutral-900">{auditDate(row.created_at)}</dd></div>
-                           {String(row.entry.metadata?.concern_id ?? "") !== "" && (
-                             <div><dt className="text-neutral-400">Concern ID</dt><dd className="font-medium text-neutral-900">{String(row.entry.metadata?.concern_id)}</dd></div>
-                           )}
-                         </dl>
-                       </div>
-                     ) : expanded && row.kind === "audit" ? (
-                       <div className="max-h-[420px] overflow-y-auto border-t border-neutral-100 px-4 pb-4 pt-3">
-                         <dl className="grid grid-cols-1 gap-3 text-[13px] sm:grid-cols-2">
-                           <div><dt className="text-neutral-400">Category</dt><dd className="font-medium text-neutral-900">{categories.find((category) => category.key === row.entry.category)?.label ?? row.entry.category}</dd></div>
-                           <div><dt className="text-neutral-400">Actor</dt><dd className="font-medium text-neutral-900">{row.actor}</dd></div>
-                            <div><dt className="text-neutral-400">Action</dt><dd className="break-words font-medium text-neutral-900">{row.entry.action}</dd></div>
-                          </dl>
-                       </div>
-                     ) : expanded && row.kind === "llm" ? (
-                       <div className="max-h-[420px] overflow-y-auto border-t border-neutral-100 px-4 pb-4 pt-3">
-                          <dl className="grid grid-cols-1 gap-3 text-[13px] sm:grid-cols-2">
-                                {row.entry.reporter?.name && (
-                                  <div className="sm:col-span-2">
-                                    <dt className="text-neutral-400">Reporter</dt>
-                                    <dd className="flex items-center gap-2">
-                                      <span className="font-medium text-neutral-900">{row.entry.reporter.name}</span>
-                                      {(() => {
-                                        if (row.kind !== "llm") return null
-                                        const loc = row.entry.location || row.entry.address
-                                        if (!loc) return null
-                                        return (
-                                          <span className="inline-flex items-center gap-1 text-[12px] text-neutral-500">
-                                            <MapPinIcon className="size-3" aria-hidden />
-                                            <span>{loc.replace(/,\s*marikina heights/i, "")}</span>
-                                          </span>
-                                        )
-                                      })()}
-                                    </dd>
-                                  </div>
-                                )}
-                             <div><dt className="text-neutral-400">Department</dt><dd className="break-words font-medium text-neutral-900">{row.entry.assigned_department?.name || row.entry.assigned_unit?.name || "N/A"}</dd></div>
-                            {row.entry.duration_ms != null && <div><dt className="text-neutral-400">Processing Time</dt><dd className="font-medium text-neutral-900">{row.entry.duration_ms} ms</dd></div>}
-                          </dl>
-                           {(row.entry.submitted_media?.some((m) => m.preview_url || m.raw_url) || row.entry.street_imagery?.status === "checked") ? (
-                             <section className="mt-4">
-                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                 {(() => {
-                                   const validMedia = row.entry.submitted_media?.filter((m) => m.preview_url || m.raw_url)
-                                   if (!validMedia || validMedia.length === 0) return null
-                                   const first = validMedia[0]
-                                   return (
-                                     <div>
-                                       <h4 className="text-[13px] font-semibold text-neutral-700">Concern photos</h4>
-                                       <div className="mt-2 flex gap-3 items-start">
-                                         <ImageButton
-                                           src={first.preview_url || first.raw_url || ""}
-                                           label={first.label || "Concern photo 1"}
-                                           onPreview={() => setPreview({
-                                             items: validMedia.map((m) => ({
-                                               src: m.preview_url || m.raw_url,
-                                               filename: m.label || `Concern photo ${m.id}`,
-                                               kind: "image" as const,
-                                               badge: "reported issue" as const,
-                                             })),
-                                             index: 0,
-                                           })}
-                                         />
-                                      <div className="min-w-0 flex-1 space-y-1 text-[12px] text-neutral-600">
-                                        {row.entry.final_decision?.reason || row.entry.routing_reason ? (
-                                          <p className="font-medium text-neutral-700 break-words">
-                                            {row.entry.final_decision?.reason || row.entry.routing_reason}
-                                          </p>
-                                        ) : null}
-                                        <p className="break-words">{row.entry.resident_message || row.entry.report_description || "N/A"}</p>
-                                        <p className="flex items-center gap-1.5">
-                                          <SignalIcon className={cn("size-4 shrink-0", priorityColor(row.entry.priority || ""))} strokeWidth={2} aria-hidden />
-                                          <span className={cn("font-medium", priorityColor(row.entry.priority || ""))}>{row.entry.priority || "N/A"}</span>
-                                        </p>
-                                       </div>
-                                     </div>
-                                    </div>
-                                  )
-                                })()}
-                                {row.entry.street_imagery?.status === "checked" ? (
-                                  <div>
-                                    <h4 className="text-[13px] font-semibold text-neutral-700">Road photo comparison</h4>
-                                    <div className="mt-2 flex gap-3 items-start">
-                                      {row.entry.street_imagery.image_url || row.entry.street_imagery.image ? (
-                                        <ImageButton
-                                          src={row.entry.street_imagery.image_url || row.entry.street_imagery.image!}
-                                          label="Road photo comparison"
-                                          onPreview={() => setPreview({
-                                            items: [{
-                                              src: row.entry.street_imagery!.image_url || row.entry.street_imagery!.image!,
-                                              filename: "Road photo comparison",
-                                              kind: "image" as const,
-                                              badge: "reported issue" as const,
-                                            }],
-                                            index: 0,
-                                          })}
-                                        />
-                                      ) : (
-                                        <div className="h-28 w-28 shrink-0 rounded-xl border border-neutral-200 bg-neutral-50 flex items-center justify-center">
-                                          <span className="text-[12px] text-neutral-400">No image</span>
-                                        </div>
-                                      )}
-                                      <div className="min-w-0 flex-1 space-y-1 text-[12px] text-neutral-600">
-                                        <p className="font-medium text-neutral-700">Area is not the same.</p>
-                                        {row.entry.street_imagery.reason && <p className="break-words">{row.entry.street_imagery.reason}</p>}
-                                        {row.entry.street_imagery.explanation && (
-                                          <p className="break-words">
-                                            Concern photo shows {row.entry.street_imagery.explanation.replace(/^image 1 shows?\s*/i, "").replace(/\s*while\s+image 2 shows?\s*/i, " while road area shows ")}
-                                          </p>
-                                        )}
-                                        {row.entry.street_imagery.distance_meters != null && (
-                                          <p>{row.entry.street_imagery.distance_meters} m</p>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            </section>
-                          ) : null}
-                        </div>
-                      ) : null}
+        ) : (
+          <div className={cn("overflow-hidden rounded-2xl border border-neutral-200 bg-white", expandedRow ? "" : "divide-y divide-neutral-100")}>
+            {visibleEntries.map((row) => {
+              const expanded = expandedId === row.key
+              return (
+                <div key={row.key}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId((current) => (current === row.key ? null : row.key))}
+                    className="group flex w-full items-center gap-3 p-4 text-left"
+                    aria-expanded={expanded}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block break-words text-[15px] leading-snug font-bold text-neutral-900">
+                        {row.label}
+                      </span>
+                      <span className="mt-1 block break-words text-[13px] text-neutral-500">
+                        {row.actor} · {auditDate(row.created_at)}
+                      </span>
+                    </span>
+                    <ChevronRightIcon
+                      className={cn(
+                        "size-5 shrink-0 text-neutral-400 transition-transform duration-200 group-hover:text-neutral-700",
+                        expanded && "rotate-90",
+                      )}
+                      strokeWidth={1.9}
+                      aria-hidden
+                    />
+                  </button>
+                  {expanded ? (
+                    <div className="border-t border-neutral-100 px-4 pb-4 pt-3">
+                      {row.kind === "llm" ? <LlmEntryDetail /> : <AuditEntryDetail entry={row.entry} />}
                     </div>
-                  )
-                })}
-                   </div>
-                   )}
-                 </div>
-              </SheetDialog>
-              {preview ? (
-                <MediaLightbox
-                  items={preview.items}
-                  index={preview.index}
-                  onClose={() => setPreview(null)}
-                  simpleCounter
-                  hideCounter
-                />
-              ) : null}
-      </>
-   )
-}
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+        </SheetDialog>
+        <AuditReportDialog
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+        />
+        </>
+    )
+  }
 
 /* ── Section ── */
 
@@ -682,7 +844,19 @@ function fetchStatus(refresh = false) {
   return apiRequest<ServiceStatus>(`/config/service-status/${refresh ? "?refresh=1" : ""}`)
 }
 
+function isLocal(): boolean {
+  const host = typeof window !== "undefined" ? window.location.hostname : ""
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "0.0.0.0" ||
+    host.endsWith(".local") ||
+    host.endsWith(".lan")
+  )
+}
+
 export function ServiceStatusSection({ initialOpen, embedded = false }: { initialOpen?: "system" | "audit"; embedded?: boolean }) {
+  const navigate = useNavigate()
   const [status, setStatus] = useState<ServiceStatus | null>(null)
   const [error, setError] = useState("")
   const [checking, setChecking] = useState(false)
@@ -801,8 +975,8 @@ export function ServiceStatusSection({ initialOpen, embedded = false }: { initia
           icon={ScrollTextIcon}
           title="Audit Log"
           description="Who did what, including who opened private photos"
-          actions={
-            <button type="button" onClick={() => setAuditOpen(true)} aria-label="Open Audit Log" className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700">
+           actions={
+             <button type="button" onClick={() => { if (isLocal()) { toast.info("Currently in progress", { duration: 2000 }) } else { navigate("/dashboard/configuration") } }} aria-label="Open Audit Log" className="flex size-10 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700">
               <ChevronRightIcon className="size-5" strokeWidth={2} aria-hidden />
             </button>
           }

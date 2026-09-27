@@ -271,11 +271,14 @@ const draggingMaps = new WeakSet<leaflet.Map>()
 function ensureDragGuard(map: leaflet.Map) {
   if (dragGuards.has(map)) return
   dragGuards.add(map)
-  map.on("movestart", () => {
+  // Close on a *user* drag only. `movestart` also fires for programmatic
+  // panTo, which would immediately close a hover card we just opened to focus
+  // a selected pin (e.g. the guest duplicate flow).
+  map.on("dragstart", () => {
     draggingMaps.add(map)
     map.closePopup()
   })
-  map.on("moveend", () => {
+  map.on("dragend", () => {
     draggingMaps.delete(map)
   })
 }
@@ -291,11 +294,12 @@ export function bindHoverCard(
   marker: leaflet.Marker,
   tip: MapTip | null | undefined,
   pinSize: number
-) {
+): leaflet.Popup | null {
   marker.off("mouseover")
   const card = makeHoverCard(L, tip, pinSize)
-  if (!card) return
+  if (!card) return null
   marker.on("mouseover", () => openHoverCard(map, card, marker))
+  return card
 }
 
 /**

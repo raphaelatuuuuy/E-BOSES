@@ -479,7 +479,7 @@ export default function OfficialOverviewPage({
         }))
 
   return (
-    <div className="mx-auto w-full max-w-2xl px-4 pb-6 md:max-w-5xl md:px-8 lg:px-10">
+    <div className="mx-auto w-full max-w-2xl px-4 pb-6 md:max-w-5xl md:px-8 md:px-10">
       <div className="mt-5">
         <h1 className="text-[30px] leading-tight font-bold tracking-tight text-neutral-900">
           Hello, <span className="text-brand-orange">{displayName}</span>
@@ -557,7 +557,7 @@ export default function OfficialOverviewPage({
         loadReports={loadUnitReports}
         title={
           isResponder || selectedUnitId == null ? (
-            <>All <span className="text-brand-orange">reports</span></>
+            <>Community <span className="text-brand-orange">Reports</span></>
           ) : (
             <>{unitName} <span className="text-brand-orange">reports</span></>
           )

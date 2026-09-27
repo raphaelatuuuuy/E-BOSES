@@ -989,7 +989,7 @@ export default function AlertsMapPage() {
           onClick={() => setPanelCollapsed(false)}
           aria-label="Open alerts"
           title="Open alerts"
-          className="absolute top-4 left-4 z-[600] hidden size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md lg:flex"
+          className="absolute top-4 left-4 z-[600] hidden size-10 items-center justify-center rounded-lg border border-neutral-200 bg-white shadow-md md:flex"
         >
           <CircleAlertIcon
             className="size-5 shrink-0 text-neutral-800"
@@ -997,7 +997,7 @@ export default function AlertsMapPage() {
           />
         </button>
       ) : (
-        <aside className="absolute top-4 left-4 z-[600] hidden max-h-[min(72vh,620px)] w-[min(100%,380px)] flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] lg:flex">
+        <aside className="absolute top-4 left-4 z-[600] hidden max-h-[min(72vh,620px)] w-[min(100%,380px)] flex-col overflow-hidden rounded-2xl bg-white shadow-[0_8px_28px_rgba(15,23,42,.12)] md:flex">
           <div className="flex h-10 shrink-0 items-center gap-2 px-3">
             <CircleAlertIcon
               className="size-5 shrink-0 text-neutral-800"
@@ -1025,7 +1025,7 @@ export default function AlertsMapPage() {
           navigate("/dashboard/overview")
         }
         aria-label="Back to the overview"
-        className="absolute top-3 left-3 z-[600] flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white/95 text-neutral-900 shadow-md backdrop-blur transition-colors hover:bg-neutral-100 lg:hidden"
+        className="absolute top-3 left-3 z-[600] flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white/95 text-neutral-900 shadow-md backdrop-blur transition-colors hover:bg-neutral-100 md:hidden"
       >
         <ChevronLeftIcon className="size-5" strokeWidth={2.2} />
       </button>
@@ -1036,7 +1036,7 @@ export default function AlertsMapPage() {
           on where the incident is. */}
       <div
         className={cn(
-          "absolute right-0 bottom-0 left-0 z-[600] flex flex-col overflow-hidden rounded-t-3xl border border-b-0 border-neutral-200 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)] lg:hidden",
+          "absolute right-0 bottom-0 left-0 z-[600] flex flex-col overflow-hidden rounded-t-3xl border border-b-0 border-neutral-200 bg-white shadow-[0_-10px_36px_rgba(15,23,42,.18)] md:hidden",
           // Only animate on a snap; during a drag the height must track the
           // finger exactly or it feels like it is lagging behind.
           !sheet.dragging && "transition-[height] duration-200 ease-out"

@@ -75,6 +75,7 @@ class Notification(models.Model):
     body = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     event_key = models.CharField(max_length=96, blank=True)
+    push_status = models.CharField(max_length=32, blank=True)
     is_read = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

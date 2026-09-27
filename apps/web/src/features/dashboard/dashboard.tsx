@@ -28,7 +28,7 @@ import {
 } from "@/features/dashboard/components/resident-top-bar"
 import {
   getRouteChrome,
-  useIsDesktop,
+  useIsTablet,
   SHELL_MAX_RESIDENT,
   SHELL_MAX_STAFF,
   SIDEBAR_W,
@@ -45,7 +45,7 @@ import type { NotificationItem } from "@/features/dashboard/components/notificat
 function DashboardContent() {
   const navigate = useNavigate()
   const location = useLocation()
-  const isDesktop = useIsDesktop()
+  const isTablet = useIsTablet()
   const { user } = useAuthSession()
   const { markAsRead } = useNotifications()
   const navigateRef = React.useRef(navigate)
@@ -58,7 +58,7 @@ function DashboardContent() {
   useLocationPing(user)
   const isResident = isResidentUser(user)
   const isOfficialRole = isOfficialUser(user)
-  const isMobile = !isDesktop
+  const isMobile = !isTablet
   const chrome = getRouteChrome(location.pathname)
   const hideMobileNav = isMobile && chrome.hideMobileNav
 
@@ -175,7 +175,7 @@ function DashboardContent() {
   // Triage routes own their vertical space (see RouteChrome.workspace). Below
   // the desktop breakpoint they revert to a scrolling column, so the flag only
   // applies on desktop.
-  const isWorkspaceRoute = chrome.workspace && isDesktop
+  const isWorkspaceRoute = chrome.workspace && isTablet
 
   return (
     <div className={cn("min-h-svh overflow-x-hidden", shellScope, shellBg)}>
@@ -186,7 +186,7 @@ function DashboardContent() {
           minWidth: 0,
         }}
       >
-        {isDesktop ? (
+        {isTablet ? (
           <div
             className="grid h-svh max-h-svh min-h-0 overflow-visible"
             style={{

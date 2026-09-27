@@ -77,7 +77,7 @@ export default function ResponderShiftPage() {
 
   return (
     <div
-      className="min-h-full flex-1 bg-canvas p-4 pb-6 md:p-6 md:pb-8 lg:p-8"
+      className="min-h-full flex-1 bg-canvas p-4 pb-6 md:p-6 md:pb-8 md:p-8"
     >
       <div className="mx-auto flex max-w-5xl flex-col gap-3">
         <ShiftControls
@@ -111,7 +111,7 @@ export default function ResponderShiftPage() {
         ) : null}
 
         <Pane title="Shift insights" icon={ChartLineIcon} padded={false} className="min-h-0">
-          <div className="grid divide-y divide-card-line lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+          <div className="grid divide-y divide-card-line md:grid-cols-2 md:divide-x md:divide-y-0">
             <div className="p-5">
               <DutyRhythm shifts={shiftHistory} />
             </div>

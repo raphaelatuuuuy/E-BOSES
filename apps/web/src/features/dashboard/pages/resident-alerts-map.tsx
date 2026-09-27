@@ -37,7 +37,7 @@ import { toast } from "sonner"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 import { useAuthSession } from "@/features/auth/auth-session"
-import { isResponderUser } from "@/features/auth/roles"
+import { isResponderUser, isResidentUser } from "@/features/auth/roles"
 import {
   commentOnConcern,
   deleteConcernComment,
@@ -945,13 +945,16 @@ export default function ResidentAlertsMapPage() {
     if (!layers.concerns) return [] as Concern[]
     if (chip === "announcements") return [] as Concern[]
     if (!activeCommunityId) return [] as Concern[]
-    // Chip can only be All or Concerns now that the category dropdown is gone.
     const base = posts
-    // Drop posts with invalid / out-of-area coordinates (no random far pins)
-    return base.filter(
+    const result = base.filter(
       (post) => hasMapCoords(post) && post.community.id === activeCommunityId
     )
-  }, [posts, chip, layers.concerns, activeCommunityId])
+    const selected = posts.find((p) => p.id === selectedId)
+    if (selected && !result.find((p) => p.id === selectedId)) {
+      result.push(selected)
+    }
+    return result
+  }, [posts, chip, layers.concerns, activeCommunityId, selectedId])
 
   const filteredEmergencies = useMemo(() => {
     if (!layers.concerns) return [] as ResidentMapEmergency[]
@@ -1084,7 +1087,7 @@ export default function ResidentAlertsMapPage() {
   }
 
   async function openPost(id: number, write = false) {
-    if (isResponder) {
+    if (!isResidentUser(user)) {
       clearSelection()
       navigate(`/dashboard/reports/${id}`)
       return
@@ -1199,7 +1202,7 @@ export default function ResidentAlertsMapPage() {
   }
 
   function openEmergency(id: number, write = false) {
-    if (isResponder) {
+    if (!isResidentUser(user)) {
       clearSelection()
       navigate(`/dashboard/reports?alert=${id}`)
       return
@@ -1680,9 +1683,7 @@ export default function ResidentAlertsMapPage() {
         <div className="absolute top-3 left-3 z-30">
           <button
             type="button"
-            onClick={() =>
-              navigate(isResponder ? "/dashboard/reports" : "/dashboard/home")
-            }
+              onClick={() => navigate(isResidentUser(user) ? "/dashboard/home" : "/dashboard/reports")}
             className="flex size-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-800 shadow-md"
             aria-label="Back to home"
           >

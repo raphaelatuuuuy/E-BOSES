@@ -702,6 +702,13 @@ export type LlmDecisionLogEntry = {
     raw_url: string
     privacy_state?: string
   }>
+  /** Photos attached when the concern was resolved, when available. */
+  resolution_media?: Array<{
+    id: number
+    label: string
+    preview_url: string
+    raw_url: string
+  }>
   street_imagery?: {
     status?: "checked" | "skipped" | "no_coverage" | "disabled"
     reason?: string

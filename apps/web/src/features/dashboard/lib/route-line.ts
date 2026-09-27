@@ -53,6 +53,19 @@ export function routeFlowStyle({
   }
 }
 
+export function routeStaticStyle(
+  dim = false
+): leaflet.PolylineOptions {
+  return {
+    color: "#9ca3af",
+    weight: DEFAULT_WEIGHT,
+    opacity: dim ? 0.5 : 0.7,
+    lineCap: "round",
+    lineJoin: "round",
+    interactive: false,
+  }
+}
+
 export function approachLineStyle(
   dim = false,
   live = false
@@ -206,6 +219,7 @@ export function drawRoute(
   if (road.length > 1) {
     layers.push(L.polyline(road, routeCasingStyle({ live, weight, dim })))
     if (live && !dim) layers.push(L.polyline(road, routeFlowStyle({ live, weight, dim })))
+    else if (!live) layers.push(L.polyline(road, routeStaticStyle(dim)))
     points.push(...road)
   }
   if (approach && approach.length > 1) {

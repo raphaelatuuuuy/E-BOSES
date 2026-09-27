@@ -176,8 +176,6 @@ def _download_full_pano(pano_id: str) -> str:
     source_top = source_height_tiles // 4
     source_bottom = source_height_tiles - source_top
     kept_height_tiles = source_bottom - source_top
-    panorama = Image.new("RGB", (width_tiles * TILE_SIZE, kept_height_tiles * TILE_SIZE))
-    positions = [(x, y) for x in range(width_tiles) for y in range(source_top, source_bottom)]
 
     def fetch_tile(position):
         x, y = position
@@ -190,14 +188,47 @@ def _download_full_pano(pano_id: str) -> str:
         with Image.open(BytesIO(response.content)) as tile:
             return x, y, tile.convert("RGB").copy()
 
+    # Some panoramas are narrower than a full 360° ring, so the highest-zoom
+    # tile grid just ends early: the trailing columns answer 400 while the
+    # rest are fine. Dropping the whole download for one missing edge tile
+    # turned real coverage into a "no coverage" audit row. Verify column 0,
+    # then probe outward and keep only the contiguous run of existing columns.
+    kept_width_tiles = 0
+    first = requests.get(
+        _tile_url(pano_id, 0, source_top, TILE_ZOOM),
+        headers={"User-Agent": USER_AGENT},
+        timeout=TILE_TIMEOUT_SECONDS,
+    )
+    if first.status_code != 200:
+        first.close()
+        return ""
+    first.close()
+    kept_width_tiles = 1
+    while kept_width_tiles < width_tiles:
+        probe = requests.get(
+            _tile_url(pano_id, kept_width_tiles, source_top, TILE_ZOOM),
+            headers={"User-Agent": USER_AGENT},
+            timeout=TILE_TIMEOUT_SECONDS,
+        )
+        if probe.status_code != 200:
+            break
+        probe.close()
+        kept_width_tiles += 1
+
+    panorama = Image.new("RGB", (kept_width_tiles * TILE_SIZE, kept_height_tiles * TILE_SIZE))
+    positions = [
+        (x, y)
+        for x in range(kept_width_tiles)
+        for y in range(source_top, source_bottom)
+    ]
+
     with ThreadPoolExecutor(max_workers=TILE_WORKERS) as pool:
         for x, y, tile in pool.map(fetch_tile, positions):
             panorama.paste(tile, (x * TILE_SIZE, (y - source_top) * TILE_SIZE))
             tile.close()
 
-    # Full 360° width kept; the sky/ground rows were omitted above, then
-    # downscale so the base64 payload stays practical for review and the
-    # vision model.
+    # Full kept width; the sky/ground rows were omitted above, then downscale
+    # so the base64 payload stays practical for review and the vision model.
     band = panorama.resize((OUTPUT_WIDTH, round(panorama.height * OUTPUT_WIDTH / panorama.width)), Image.LANCZOS)
 
     output = BytesIO()

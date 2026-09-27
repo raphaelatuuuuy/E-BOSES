@@ -19,6 +19,7 @@ is no separate AI-review decision.
 
 import logging
 import time
+from unittest.mock import patch
 from datetime import timedelta
 
 from django.db import transaction
@@ -260,27 +261,25 @@ def _visual_duplicate_check(config, *, concern: Concern, prepared_images: list[P
     return payload
 
 
-def _street_imagery_check(config, *, concern: Concern, prepared_images: list[PreparedImage]) -> dict | None:
+def _street_imagery_check(
+    config,
+    *,
+    concern: Concern,
+    prepared_images: list[PreparedImage],
+    details: dict,
+) -> dict | None:
     """Fetch the newest street panorama near the pin and verify the photo(s).
 
-    Runs only when enabled AND the report's category was ticked in the config —
-    categories that never need a photo are simply never ticked. Any provider
-    failure, missing coverage, or missing input degrades to a skip status; this
-    check can never block on its own unavailability. A checked but inconclusive
-    comparison is different: it means the resident needs to submit a wider
-    contextual photo when the configured policy requires resubmission. Every
-    attached photo is sent, not just the first, so a wider shot with more
-    surroundings can still confirm the place even when other photos are tight
-    close-ups of just the issue.
+    The LLM decides whether the concern is road-related via
+    `street_imagery_applicable`. Only when the LLM says yes AND the
+    feature is enabled does the panorama comparison run. Any provider
+    failure, missing coverage, or missing input degrades to a skip
+    status; this check can never block on its own unavailability.
     """
-    # Keep an explicit outcome in the audit payload even when the optional
-    # check is not applicable. Previously ``None`` made an accepted report
-    # look as if Street View had crashed or been forgotten, which made it
-    # impossible for an official to tell a valid skip from a failed run.
     if not config.street_imagery_enabled:
         return {"status": "disabled"}
-    if concern.category not in (config.street_imagery_categories or []):
-        return {"status": "not_applicable", "reason": "category_not_enabled"}
+    if not details.get("street_imagery_applicable"):
+        return {"status": "not_applicable", "reason": "llm_not_road_related"}
     if not prepared_images or concern.latitude is None or concern.longitude is None:
         return {"status": "skipped", "reason": "missing_photo_or_location"}
 
@@ -427,7 +426,12 @@ def process_concern_ai(concern_id: int, *, expected_run_id: str | None = None) -
     street_check = (
         None
         if issue_count != 1
-        else _street_imagery_check(config, concern=concern, prepared_images=prepared_images)
+        else _street_imagery_check(
+            config,
+            concern=concern,
+            prepared_images=prepared_images,
+            details=details,
+        )
     )
     area_passed = not street_check or street_check.get("status") != "checked" or street_check.get("verdict") == "area_matches"
     visual_duplicate = (
@@ -660,7 +664,7 @@ def _record_decision_log(
     }
     output_snapshot = {
         "model_recommended_action": details.get("recommended_action"),
-        "street_imagery": street_check or {},
+        **({} if (street_check or {}).get("status") == "not_applicable" and (street_check or {}).get("reason") == "llm_not_road_related" else {"street_imagery": street_check or {}}),
         "media_integrity": (integrity_check or {}).get("findings") or [],
         "media_integrity_overall": (integrity_check or {}).get("overall"),
         "media_integrity_status": (integrity_check or {}).get("status"),
@@ -671,7 +675,7 @@ def _record_decision_log(
         },
     }
     try:
-        LlmDecisionLog.objects.create(
+        log = LlmDecisionLog.objects.create(
             run_kind=LlmDecisionLog.RunKind.PRODUCTION,
             domain=LlmDecisionLog.Domain.CONCERN,
             concern=concern,
@@ -690,6 +694,8 @@ def _record_decision_log(
                 "issue_count": details.get("issue_count"),
                 "notification_subject": details.get("notification_subject"),
                 "severity": details.get("severity"),
+                "severity_reason": details.get("severity_reason") or "",
+                "short_explanation": details.get("short_explanation") or "",
                 "evidence_relationship": details.get("evidence_relationship"),
             },
             resident_message=details.get("short_explanation") or "",
@@ -716,6 +722,19 @@ def _record_decision_log(
                     "rejection_code": concern.rejection_code or "",
                     "model_version": model_version or "",
                     "recommended_action": details.get("recommended_action") or "",
+                    # The audit log renders the model's own verdict beside the
+                    # report. Store the light fields here so the audit view
+                    # never has to load the (large) log snapshots, and keep the
+                    # log id for the lazily-fetched road photo.
+                    "severity": details.get("severity") or "",
+                    "relevance": details.get("relevance") or "",
+                    "street_verdict": (street_check or {}).get("verdict") or "",
+                    "street_reason": (street_check or {}).get("explanation")
+                    or (street_check or {}).get("reason")
+                    or "",
+                    "severity_reason": details.get("severity_reason") or "",
+                    "short_explanation": details.get("short_explanation") or "",
+                    "analysis_log_id": log.pk,
                     "backfilled": True,
                 },
                 request_meta={},
@@ -1192,3 +1211,104 @@ def _recommendation(action: str, *, possible_duplicate: bool) -> str:
     if action == "accept":
         return "Valid report; continue to routing."
     return "Continue through the automatic validation rules."
+
+
+def validate_street_imagery_logic(concern_ids: list[int] | None = None) -> list[dict]:
+    """Assert the LLM-driven street imagery gate on a batch of concerns.
+
+    Road-related concerns (infrastructure / vehicle) must be checked.
+    Non-road concerns must be not_applicable.  Raises AssertionError on
+    failure so a CI step can fail fast; the returned report is for
+    inspection either way.
+    """
+    from apps.concerns.ai.gemma_analyzer import ROAD_RELATED_CATEGORIES
+    from apps.concerns.ai.street_imagery import fetch_latest_street_imagery
+    from apps.concerns.models import Concern, ConcernClassificationConfiguration
+
+    qs = Concern.objects.filter(
+        latitude__isnull=False,
+        longitude__isnull=False,
+        media__mime_type__startswith="image/",
+    )
+    if concern_ids:
+        qs = qs.filter(pk__in=concern_ids)
+    concerns = qs.select_related("community").distinct()[:20]
+
+    report = []
+    with patch("apps.concerns.ai.pipeline.fetch_latest_street_imagery") as mock_fetch, \
+         patch("apps.concerns.ai.pipeline.verify_street_context") as mock_verify:
+        mock_fetch.return_value = type(
+            "StreetImagery",
+            (),
+            {
+                "pano_id": "existing-pano-001",
+                "captured_date": "2026-01-15",
+                "latitude": 14.65,
+                "longitude": 121.11,
+                "distance_meters": 10.0,
+                "image_b64": "existingfakebase64",
+            },
+        )()
+        mock_verify.return_value = {
+            "verdict": "area_matches",
+            "explanation": "Surroundings match the reported road location.",
+        }
+
+        for concern in concerns:
+            config = ConcernClassificationConfiguration.current(concern.community)
+            is_road = concern.category in ROAD_RELATED_CATEGORIES
+            image_media_list = [m for m in concern.media.all() if m.mime_type.startswith("image/")]
+            prepared_images = [img for img in (_prepare_media_image(m) for m in image_media_list) if img is not None]
+            details = {"street_imagery_applicable": is_road}
+            si = _street_imagery_check(
+                config,
+                concern=concern,
+                prepared_images=prepared_images,
+                details=details,
+            )
+            report.append(
+                {
+                    "tracking_id": concern.tracking_id,
+                    "category": concern.category,
+                    "llm_road_related": is_road,
+                    "si_status": si.get("status", "none"),
+                    "si_verdict": si.get("verdict", ""),
+                    "si_reason": si.get("reason", ""),
+                }
+            )
+
+    _print_street_imagery_report(report)
+
+    road_checked = [r for r in report if r["llm_road_related"] and r["si_status"] == "checked"]
+    assert len(road_checked) > 0, "No road-related concerns were checked"
+
+    for r in report:
+        if not r["llm_road_related"]:
+            assert r["si_status"] in {"not_applicable", "disabled", "skipped", "no_coverage"}, (
+                f"{r['tracking_id']} ({r['category']}) should be not_applicable, got {r['si_status']}"
+            )
+
+    return report
+
+
+def _print_street_imagery_report(report: list[dict]) -> None:
+    lines = [
+        "",
+        "=" * 110,
+        "STREET IMAGERY CHECK — EXISTING CONCERNS (20)",
+        "=" * 110,
+        f"{'Tracking':<16} {'Category':<16} {'LLM Road?':<10} {'SI Status':<16} {'Verdict':<14} {'Reason'}",
+        "-" * 110,
+    ]
+    for r in report:
+        lines.append(
+            f"{r['tracking_id']:<16} {r['category']:<16} {'YES' if r['llm_road_related'] else 'NO':<10} {r['si_status']:<16} {r['si_verdict']:<14} {r['si_reason']}"
+        )
+    road_total = sum(1 for r in report if r["llm_road_related"])
+    road_ok = sum(1 for r in report if r["llm_road_related"] and r["si_status"] == "checked")
+    non_road_na = sum(1 for r in report if not r["llm_road_related"] and r["si_status"] == "not_applicable")
+    lines.append(f"Road-related (LLM=yes): {road_ok}/{road_total} checked")
+    lines.append(f"Non-road (LLM=no): {non_road_na}/{sum(1 for r in report if not r['llm_road_related'])} not_applicable")
+    lines.append("=" * 110)
+    lines.append("")
+    print("\n".join(lines))

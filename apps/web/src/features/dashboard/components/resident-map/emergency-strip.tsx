@@ -1,4 +1,4 @@
-import { ChevronLeftIcon, TriangleAlertIcon } from "lucide-react"
+import { ChevronLeftIcon, CheckIcon, TriangleAlertIcon } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -79,7 +79,7 @@ export function EmergencyPreviewCard({
                 )}
                 aria-hidden="true"
               >
-                <TriangleAlertIcon className="size-5" strokeWidth={1.9} />
+                {settled ? <CheckIcon className="size-5" strokeWidth={1.9} /> : <TriangleAlertIcon className="size-5" strokeWidth={1.9} />}
               </span>
               {live
                 ? `Ongoing ${brief.title.toLowerCase()} around ${brief.street}`
@@ -194,7 +194,7 @@ export function EmergencyDetailPanel({
                 : "bg-severity-critical-surface text-sos"
             )}
           >
-            <TriangleAlertIcon className="size-6" strokeWidth={1.9} />
+            {settled ? <CheckIcon className="size-6" strokeWidth={1.9} /> : <TriangleAlertIcon className="size-6" strokeWidth={1.9} />}
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
