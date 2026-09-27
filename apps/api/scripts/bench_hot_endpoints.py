@@ -20,6 +20,7 @@ import django
 
 django.setup()
 
+from django.conf import settings as dj_settings
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -295,7 +296,10 @@ if __name__ == "__main__":
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--inprocess", action="store_true")
     parser.add_argument("--http", action="store_true")
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
+    if args.setup and not dj_settings.IS_LOCAL_DEVELOPMENT and not args.force:
+        parser.error("--setup writes filler rows and only runs with DJANGO_ENV=local unless --force is given")
     if args.setup:
         setup()
     if args.inprocess:

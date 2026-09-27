@@ -1,21 +1,24 @@
 package com.eboses.app;
 
 import android.app.Activity;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ActivityNotFoundException;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.telephony.SmsManager;
+import android.net.Uri;
 
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
-import com.getcapacitor.PermissionState;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
@@ -27,16 +30,19 @@ import com.google.android.gms.common.api.Status;
 
 @CapacitorPlugin(
     name = "SmsInbox",
-    requestCodes = { SmsInboxPlugin.CONSENT_REQUEST },
+    requestCodes = { SmsInboxPlugin.CONSENT_REQUEST, SmsInboxPlugin.SMS_SENT_REQUEST },
     permissions = {
         @Permission(alias = SmsInboxPlugin.SMS_ALIAS, strings = { android.Manifest.permission.SEND_SMS })
     }
 )
 public class SmsInboxPlugin extends Plugin {
     static final int CONSENT_REQUEST = 9021;
+    static final int SMS_SENT_REQUEST = 9022;
     static final String SMS_ALIAS = "smsSend";
-    private static final int MAX_SEND_PARTS = 5;
+    static final String SMS_SENT_ACTION = "com.eboses.app.SMS_SENT";
     private static final long SAFETY_TIMEOUT_MS = 6 * 60 * 1000L;
+    private static final long SEND_TIMEOUT_MS = 60 * 1000L;
+    private static final int MAX_SEND_PARTS = 5;
 
     private PluginCall pendingCall;
     private String pendingSender = "";
@@ -44,6 +50,11 @@ public class SmsInboxPlugin extends Plugin {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable safetyTimeout;
     private PluginCall pendingSendCall;
+    private BroadcastReceiver sentReceiver;
+    private Runnable sendTimeout;
+    private int sentOk;
+    private int sentDone;
+    private int sentExpected;
 
     @PluginMethod
     public void sendSms(PluginCall call) {
@@ -69,11 +80,41 @@ public class SmsInboxPlugin extends Plugin {
         transmit(call);
     }
 
+    @PluginMethod
+    public void openSms(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null || activity.isFinishing()) {
+            call.reject("The app is not ready to open SMS.");
+            return;
+        }
+        String to = call.getString("to", "");
+        String body = call.getString("body", "");
+        if (to == null || !to.matches("\\+?\\d{7,15}")) {
+            call.reject("Recipient number is invalid.");
+            return;
+        }
+        try {
+            Intent intent = new Intent(Intent.ACTION_SENDTO);
+            intent.setData(Uri.parse("smsto:" + to));
+            if (body != null && !body.isEmpty()) {
+                intent.putExtra("sms_body", body);
+            }
+            activity.startActivity(intent);
+            call.resolve();
+        } catch (ActivityNotFoundException e) {
+            call.reject("No SMS app is available on this device.");
+        } catch (Exception e) {
+            call.reject("Could not open the SMS app.");
+        }
+    }
+
     @PermissionCallback
     private void smsPermissionCallback(PluginCall call) {
         PluginCall pending = pendingSendCall;
         pendingSendCall = null;
-        if (pending == null) return;
+        if (pending == null) {
+            return;
+        }
         if (getPermissionState(SMS_ALIAS) == PermissionState.GRANTED) {
             transmit(pending);
         } else {
@@ -89,21 +130,106 @@ public class SmsInboxPlugin extends Plugin {
         }
         String to = call.getString("to", "");
         String body = call.getString("body", "");
+        SmsManager sms;
         try {
-            SmsManager sms = activity.getSystemService(SmsManager.class);
-            if (sms == null) sms = SmsManager.getDefault();
-            java.util.ArrayList<String> parts = sms.divideMessage(body);
-            if (parts == null || parts.isEmpty() || parts.size() > MAX_SEND_PARTS) {
-                call.reject("Message is too long for SMS.");
+            sms = activity.getSystemService(SmsManager.class);
+        } catch (Exception e) {
+            sms = null;
+        }
+        if (sms == null) {
+            try {
+                sms = SmsManager.getDefault();
+            } catch (Exception e) {
+                call.reject("SMS is unavailable on this device.");
                 return;
             }
-            sms.sendMultipartTextMessage(to, null, parts, null, null);
-            JSObject result = new JSObject();
-            result.put("parts", parts.size());
-            call.resolve(result);
-        } catch (Exception e) {
-            call.reject("SMS could not be sent.");
         }
+        java.util.ArrayList<String> parts;
+        try {
+            parts = sms.divideMessage(body);
+        } catch (Exception e) {
+            call.reject("Message could not be encoded for SMS.");
+            return;
+        }
+        if (parts == null || parts.isEmpty()) {
+            call.reject("Message body is empty.");
+            return;
+        }
+        if (parts.size() > MAX_SEND_PARTS) {
+            call.reject("Message is too long for SMS.");
+            return;
+        }
+        pendingSendCall = call;
+        sentOk = 0;
+        sentDone = 0;
+        sentExpected = parts.size();
+        sentReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (!SMS_SENT_ACTION.equals(intent.getAction())) return;
+                sentDone++;
+                if (getResultCode() == Activity.RESULT_OK) {
+                    sentOk++;
+                }
+                if (sentDone >= sentExpected) {
+                    boolean allOk = sentOk >= sentExpected;
+                    int ok = sentOk;
+                    finishSend(allOk, allOk ? null : "The carrier did not accept the SMS.", ok);
+                }
+            }
+        };
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                activity.registerReceiver(sentReceiver, new IntentFilter(SMS_SENT_ACTION), Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                activity.registerReceiver(sentReceiver, new IntentFilter(SMS_SENT_ACTION));
+            }
+        } catch (Exception e) {
+            finishSend(false, "SMS status tracking is unavailable.", 0);
+            return;
+        }
+        try {
+            java.util.ArrayList<PendingIntent> sentIntents = new java.util.ArrayList<>();
+            for (int i = 0; i < parts.size(); i++) {
+                Intent sentIntent = new Intent(SMS_SENT_ACTION);
+                int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    flags |= PendingIntent.FLAG_IMMUTABLE;
+                }
+                sentIntents.add(PendingIntent.getBroadcast(activity, SMS_SENT_REQUEST + i, sentIntent, flags));
+            }
+            sms.sendMultipartTextMessage(to, null, parts, sentIntents, null);
+        } catch (Exception e) {
+            finishSend(false, "SMS could not be sent.", 0);
+            return;
+        }
+        sendTimeout = () -> finishSend(false, "SMS send timed out.", sentOk);
+        handler.postDelayed(sendTimeout, SEND_TIMEOUT_MS);
+    }
+
+    private void finishSend(boolean ok, String error, int parts) {
+        PluginCall call = pendingSendCall;
+        pendingSendCall = null;
+        if (sendTimeout != null) {
+            handler.removeCallbacks(sendTimeout);
+            sendTimeout = null;
+        }
+        if (sentReceiver != null) {
+            try {
+                Activity activity = getActivity();
+                if (activity != null) activity.unregisterReceiver(sentReceiver);
+            } catch (Exception ignored) {
+            }
+            sentReceiver = null;
+        }
+        if (call == null) return;
+        if (!ok) {
+            call.reject(error == null ? "SMS could not be sent." : error);
+            return;
+        }
+        JSObject result = new JSObject();
+        result.put("parts", parts);
+        call.resolve(result);
     }
 
     @PluginMethod
@@ -216,5 +342,6 @@ public class SmsInboxPlugin extends Plugin {
             handler.removeCallbacks(safetyTimeout);
             safetyTimeout = null;
         }
+        finishSend(false, "SMS send was cancelled.", sentOk);
     }
 }

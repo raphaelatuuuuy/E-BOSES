@@ -56,5 +56,3 @@ streetview>=0.1
 
 # Official OCR template testing
 easyocr>=1.7,<2
-cloudinary==1.45.0
-django-cloudinary-storage==0.3.0

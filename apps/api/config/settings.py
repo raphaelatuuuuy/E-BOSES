@@ -888,16 +888,8 @@ FIREBASE_CREDENTIALS_PATH = env("FIREBASE_CREDENTIALS_PATH", default="")
 
 SUPPORT_EMAIL = env("SUPPORT_EMAIL", default=DEFAULT_FROM_EMAIL)
 
-# Local disk is the development default. Cloudinary remains an available
-# rollback option.
-CLOUDINARY_URL = env("CLOUDINARY_URL", default="")
-if STORAGE_BACKEND not in {"local", "cloudinary"}:
-    raise ImproperlyConfigured("STORAGE_BACKEND must be local or cloudinary.")
-if STORAGE_BACKEND == "cloudinary" and CLOUDINARY_URL:
-    os.environ.setdefault("CLOUDINARY_URL", CLOUDINARY_URL)
-    THIRD_PARTY_APPS = [*THIRD_PARTY_APPS, "cloudinary", "cloudinary_storage"]
-    INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
-CLOUDINARY_PRIVATE_URL_TTL_SECONDS = env.int("CLOUDINARY_PRIVATE_URL_TTL_SECONDS", default=300)
+if STORAGE_BACKEND != "local":
+    raise ImproperlyConfigured("STORAGE_BACKEND must be local.")
 
 # Raw government ID images are deleted this long after verification settles.
 # Nothing reads them after that; the hashes that detect duplicates and ID reuse

@@ -34,5 +34,6 @@
     "maplibre-gl": "^6.10.0",
     "pmtiles": "^4.5.0",
     "zod": "^4.4.3"
-  }
+  },
+  "allowScripts": {}
 }
