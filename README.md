@@ -1,6 +1,6 @@
 <a name="top"></a>
 
-<a href="."><img src="media/hero-banner.png" alt="E-Boses — Ang bawat boses, naririnig." style="width:100%;border:2px solid #1a1a2e;border-radius:6px;"></a>
+<a href="."><img src="/apps/web/public/contents/Screenshot%202026-09-20%20232725.png" alt="E-Boses — Ang bawat boses, naririnig." style="width:100%;border:2px solid #1a1a2e;border-radius:6px;"></a>
 
 <div align="center">
 
